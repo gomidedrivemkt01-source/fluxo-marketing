@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: marketing
+      POSTGRES_USER: marketing
+      POSTGRES_PASSWORD: marketing
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketing -d marketing"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - marketing-db:/var/lib/postgresql/data
+
+volumes:
+  marketing-db:
+

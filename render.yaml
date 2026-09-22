@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: fluxo-marketing
+    runtime: docker
+    dockerfilePath: ./infra/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_NAME
+        value: Fluxo Marketing
+      - key: APP_COOKIE_SECURE
+        value: "true"
+      - key: APP_PUBLIC_URL
+        sync: false
+      - key: APP_DATABASE_URL
+        sync: false
+      - key: APP_SESSION_SECRET
+        generateValue: true
+      - key: APP_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: APP_SUPABASE_URL
+        sync: false
+      - key: APP_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: APP_BOOTSTRAP_ORGANIZATION_NAME
+        value: Marketing
+      - key: APP_ALLOWED_ORIGINS
+        sync: false
+
