@@ -10,7 +10,7 @@ from app.database import Base
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
-config.set_main_option("sqlalchemy.url", get_settings().database_url.get_secret_value())
+config.set_main_option("sqlalchemy.url", get_settings().database_dsn())
 target_metadata = Base.metadata
 
 
