@@ -174,10 +174,10 @@ function Verify({ email, purpose, onSignup, onRecovery, go }: { email: string; p
       if ("recoveryToken" in result) onRecovery(result.recoveryToken); else onSignup(result);
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
-  return <AuthShell eyebrow="Confirmação" title="Digite o código" text={`Enviamos seis números para ${email}. O código expira em poucos minutos.`}>
+  return <AuthShell eyebrow="Confirmação" title="Digite o código" text={`Enviamos um código numérico para ${email}. Ele expira em poucos minutos.`}>
     <form onSubmit={submit} className="form-stack">
       {error && <Notice>{error}</Notice>}
-      <Field label="Código de 6 números" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} className="code-input" required />
+      <Field label="Código de 6 a 8 números" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6,8}" minLength={6} maxLength={8} className="code-input" required />
       <button className="primary" disabled={busy}>{busy ? "Confirmando…" : "Confirmar código"}</button>
       <button className="secondary" type="button" onClick={() => go(purpose === "signup" ? "register" : "forgot")}>Voltar</button>
     </form>

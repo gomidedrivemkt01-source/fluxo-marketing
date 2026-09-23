@@ -25,7 +25,7 @@ class LoginRequest(BaseModel):
 
 class VerifyRequest(BaseModel):
     email: EmailStr
-    code: str = Field(pattern=r"^\d{6}$")
+    code: str = Field(pattern=r"^\d{6,8}$")
     purpose: Literal["signup", "recovery"]
 
 
