@@ -15,7 +15,17 @@ services:
         value: "true"
       - key: APP_PUBLIC_URL
         sync: false
-      - key: APP_DATABASE_URL
+      - key: APP_DATABASE_HOST
+        value: aws-0-sa-east-1.pooler.supabase.com
+      - key: APP_DATABASE_PORT
+        value: "5432"
+      - key: APP_DATABASE_NAME
+        value: postgres
+      - key: APP_DATABASE_USER
+        value: postgres.xtsbravvqeibkiuybhty
+      - key: APP_DATABASE_SSLMODE
+        value: require
+      - key: APP_DATABASE_PASSWORD
         sync: false
       - key: APP_SESSION_SECRET
         generateValue: true
@@ -29,4 +39,3 @@ services:
         value: Marketing
       - key: APP_ALLOWED_ORIGINS
         sync: false
-

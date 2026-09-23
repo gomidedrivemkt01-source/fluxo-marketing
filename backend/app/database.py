@@ -12,7 +12,7 @@ class Base(DeclarativeBase):
 
 settings = get_settings()
 engine = create_engine(
-    settings.database_url.get_secret_value(),
+    settings.database_dsn(),
     pool_pre_ping=True,
     pool_recycle=300,
 )
