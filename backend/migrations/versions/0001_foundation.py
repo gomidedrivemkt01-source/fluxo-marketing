@@ -288,7 +288,8 @@ def upgrade() -> None:
 
     op.execute(
         sa.text(
-            "INSERT INTO app.organizations (id, name, slug) VALUES (:id, 'Marketing', 'marketing')"
+            "INSERT INTO app.organizations (id, name, slug) "
+            "VALUES (CAST(:id AS uuid), 'Marketing', 'marketing')"
         ).bindparams(id=organization_id)
     )
     role_rows = [
@@ -311,7 +312,8 @@ def upgrade() -> None:
         op.execute(
             sa.text(
                 "INSERT INTO app.permission_roles (id, organization_id, code, name, permissions) "
-                "VALUES (:id, :org, :code, :name, CAST(:permissions AS jsonb))"
+                "VALUES (CAST(:id AS uuid), CAST(:org AS uuid), :code, :name, "
+                "CAST(:permissions AS jsonb))"
             ).bindparams(
                 id=role_id, org=organization_id, code=code, name=name, permissions=permissions
             )
@@ -335,7 +337,7 @@ def upgrade() -> None:
         op.execute(
             sa.text(
                 "INSERT INTO app.demand_categories (id, organization_id, name, code) "
-                "VALUES (gen_random_uuid(), :org, :name, :code)"
+                "VALUES (gen_random_uuid(), CAST(:org AS uuid), :name, :code)"
             ).bindparams(org=organization_id, name=name, code=code)
         )
     op.execute(
