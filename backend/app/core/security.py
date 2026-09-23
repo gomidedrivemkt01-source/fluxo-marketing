@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import secrets
+from base64 import urlsafe_b64encode
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -15,7 +16,11 @@ def hash_session_token(token: str, secret: str) -> str:
 
 class TokenCipher:
     def __init__(self, key: str) -> None:
-        self._fernet = Fernet(key.encode())
+        try:
+            self._fernet = Fernet(key.encode())
+        except ValueError:
+            derived_key = urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
+            self._fernet = Fernet(derived_key)
 
     def encrypt(self, value: str) -> str:
         return self._fernet.encrypt(value.encode()).decode()

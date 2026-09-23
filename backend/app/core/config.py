@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     public_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
     database_url: SecretStr
     session_secret: SecretStr = Field(min_length=32)
-    token_encryption_key: SecretStr
+    token_encryption_key: SecretStr = Field(min_length=32)
     supabase_url: AnyHttpUrl
     supabase_publishable_key: SecretStr
     bootstrap_organization_name: str = "Marketing"

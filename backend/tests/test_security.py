@@ -23,3 +23,9 @@ def test_token_cipher_round_trip_and_rejects_tampering() -> None:
         pass
     else:
         raise AssertionError("Token adulterado deveria falhar")
+
+
+def test_token_cipher_derives_fernet_key_from_random_secret() -> None:
+    cipher = TokenCipher("render-generated-random-secret-with-more-than-32-characters")
+    encrypted = cipher.encrypt("refresh-token")
+    assert cipher.decrypt(encrypted) == "refresh-token"
