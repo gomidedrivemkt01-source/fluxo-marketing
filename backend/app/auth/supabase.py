@@ -89,6 +89,9 @@ class SupabaseAuthGateway:
             "POST", "/signup", body={"email": email, "password": password, "data": metadata}
         )
 
+    async def resend_signup_code(self, email: str) -> None:
+        await self._request("POST", "/resend", body={"email": email, "type": "signup"})
+
     async def verify(self, email: str, token: str, purpose: str) -> AuthTokens:
         data = await self._request(
             "POST", "/verify", body={"email": email, "token": token, "type": purpose}

@@ -9,4 +9,10 @@ describe("messageFrom", () => {
   it("uses a safe fallback", () => {
     expect(messageFrom(null)).toBe("Não foi possível concluir. Tente novamente.");
   });
+
+  it("explains a temporary connection failure", () => {
+    expect(messageFrom(new TypeError("Failed to fetch"))).toBe(
+      "Não foi possível conectar ao servidor. Aguarde alguns segundos e tente novamente.",
+    );
+  });
 });

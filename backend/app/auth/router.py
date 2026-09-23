@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Response, status
 
+from app.api.errors import ApiError
 from app.auth.dependencies import (
     get_auth_gateway,
     get_principal,
@@ -93,6 +94,19 @@ async def verify_email(
     issued = sessions.issue(tokens, profile, membership)
     _set_session_cookies(response, issued, settings)
     return _session_response(issued.principal)
+
+
+@router.post("/resend-signup", response_model=MessageResponse, status_code=202)
+async def resend_signup(
+    payload: EmailRequest,
+    gateway: SupabaseAuthGateway = Depends(get_auth_gateway),
+) -> MessageResponse:
+    try:
+        await gateway.resend_signup_code(str(payload.email).lower())
+    except ApiError as exc:
+        if exc.status_code == 429:
+            raise
+    return MessageResponse(message="Se o cadastro existir, enviaremos um novo código.")
 
 
 @router.post("/login", response_model=SessionResponse)

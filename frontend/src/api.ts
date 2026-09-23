@@ -33,6 +33,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export function messageFrom(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) return String(error.message);
+  if (error && typeof error === "object" && "message" in error) {
+    const message = String(error.message);
+    if (/failed to fetch|networkerror|load failed/i.test(message)) {
+      return "Não foi possível conectar ao servidor. Aguarde alguns segundos e tente novamente.";
+    }
+    return message;
+  }
   return "Não foi possível concluir. Tente novamente.";
 }

@@ -165,7 +165,7 @@ function Register({ continueWith, go }: { continueWith: (email: string) => void;
 }
 
 function Verify({ email, purpose, onSignup, onRecovery, go }: { email: string; purpose: "signup" | "recovery"; onSignup: (session: Session) => void; onRecovery: (token: string) => void; go: (page: Page) => void }) {
-  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError("");
     const data = new FormData(event.currentTarget);
@@ -174,11 +174,21 @@ function Verify({ email, purpose, onSignup, onRecovery, go }: { email: string; p
       if ("recoveryToken" in result) onRecovery(result.recoveryToken); else onSignup(result);
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
+  async function resend() {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const path = purpose === "signup" ? "/auth/resend-signup" : "/auth/forgot-password";
+      const result = await api<{ message: string }>(path, { method: "POST", body: JSON.stringify({ email }) });
+      setNotice(result.message);
+    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
   return <AuthShell eyebrow="Confirmação" title="Digite o código" text={`Enviamos um código numérico para ${email}. Ele expira em poucos minutos.`}>
     <form onSubmit={submit} className="form-stack">
       {error && <Notice>{error}</Notice>}
+      {notice && <Notice kind="success">{notice}</Notice>}
       <Field label="Código de 6 a 8 números" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6,8}" minLength={6} maxLength={8} className="code-input" required />
       <button className="primary" disabled={busy}>{busy ? "Confirmando…" : "Confirmar código"}</button>
+      <button className="secondary" type="button" disabled={busy} onClick={() => void resend()}>Reenviar código</button>
       <button className="secondary" type="button" onClick={() => go(purpose === "signup" ? "register" : "forgot")}>Voltar</button>
     </form>
   </AuthShell>;
