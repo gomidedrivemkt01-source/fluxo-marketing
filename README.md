@@ -32,11 +32,9 @@ O backend usa apenas a URL do projeto e a chave publicável para os fluxos do us
 
 ## Primeiro administrador
 
-O primeiro cadastro permanece pendente depois de confirmar o e-mail. Após aplicar as migrations e verificar a identidade, execute o procedimento de bootstrap com o e-mail exato:
+Configure `APP_BOOTSTRAP_ADMIN_EMAIL` no ambiente de produção. Depois de cadastrar esse endereço e confirmar o código recebido, a plataforma o promove automaticamente como o primeiro administrador. A promoção só ocorre quando ainda não existe administrador ativo e fica registrada na auditoria.
 
-`python -m app.scripts.bootstrap_admin --email administrador@empresa.com`
-
-Esse comando só promove um perfil que já existe e tem e-mail confirmado. O processo se recusa a criar um segundo bootstrap se já houver administrador ativo.
+Como alternativa operacional, após aplicar as migrations e verificar a identidade, execute `python -m app.scripts.bootstrap_admin --email administrador@empresa.com`. O comando se recusa a criar um segundo bootstrap se já houver administrador ativo.
 
 Depois disso, o administrador libera novos cadastros pela área **Usuários**, escolhendo um dos perfis: administrador, coordenador, colaborador ou visualizador.
 

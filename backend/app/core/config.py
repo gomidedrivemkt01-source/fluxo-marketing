@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import quote
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, EmailStr, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,14 +22,15 @@ class Settings(BaseSettings):
     database_name: str = "postgres"
     database_user: str | None = None
     database_password: SecretStr | None = None
-    database_sslmode: Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] = (
-        "require"
-    )
+    database_sslmode: Literal[
+        "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
+    ] = "require"
     session_secret: SecretStr = Field(min_length=32)
     token_encryption_key: SecretStr = Field(min_length=32)
     supabase_url: AnyHttpUrl
     supabase_publishable_key: SecretStr
     bootstrap_organization_name: str = "Marketing"
+    bootstrap_admin_email: EmailStr | None = None
     cookie_secure: bool = False
     allowed_origins: list[str] = ["http://localhost:5173"]
 

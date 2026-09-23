@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -125,6 +125,8 @@ class SessionService:
                 status=MembershipStatus.PENDING_APPROVAL,
             )
             self.db.add(membership)
+        self.db.flush()
+        self._activate_bootstrap_admin(profile, membership)
         if privacy_notice_version:
             notice = self.db.scalar(
                 select(PrivacyNoticeVersion).where(
@@ -156,6 +158,55 @@ class SessionService:
         self.db.refresh(profile)
         self.db.refresh(membership)
         return profile, membership
+
+    def _activate_bootstrap_admin(self, profile: UserProfile, membership: Membership) -> None:
+        configured_email = self.settings.bootstrap_admin_email
+        if not configured_email or profile.email.lower() != str(configured_email).lower():
+            return
+        current_role = (
+            self.db.get(PermissionRole, membership.permission_role_id)
+            if membership.permission_role_id
+            else None
+        )
+        if (
+            membership.status == MembershipStatus.ACTIVE
+            and current_role is not None
+            and current_role.code == "admin"
+        ):
+            return
+        active_admins = self.db.scalar(
+            select(func.count())
+            .select_from(Membership)
+            .join(PermissionRole, PermissionRole.id == Membership.permission_role_id)
+            .where(
+                Membership.organization_id == membership.organization_id,
+                PermissionRole.code == "admin",
+                Membership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        if active_admins:
+            return
+        admin_role = self.db.scalar(
+            select(PermissionRole).where(
+                PermissionRole.organization_id == membership.organization_id,
+                PermissionRole.code == "admin",
+            )
+        )
+        if not admin_role:
+            raise RuntimeError("Papel de administrador não encontrado.")
+        membership.permission_role_id = admin_role.id
+        membership.status = MembershipStatus.ACTIVE
+        membership.approved_by = profile.id
+        membership.approved_at = utc_now()
+        membership.revision += 1
+        self.db.add(
+            AuditEvent(
+                organization_id=membership.organization_id,
+                actor_user_id=profile.id,
+                event_type="INITIAL_ADMIN_BOOTSTRAPPED",
+                metadata_json={"membershipId": str(membership.id)},
+            )
+        )
 
     def issue(
         self, tokens: AuthTokens, profile: UserProfile, membership: Membership
