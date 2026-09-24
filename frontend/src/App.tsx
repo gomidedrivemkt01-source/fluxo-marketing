@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, messageFrom, type Session } from "./api";
 
 type Page = "login" | "register" | "verify-signup" | "forgot" | "verify-recovery" | "reset";
-type Company = { id: string; name: string; shortName: string; code: string; color: string; active: boolean; revision: number };
+type Company = { id: string; name: string; shortName: string; code: string; color: string; description: string | null; active: boolean; revision: number };
 type Category = { id: string; name: string; code: string; color: string; active: boolean; revision: number };
 type User = { id: string; name: string; email: string; state: string; role: string | null; revision: number };
 type Demand = {
@@ -10,6 +10,12 @@ type Demand = {
   publicId: string;
   title: string;
   description: string | null;
+  primaryCompanyId: string | null;
+  companyName: string | null;
+  companyColor: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  categoryColor: string | null;
   status: string;
   priority: string;
   deadlineAt: string | null;
@@ -17,6 +23,8 @@ type Demand = {
   revision: number;
   createdAt: string;
 };
+type Profile = { name: string; email: string; timezone: string; role: string | null; revision: number; avatarUrl: string | null };
+type WorkspacePage = "overview" | "my-work" | "demands" | "calendar" | "companies" | "team" | "reports" | "intelligence" | "workflows" | "categories" | "users" | "settings" | "profile";
 type DailyProposal = { proposalId: string; type: string; payload: Record<string, unknown> };
 type DailyItem = {
   id: string;
@@ -363,42 +371,159 @@ function DailyImportModal({ demands, initialImport, onClose, onApplied }: { dema
   </div>;
 }
 
-function Dashboard({ session, logout }: { session: Session; logout: () => void }) {
-  const [companies, setCompanies] = useState<Company[]>([]); const [categories, setCategories] = useState<Category[]>([]); const [users, setUsers] = useState<User[]>([]); const [demands, setDemands] = useState<Demand[]>([]); const [imports, setImports] = useState<DailyImport[]>([]); const [error, setError] = useState(""); const [showImport, setShowImport] = useState(false); const [resumeImport, setResumeImport] = useState<DailyImport | null>(null); const [approvalRoles, setApprovalRoles] = useState<Record<string, string>>({}); const [approvingUser, setApprovingUser] = useState("");
-  const canImport = session.role === "admin" || session.role === "coordinator";
+const priorityNames: Record<string, string> = { LOW: "Baixa", NORMAL: "Normal", HIGH: "Alta", URGENT: "Urgente" };
+
+const pageTitles: Record<WorkspacePage, { eyebrow: string; title: string }> = {
+  overview: { eyebrow: "Operação compartilhada", title: "Início" },
+  "my-work": { eyebrow: "Foco pessoal", title: "Meu trabalho" },
+  demands: { eyebrow: "Operação", title: "Demandas" },
+  calendar: { eyebrow: "Prazos", title: "Calendário" },
+  companies: { eyebrow: "Organização", title: "Empresas" },
+  team: { eyebrow: "Organização", title: "Equipe" },
+  reports: { eyebrow: "Acompanhamento", title: "Relatórios" },
+  intelligence: { eyebrow: "Inteligência · Beta", title: "Dailys e importações" },
+  workflows: { eyebrow: "Administração", title: "Workflows" },
+  categories: { eyebrow: "Administração", title: "Categorias e briefings" },
+  users: { eyebrow: "Administração", title: "Usuários e acessos" },
+  settings: { eyebrow: "Administração", title: "Configurações" },
+  profile: { eyebrow: "Conta", title: "Meu perfil" },
+};
+
+function dateLabel(value: string | null): string {
+  if (!value) return "Sem prazo";
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
+}
+
+function AvatarView({ name, url, size = "normal" }: { name: string; url?: string | null; size?: "normal" | "large" }) {
+  return <span className={`avatar avatar-${size}`}>{url ? <img src={url} alt="" /> : name.charAt(0).toUpperCase()}</span>;
+}
+
+function DemandCard({ demand, onOpen }: { demand: Demand; onOpen: () => void }) {
+  return <button className="demand-card" onClick={onOpen}>
+    <span className="card-top"><span className="demand-id">{demand.publicId}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority] ?? demand.priority}</span></span>
+    <span className="card-company">{demand.companyColor && <i style={{ background: demand.companyColor }} />}{demand.companyName ?? "Sem empresa"}</span>
+    <strong>{demand.title}</strong>
+    <span className="card-description">{demand.description || "Sem descrição adicionada."}</span>
+    <span className="card-meta"><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status] ?? demand.status}</span><span className={demand.deadlineAt && new Date(demand.deadlineAt) < new Date() ? "overdue" : ""}>◷ {dateLabel(demand.deadlineAt)}</span></span>
+    <span className="card-footer"><span>{demand.categoryColor && <i style={{ background: demand.categoryColor }} />}{demand.categoryName ?? "Sem categoria"}</span><span>rev. {demand.revision}</span></span>
+  </button>;
+}
+
+function ManualDemandModal({ companies, categories, onClose, onCreated }: { companies: Company[]; categories: Category[]; onClose: () => void; onCreated: (demand: Demand) => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    const data = new FormData(event.currentTarget); const deadline = String(data.get("deadlineAt") || "");
+    try {
+      const created = await api<Demand>("/demands", { method: "POST", body: JSON.stringify({ title: data.get("title"), description: data.get("description") || null, companyId: data.get("companyId") || null, categoryId: data.get("categoryId") || null, priority: data.get("priority"), deadlineAt: deadline ? new Date(deadline).toISOString() : null }) });
+      onCreated(created);
+    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  return <div className="modal-backdrop" role="presentation"><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="new-demand-title">
+    <header className="modal-head"><div><span className="eyebrow dark">Criação manual</span><h2 id="new-demand-title">Nova demanda</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header>
+    <form onSubmit={submit} className="modal-form">
+      <p className="form-intro">Registre o trabalho no momento em que ele surgir. Os detalhes poderão ser complementados no card.</p>
+      {error && <Notice>{error}</Notice>}
+      <Field label="Título da demanda" name="title" maxLength={300} autoFocus placeholder="Ex.: Criar campanha de lançamento" required />
+      <label className="field"><span>Descrição</span><textarea name="description" rows={4} maxLength={5000} placeholder="Contexto, objetivo e resultado esperado" /></label>
+      <div className="form-grid"><label className="field"><span>Empresa</span><select name="companyId"><option value="">Sem empresa definida</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label><label className="field"><span>Categoria</span><select name="categoryId"><option value="">Sem categoria definida</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label></div>
+      <div className="form-grid"><label className="field"><span>Prioridade</span><select name="priority" defaultValue="NORMAL"><option value="LOW">Baixa</option><option value="NORMAL">Normal</option><option value="HIGH">Alta</option><option value="URGENT">Urgente</option></select></label><Field label="Prazo" name="deadlineAt" type="datetime-local" /></div>
+      <footer className="form-actions"><button className="secondary compact" type="button" onClick={onClose}>Cancelar</button><button className="primary action-primary" disabled={busy}>{busy ? "Criando…" : "Criar demanda"}</button></footer>
+    </form>
+  </section></div>;
+}
+
+function CatalogModal({ kind, item, onClose, onSaved }: { kind: "company" | "category"; item?: Company | Category | null; onClose: () => void; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const isCompany = kind === "company";
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); const data = new FormData(event.currentTarget);
+    const payload: Record<string, unknown> = { name: data.get("name"), code: data.get("code"), color: data.get("color") };
+    if (isCompany) { payload.shortName = data.get("shortName"); payload.description = data.get("description") || null; }
+    if (item) { payload.expectedRevision = item.revision; payload.active = item.active; }
+    const base = isCompany ? "/catalogs/companies" : "/catalogs/categories";
+    try { await api(item ? `${base}/${item.id}` : base, { method: item ? "PUT" : "POST", body: JSON.stringify(payload) }); await onSaved(); onClose(); }
+    catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  const company = item && "shortName" in item ? item : null;
+  return <div className="modal-backdrop"><section className="form-modal compact-modal" role="dialog" aria-modal="true"><header className="modal-head"><div><span className="eyebrow dark">{item ? "Editar cadastro" : "Novo cadastro"}</span><h2>{isCompany ? "Empresa" : "Categoria"}</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header><form className="modal-form" onSubmit={submit}>{error && <Notice>{error}</Notice>}<Field label="Nome" name="name" defaultValue={item?.name} required />{isCompany && <Field label="Nome curto" name="shortName" defaultValue={company?.shortName} required />}<Field label="Código" name="code" defaultValue={item?.code} placeholder="EXEMPLO" required /><label className="field color-field"><span>Cor de identificação</span><input name="color" type="color" defaultValue={item?.color ?? (isCompany ? "#155E75" : "#475569")} /></label>{isCompany && <label className="field"><span>Descrição</span><textarea name="description" rows={3} defaultValue={company?.description ?? ""} /></label>}<footer className="form-actions"><button className="secondary compact" type="button" onClick={onClose}>Cancelar</button><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar"}</button></footer></form></section></div>;
+}
+
+function ProfilePage({ profile, session, onUpdated }: { profile: Profile | null; session: Session; onUpdated: (profile: Profile) => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [success, setSuccess] = useState("");
+  if (!profile) return <section className="panel page-panel loading-block"><span className="loader" /></section>;
+  const current = profile;
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); setSuccess(""); const data = new FormData(event.currentTarget);
+    try { const updated = await api<Profile>("/users/me", { method: "PUT", body: JSON.stringify({ name: data.get("name"), timezone: data.get("timezone"), expectedRevision: current.revision }) }); onUpdated(updated); setSuccess("Perfil atualizado."); }
+    catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  async function upload(file: File) {
+    setBusy(true); setError(""); setSuccess(""); const form = new FormData(); form.append("avatar", file);
+    try { const updated = await api<Profile>("/users/me/avatar", { method: "POST", body: form }); onUpdated(updated); setSuccess("Foto atualizada."); }
+    catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  async function removeAvatar() {
+    setBusy(true); setError("");
+    try { await api("/users/me/avatar", { method: "DELETE" }); onUpdated({ ...current, avatarUrl: null, revision: current.revision + 1 }); setSuccess("Foto removida."); }
+    catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  return <div className="profile-layout"><section className="panel profile-card"><AvatarView name={profile.name} url={profile.avatarUrl} size="large" /><h3>{profile.name}</h3><p>{profile.email}</p><span>{session.role ? roleNames[session.role] : "Sem perfil"}</span><label className="small-button upload-avatar">Alterar foto<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void upload(file); }} /></label>{profile.avatarUrl && <button className="link-button" disabled={busy} onClick={() => void removeAvatar()}>Remover foto</button>}<small>JPG, PNG ou WebP, até 2 MB.</small></section><section className="panel profile-form"><div className="panel-head"><div><span className="eyebrow dark">Dados pessoais</span><h3>Informações do perfil</h3></div></div><form className="modal-form" onSubmit={save}>{error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}<Field label="Nome completo" name="name" defaultValue={profile.name} required /><Field label="E-mail" value={profile.email} disabled /><label className="field"><span>Fuso horário</span><select name="timezone" defaultValue={profile.timezone}><option value="America/Sao_Paulo">Brasília — São Paulo</option><option value="America/Manaus">Manaus</option><option value="America/Rio_Branco">Rio Branco</option></select></label><div className="profile-note"><strong>Perfil de acesso</strong><span>{session.role ? roleNames[session.role] : "Sem perfil"}</span><small>Alterações de permissão são feitas por um administrador.</small></div><footer className="form-actions"><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar alterações"}</button></footer></form></section></div>;
+}
+
+function DemandDetail({ demand, companies, categories, onBack, onSaved }: { demand: Demand; companies: Company[]; categories: Category[]; onBack: () => void; onSaved: (demand: Demand) => void }) {
+  const [tab, setTab] = useState("overview"); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [success, setSuccess] = useState("");
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); setSuccess(""); const data = new FormData(event.currentTarget); const deadline = String(data.get("deadlineAt") || "");
+    try { const updated = await api<Demand>(`/demands/${demand.id}`, { method: "PUT", body: JSON.stringify({ title: data.get("title"), description: data.get("description") || null, companyId: data.get("companyId") || null, categoryId: data.get("categoryId") || null, priority: data.get("priority"), status: data.get("status"), deadlineAt: deadline ? new Date(deadline).toISOString() : null, expectedRevision: demand.revision }) }); onSaved(updated); setSuccess("Demanda atualizada."); }
+    catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  const tabs = [{ id: "overview", label: "Visão geral" }, { id: "briefing", label: "Briefing" }, { id: "workflow", label: "Workflow" }, { id: "conversations", label: "Conversas" }, { id: "files", label: "Arquivos" }, { id: "time", label: "Tempo" }, { id: "history", label: "Histórico" }];
+  return <><button className="back-button" onClick={onBack}>← Voltar para demandas</button><section className="demand-detail-head"><div><span className="demand-id">{demand.publicId}</span><h2>{demand.title}</h2><p>{demand.companyName ?? "Sem empresa"} · {demand.categoryName ?? "Sem categoria"}</p></div><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status]}</span></section><nav className="detail-tabs" aria-label="Seções da demanda">{tabs.map((item) => <button className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)} key={item.id}>{item.label}{item.id !== "overview" && <small>Em breve</small>}</button>)}</nav>{tab === "overview" ? <section className="panel detail-form"><form className="modal-form" onSubmit={save}>{error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}<div className="form-grid"><Field label="Título" name="title" defaultValue={demand.title} required /><label className="field"><span>Situação</span><select name="status" defaultValue={demand.status}>{Object.entries(statusNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><label className="field"><span>Descrição</span><textarea name="description" rows={6} defaultValue={demand.description ?? ""} /></label><div className="form-grid"><label className="field"><span>Empresa</span><select name="companyId" defaultValue={demand.primaryCompanyId ?? ""}><option value="">Sem empresa</option>{companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Categoria</span><select name="categoryId" defaultValue={demand.categoryId ?? ""}><option value="">Sem categoria</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div><div className="form-grid"><label className="field"><span>Prioridade</span><select name="priority" defaultValue={demand.priority}>{Object.entries(priorityNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><Field label="Prazo" name="deadlineAt" type="datetime-local" defaultValue={demand.deadlineAt ? demand.deadlineAt.slice(0, 16) : ""} /></div><footer className="form-actions"><span className="revision-note">Última revisão: {demand.revision}</span><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar demanda"}</button></footer></form></section> : <section className="panel feature-preview"><span>◫</span><h3>{tabs.find((item) => item.id === tab)?.label}</h3><p>Esta seção já faz parte da arquitetura do card e será habilitada nas próximas entregas.</p></section>}</>;
+}
+
+function ComingSection({ icon, title, text, items }: { icon: string; title: string; text: string; items: string[] }) {
+  return <section className="panel coming-section"><span>{icon}</span><div><h3>{title}</h3><p>{text}</p><ul>{items.map((item) => <li key={item}>✓ {item}</li>)}</ul></div></section>;
+}
+
+function Dashboard({ session, logout, onSession }: { session: Session; logout: () => void; onSession: (session: Session) => void }) {
+  const validPages = Object.keys(pageTitles) as WorkspacePage[];
+  const hashPage = window.location.hash.replace(/^#\/?/, "").split("/")[0] as WorkspacePage;
+  const [page, setPage] = useState<WorkspacePage>(validPages.includes(hashPage) ? hashPage : "overview");
+  const [companies, setCompanies] = useState<Company[]>([]); const [categories, setCategories] = useState<Category[]>([]); const [users, setUsers] = useState<User[]>([]); const [demands, setDemands] = useState<Demand[]>([]); const [imports, setImports] = useState<DailyImport[]>([]); const [profile, setProfile] = useState<Profile | null>(null); const [error, setError] = useState(""); const [showImport, setShowImport] = useState(false); const [showCreate, setShowCreate] = useState(false); const [resumeImport, setResumeImport] = useState<DailyImport | null>(null); const [catalogModal, setCatalogModal] = useState<{ kind: "company" | "category"; item?: Company | Category | null } | null>(null); const [selectedDemand, setSelectedDemand] = useState<Demand | null>(null); const [approvalRoles, setApprovalRoles] = useState<Record<string, string>>({}); const [approvingUser, setApprovingUser] = useState(""); const [query, setQuery] = useState(""); const [statusFilter, setStatusFilter] = useState("ALL");
+  const canManage = session.role === "admin" || session.role === "coordinator"; const canCreate = session.role !== "viewer";
+  function go(next: WorkspacePage) { setPage(next); setSelectedDemand(null); window.location.hash = next; window.scrollTo({ top: 0 }); }
   function loadData() {
     setError("");
-    return Promise.all([
-      api<Company[]>("/catalogs/companies"),
-      api<Category[]>("/catalogs/categories"),
-      api<Demand[]>("/demands"),
-      canImport ? api<User[]>("/users") : Promise.resolve([]),
-      canImport ? api<DailyImport[]>("/imports/dailys") : Promise.resolve([]),
-    ]).then(([c, k, d, u, i]) => { setCompanies(c); setCategories(k); setDemands(d); setUsers(u); setImports(i); }).catch((caught) => setError(messageFrom(caught)));
+    return Promise.all([api<Company[]>("/catalogs/companies"), api<Category[]>("/catalogs/categories"), api<Demand[]>("/demands"), api<Profile>("/users/me"), canManage ? api<User[]>("/users") : Promise.resolve([]), canManage ? api<DailyImport[]>("/imports/dailys") : Promise.resolve([])]).then(([c, k, d, p, u, i]) => { setCompanies(c); setCategories(k); setDemands(d); setProfile(p); setUsers(u); setImports(i); }).catch((caught) => setError(messageFrom(caught)));
   }
   useEffect(() => { void loadData(); }, [session.role]);
-  async function approveUser(user: User) {
-    setApprovingUser(user.id); setError("");
-    try {
-      await api(`/users/${user.id}/approve`, { method: "POST", body: JSON.stringify({ role: approvalRoles[user.id] ?? "collaborator", expectedRevision: user.revision }) });
-      await loadData();
-    } catch (caught) { setError(messageFrom(caught)); } finally { setApprovingUser(""); }
-  }
+  useEffect(() => { const listener = () => { const value = window.location.hash.replace(/^#\/?/, "").split("/")[0] as WorkspacePage; if (validPages.includes(value)) { setPage(value); setSelectedDemand(null); } }; window.addEventListener("hashchange", listener); return () => window.removeEventListener("hashchange", listener); }, []);
+  async function approveUser(user: User) { setApprovingUser(user.id); setError(""); try { await api(`/users/${user.id}/approve`, { method: "POST", body: JSON.stringify({ role: approvalRoles[user.id] ?? "collaborator", expectedRevision: user.revision }) }); await loadData(); } catch (caught) { setError(messageFrom(caught)); } finally { setApprovingUser(""); } }
   const pending = useMemo(() => users.filter((user) => user.state === "pending_approval"), [users]);
-  return <div className="app-shell">
-    <aside className="sidebar"><Brand /><nav aria-label="Navegação principal"><a className="active" href="#overview"><span>⌂</span>Visão geral</a><a href="#demands"><span>▤</span>Demandas</a>{canImport && <a href="#imports"><span>⇄</span>Importações{imports.some((item) => item.state === "reviewing") && <b>{imports.filter((item) => item.state === "reviewing").length}</b>}</a>}<a href="#companies"><span>▦</span>Empresas</a><a href="#categories"><span>◇</span>Categorias</a>{canImport && <a href="#users"><span>○</span>Usuários{pending.length > 0 && <b>{pending.length}</b>}</a>}</nav><div className="side-profile"><span className="avatar">{session.name.charAt(0).toUpperCase()}</span><span><strong>{session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span><button onClick={logout} aria-label="Sair">↗</button></div></aside>
-    <main className="workspace" id="overview"><header><div><span className="eyebrow dark">Operação compartilhada</span><h1>Visão geral</h1></div>{canImport ? <button className="import-button" onClick={() => { setResumeImport(null); setShowImport(true); }}><span>⇧</span>Importar Daily</button> : <div className="phase"><span>MVP</span><strong>Operação segura</strong></div>}</header>
-      {error && <Notice>{error}</Notice>}
-      <section className="welcome"><div><p className="kicker">Fluxo centralizado</p><h2>Boa jornada, {session.name.split(" ")[0]}.</h2><p>Revise Dailys, associe cada informação ao card correto e mantenha o histórico visível para toda a equipe.</p></div><div className="pulse"><span>{String(demands.length).padStart(2, "0")}</span><small>cards ativos</small></div></section>
-      <section className="stats"><article><span>Demandas</span><strong>{demands.length}</strong><small>cards ativos</small></article><article><span>Empresas</span><strong>{companies.length}</strong><small>cadastros ativos</small></article><article><span>Categorias</span><strong>{categories.length}</strong><small>tipos de demanda</small></article><article><span>Acessos pendentes</span><strong>{pending.length}</strong><small>aguardando liberação</small></article></section>
-      <section className="panel full" id="demands"><div className="panel-head"><div><span className="eyebrow dark">Operação</span><h3>Demandas recentes</h3></div><span className="count">{demands.length}</span></div>{demands.length ? <div className="demand-grid">{demands.map((demand) => <article key={demand.id}><div><span className="demand-id">{demand.publicId}</span><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status] ?? demand.status}</span></div><h4>{demand.title}</h4><p>{demand.description || "Sem descrição adicionada."}</p><footer><span>Prioridade {demand.priority.toLocaleLowerCase("pt-BR")}</span><span>rev. {demand.revision}</span></footer></article>)}</div> : <div className="empty demand-empty"><span>▤</span><p>Nenhum card criado. Uma importação pode criar o primeiro.</p>{canImport && <button className="small-button" onClick={() => setShowImport(true)}>Importar Daily</button>}</div>}</section>
-      {canImport && <section className="panel full" id="imports"><div className="panel-head"><div><span className="eyebrow dark">Revisão manual</span><h3>Importações de Dailys</h3></div><button className="small-button" onClick={() => { setResumeImport(null); setShowImport(true); }}>Nova importação</button></div>{imports.length ? <div className="table-wrap"><table><thead><tr><th>Relatório</th><th>Itens revisados</th><th>Situação</th><th>Ação</th></tr></thead><tbody>{imports.map((item) => <tr key={item.id}><td><strong>{item.sourceLabel}</strong><small className="table-subtitle">{item.filename}</small></td><td>{item.reviewedItems} de {item.totalItems}</td><td><span className={`import-state ${item.state}`}>{item.state === "applied" ? "Aplicada" : "Em revisão"}</span></td><td>{item.state === "reviewing" ? <button className="table-action" onClick={() => { setResumeImport(item); setShowImport(true); }}>Continuar revisão</button> : "Concluída"}</td></tr>)}</tbody></table></div> : <div className="empty"><p>Nenhuma Daily enviada.</p></div>}</section>}
-      <section className="dashboard-grid"><article className="panel" id="companies"><div className="panel-head"><div><span className="eyebrow dark">Estrutura</span><h3>Empresas</h3></div><span className="count">{companies.length}</span></div>{companies.length ? <ul className="entity-list">{companies.slice(0, 5).map((company) => <li key={company.id}><i style={{ background: company.color }} /><span><strong>{company.name}</strong><small>{company.code}</small></span><b>Ativa</b></li>)}</ul> : <div className="empty"><span>▦</span><p>Nenhuma empresa cadastrada.</p></div>}</article>
-        <article className="panel" id="categories"><div className="panel-head"><div><span className="eyebrow dark">Catálogo</span><h3>Categorias iniciais</h3></div><span className="count">{categories.length}</span></div><div className="tag-list">{categories.map((category) => <span key={category.id}><i style={{ background: category.color }} />{category.name}</span>)}</div></article></section>
-      {canImport && <section className="panel full" id="users"><div className="panel-head"><div><span className="eyebrow dark">Equipe</span><h3>Usuários</h3></div><span className="count">{users.length}</span></div>{users.length ? <div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th>{session.role === "admin" && <th>Ação</th>}</tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{user.state === "pending_approval" && session.role === "admin" ? <select className="role-select" value={approvalRoles[user.id] ?? "collaborator"} onChange={(event) => setApprovalRoles((values) => ({ ...values, [user.id]: event.target.value }))}><option value="collaborator">Colaborador</option><option value="coordinator">Coordenador</option><option value="viewer">Visualizador</option><option value="admin">Administrador</option></select> : user.role ? roleNames[user.role] : "Definir"}</td>{session.role === "admin" && <td>{user.state === "pending_approval" ? <button className="table-action" disabled={approvingUser === user.id} onClick={() => void approveUser(user)}>{approvingUser === user.id ? "Liberando…" : "Liberar acesso"}</button> : "—"}</td>}</tr>)}</tbody></table></div> : <div className="empty"><p>Nenhum usuário cadastrado.</p></div>}</section>}
-    </main>
-    {showImport && <DailyImportModal demands={demands} initialImport={resumeImport} onClose={() => { setShowImport(false); setResumeImport(null); void loadData(); }} onApplied={() => { void loadData(); }} />}
-  </div>;
+  const filteredDemands = useMemo(() => demands.filter((demand) => { const value = query.trim().toLocaleLowerCase("pt-BR"); return (statusFilter === "ALL" || demand.status === statusFilter) && (!value || `${demand.publicId} ${demand.title} ${demand.companyName ?? ""}`.toLocaleLowerCase("pt-BR").includes(value)); }), [demands, query, statusFilter]);
+  const currentTitle = selectedDemand ? { eyebrow: "Demanda", title: selectedDemand.publicId } : pageTitles[page];
+  const navigation: { label: string; links: { id: WorkspacePage; icon: string; label: string; badge?: number; beta?: boolean }[] }[] = [
+    { label: "Trabalho", links: [{ id: "overview", icon: "⌂", label: "Início" }, { id: "my-work", icon: "◎", label: "Meu trabalho" }, { id: "demands", icon: "▤", label: "Demandas" }, { id: "calendar", icon: "□", label: "Calendário" }] },
+    { label: "Organização", links: [{ id: "companies", icon: "▦", label: "Empresas" }, { id: "team", icon: "○", label: "Equipe" }, { id: "reports", icon: "↗", label: "Relatórios" }] },
+    { label: "Inteligência", links: [{ id: "intelligence", icon: "◇", label: "Dailys", badge: imports.filter((item) => item.state === "reviewing").length, beta: true }] },
+    ...(canManage ? [{ label: "Administração", links: [{ id: "workflows" as WorkspacePage, icon: "⇄", label: "Workflows" }, { id: "categories" as WorkspacePage, icon: "◆", label: "Categorias" }, { id: "users" as WorkspacePage, icon: "◉", label: "Acessos", badge: pending.length }, { id: "settings" as WorkspacePage, icon: "⚙", label: "Configurações" }] }] : []),
+  ];
+  let content: React.ReactNode;
+  if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} onBack={() => { setSelectedDemand(null); go("demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />;
+  else if (page === "overview") content = <><section className="welcome"><div><p className="kicker">Fluxo centralizado</p><h2>Olá, {session.name.split(" ")[0]}.</h2><p>Crie, acompanhe e atualize as demandas da operação em um espaço compartilhado por toda a equipe.</p>{canCreate && <button className="welcome-action" onClick={() => setShowCreate(true)}>+ Criar primeira demanda</button>}</div><div className="pulse"><span>{String(demands.length).padStart(2, "0")}</span><small>cards ativos</small></div></section><section className="stats"><article><span>Demandas abertas</span><strong>{demands.filter((item) => item.status !== "COMPLETED").length}</strong><small>em acompanhamento</small></article><article><span>Em andamento</span><strong>{demands.filter((item) => item.status === "IN_PROGRESS").length}</strong><small>na operação</small></article><article><span>Com prazo</span><strong>{demands.filter((item) => item.deadlineAt).length}</strong><small>planejadas</small></article><article><span>Acessos pendentes</span><strong>{pending.length}</strong><small>aguardando liberação</small></article></section><section className="panel full"><div className="panel-head"><div><span className="eyebrow dark">Últimas movimentações</span><h3>Demandas recentes</h3></div><button className="small-button" onClick={() => go("demands")}>Ver todas</button></div>{demands.length ? <div className="demand-grid">{demands.slice(0, 6).map((demand) => <DemandCard key={demand.id} demand={demand} onOpen={() => setSelectedDemand(demand)} />)}</div> : <div className="empty-state"><span>▤</span><h3>Comece pela primeira demanda</h3><p>Cadastre manualmente o trabalho que precisa ser acompanhado.</p>{canCreate && <button className="primary compact" onClick={() => setShowCreate(true)}>+ Nova demanda</button>}</div>}</section></>;
+  else if (page === "demands" || page === "my-work") content = <section className="panel page-panel"><div className="list-toolbar"><label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por título, código ou empresa" /></label><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">Todas as situações</option>{Object.entries(statusNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><span className="result-count">{filteredDemands.length} demandas</span></div>{page === "my-work" && <div className="scope-note"><strong>Minha visão de trabalho</strong><span>Nesta etapa, a visão usa todas as demandas. O filtro por responsável será ativado junto com a distribuição de tarefas.</span></div>}{filteredDemands.length ? <div className="demand-grid expanded">{filteredDemands.map((demand) => <DemandCard key={demand.id} demand={demand} onOpen={() => setSelectedDemand(demand)} />)}</div> : <div className="empty-state"><span>⌕</span><h3>Nenhuma demanda encontrada</h3><p>Ajuste os filtros ou crie uma nova demanda.</p></div>}</section>;
+  else if (page === "calendar") { const scheduled = demands.filter((item) => item.deadlineAt).sort((a, b) => String(a.deadlineAt).localeCompare(String(b.deadlineAt))); content = <section className="panel page-panel"><div className="calendar-head"><strong>Próximos prazos</strong><span>{scheduled.length} demandas planejadas</span></div>{scheduled.length ? <div className="timeline-list">{scheduled.map((demand) => <button key={demand.id} onClick={() => setSelectedDemand(demand)}><time>{dateLabel(demand.deadlineAt)}</time><i style={{ background: demand.companyColor ?? "#94a3b8" }} /><span><strong>{demand.title}</strong><small>{demand.companyName ?? "Sem empresa"} · {statusNames[demand.status]}</small></span><b>{priorityNames[demand.priority]}</b></button>)}</div> : <div className="empty-state"><span>□</span><h3>Nenhum prazo cadastrado</h3><p>Defina prazos nos cards para montar a agenda da operação.</p></div>}</section>; }
+  else if (page === "companies") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Cadastros ativos</span><h3>Empresas atendidas</h3></div>{canManage && <button className="small-button" onClick={() => setCatalogModal({ kind: "company" })}>+ Nova empresa</button>}</div>{companies.length ? <div className="entity-cards">{companies.map((company) => <article key={company.id}><i style={{ background: company.color }} /><div><strong>{company.name}</strong><span>{company.shortName} · {company.code}</span><p>{company.description || "Sem descrição cadastrada."}</p></div>{canManage && <button className="table-action" onClick={() => setCatalogModal({ kind: "company", item: company })}>Editar</button>}</article>)}</div> : <div className="empty-state"><span>▦</span><h3>Nenhuma empresa cadastrada</h3></div>}</section>;
+  else if (page === "team") content = <><ComingSection icon="○" title="Diretório da equipe" text="A estrutura visual está preparada para cargos, capacidade e distribuição de trabalho." items={["Perfil e foto individual", "Cargo e papel de acesso", "Capacidade por período"]} />{canManage && users.length > 0 && <section className="panel full"><div className="panel-head"><div><span className="eyebrow dark">Pessoas cadastradas</span><h3>Equipe atual</h3></div><span className="count">{users.length}</span></div><div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{user.role ? roleNames[user.role] : "A definir"}</td></tr>)}</tbody></table></div></section>}</>;
+  else if (page === "reports") content = <><section className="stats"><article><span>Total de demandas</span><strong>{demands.length}</strong><small>registradas</small></article><article><span>Concluídas</span><strong>{demands.filter((item) => item.status === "COMPLETED").length}</strong><small>no período</small></article><article><span>Bloqueadas</span><strong>{demands.filter((item) => item.status === "BLOCKED").length}</strong><small>pedem atenção</small></article><article><span>Urgentes</span><strong>{demands.filter((item) => item.priority === "URGENT").length}</strong><small>prioridade máxima</small></article></section><ComingSection icon="↗" title="Relatórios operacionais" text="Os indicadores iniciais já usam os dados reais das demandas." items={["Volume por empresa e categoria", "Cumprimento de prazos", "Capacidade e tempo apontado"]} /></>;
+  else if (page === "intelligence") content = <section className="panel page-panel"><div className="intelligence-hero"><div><span className="beta-chip">Beta</span><h3>Importação assistida de Dailys</h3><p>Envie um JSON analisado e escolha, item por item, qual card receberá a informação. Nenhuma alteração é aplicada sem sua revisão.</p></div>{canManage && <button className="primary action-primary" onClick={() => { setResumeImport(null); setShowImport(true); }}>Importar JSON</button>}</div>{imports.length ? <div className="table-wrap"><table><thead><tr><th>Relatório</th><th>Progresso</th><th>Situação</th><th>Ação</th></tr></thead><tbody>{imports.map((item) => <tr key={item.id}><td><strong>{item.sourceLabel}</strong><small className="table-subtitle">{item.filename}</small></td><td>{item.reviewedItems} de {item.totalItems}</td><td><span className={`import-state ${item.state}`}>{item.state === "applied" ? "Aplicada" : "Em revisão"}</span></td><td>{item.state === "reviewing" ? <button className="table-action" onClick={() => { setResumeImport(item); setShowImport(true); }}>Continuar revisão</button> : "Concluída"}</td></tr>)}</tbody></table></div> : <div className="empty-state"><span>◇</span><h3>Nenhuma importação realizada</h3><p>Este recurso complementa o trabalho manual quando houver um relatório estruturado.</p></div>}</section>;
+  else if (page === "categories") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Estrutura de entrada</span><h3>Categorias de demanda</h3></div><button className="small-button" onClick={() => setCatalogModal({ kind: "category" })}>+ Nova categoria</button></div><div className="category-table">{categories.map((category) => <button key={category.id} onClick={() => setCatalogModal({ kind: "category", item: category })}><i style={{ background: category.color }} /><span><strong>{category.name}</strong><small>{category.code}</small></span><b>Editar</b></button>)}</div><div className="scope-note"><strong>Próxima evolução</strong><span>Cada categoria terá seu próprio briefing com campos obrigatórios e workflow associado.</span></div></section>;
+  else if (page === "users") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Controle de acesso</span><h3>Usuários</h3></div><span className="count">{users.length}</span></div>{users.length ? <div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th><th>Ação</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{user.state === "pending_approval" && session.role === "admin" ? <select className="role-select" value={approvalRoles[user.id] ?? "collaborator"} onChange={(event) => setApprovalRoles((values) => ({ ...values, [user.id]: event.target.value }))}><option value="collaborator">Colaborador</option><option value="coordinator">Coordenador</option><option value="viewer">Visualizador</option><option value="admin">Administrador</option></select> : user.role ? roleNames[user.role] : "Definir"}</td><td>{user.state === "pending_approval" && session.role === "admin" ? <button className="table-action" disabled={approvingUser === user.id} onClick={() => void approveUser(user)}>{approvingUser === user.id ? "Liberando…" : "Liberar acesso"}</button> : "—"}</td></tr>)}</tbody></table></div> : <div className="empty-state"><p>Nenhum usuário cadastrado.</p></div>}</section>;
+  else if (page === "profile") content = <ProfilePage profile={profile} session={session} onUpdated={(updated) => { setProfile(updated); onSession({ ...session, name: updated.name }); }} />;
+  else if (page === "workflows") content = <ComingSection icon="⇄" title="Construtor de workflows" text="A próxima fase permitirá criar fluxos diferentes por categoria, mantendo versões publicadas e histórico." items={["Etapas e transições configuráveis", "Prazos e responsáveis por etapa", "Exceções com justificativa e auditoria"]} />;
+  else content = <ComingSection icon="⚙" title="Configurações da organização" text="Preferências gerais, notificações e dados institucionais serão concentrados aqui." items={["Preferências de notificação", "Política de privacidade e LGPD", "Parâmetros da organização"]} />;
+  return <div className="app-shell"><aside className="sidebar"><Brand /><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <button key={link.id} className={!selectedDemand && page === link.id ? "active" : ""} onClick={() => go(link.id)}><span>{link.icon}</span>{link.label}{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</button>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair">↗</button></div></aside><main className="workspace"><header><div><span className="eyebrow dark">{currentTitle.eyebrow}</span><h1>{currentTitle.title}</h1></div>{canCreate && !selectedDemand && <button className="new-demand-button" onClick={() => setShowCreate(true)}><span>+</span> Nova demanda</button>}</header>{error && <Notice>{error}</Notice>}{content}</main>{showCreate && <ManualDemandModal companies={companies} categories={categories} onClose={() => setShowCreate(false)} onCreated={(created) => { setDemands((items) => [created, ...items]); setShowCreate(false); setSelectedDemand(created); setPage("demands"); window.location.hash = "demands"; }} />}{catalogModal && <CatalogModal kind={catalogModal.kind} item={catalogModal.item} onClose={() => setCatalogModal(null)} onSaved={loadData} />}{showImport && <DailyImportModal demands={demands} initialImport={resumeImport} onClose={() => { setShowImport(false); setResumeImport(null); void loadData(); }} onApplied={() => { void loadData(); }} />}</div>;
 }
 
 export default function App() {
@@ -408,7 +533,7 @@ export default function App() {
   if (loading) return <main className="loading-page"><Brand /><span className="loader" aria-label="Carregando" /></main>;
   if (session?.state === "pending_approval") return <Pending session={session} logout={logout} />;
   if (session?.state === "suspended") return <main className="waiting-page"><div className="waiting-card"><Brand /><h1>Acesso suspenso</h1><p>Fale com um administrador da plataforma para revisar seu acesso.</p><button className="secondary" onClick={logout}>Sair</button></div></main>;
-  if (session?.state === "active") return <Dashboard session={session} logout={logout} />;
+  if (session?.state === "active") return <Dashboard session={session} logout={logout} onSession={setSession} />;
   if (page === "register") return <Register go={setPage} continueWith={(value) => { setEmail(value); setPage("verify-signup"); }} />;
   if (page === "verify-signup") return <Verify email={email} purpose="signup" go={setPage} onSignup={setSession} onRecovery={() => undefined} />;
   if (page === "forgot") return <Forgot go={setPage} continueWith={(value) => { setEmail(value); setPage("verify-recovery"); }} />;

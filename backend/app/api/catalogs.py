@@ -257,6 +257,57 @@ def create_category(
     return category
 
 
+@router.put(
+    "/categories/{category_id}",
+    response_model=CategoryOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_category(
+    category_id: uuid.UUID,
+    payload: CategoryUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandCategory:
+    require_permission(principal, "catalog:write")
+    category = db.scalar(
+        select(DemandCategory)
+        .where(
+            DemandCategory.id == category_id,
+            DemandCategory.organization_id == principal.membership.organization_id,
+        )
+        .with_for_update()
+    )
+    if not category:
+        raise ApiError(404, "category_not_found", "Categoria não encontrada.")
+    if category.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A categoria foi alterada. Atualize a tela.")
+    before = {"name": category.name, "code": category.code, "revision": category.revision}
+    category.name = payload.name
+    category.code = payload.code
+    category.color = payload.color.upper()
+    category.active = payload.active
+    category.revision += 1
+    _audit(
+        db,
+        principal,
+        "CATEGORY_UPDATED",
+        category.id,
+        before=before,
+        after={
+            "name": category.name,
+            "code": category.code,
+            "revision": category.revision,
+        },
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ApiError(409, "category_conflict", "Nome ou código já utilizado.") from exc
+    db.refresh(category)
+    return category
+
+
 @router.get("/job-roles", response_model=list[JobRoleOut])
 def list_job_roles(
     principal: Principal = Depends(get_principal), db: Session = Depends(get_db)

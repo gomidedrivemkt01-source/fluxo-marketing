@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -67,6 +68,8 @@ class UserProfile(Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(160))
     avatar_path: Mapped[str | None] = mapped_column(String(500))
+    avatar_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    avatar_content_type: Mapped[str | None] = mapped_column(String(80))
     timezone: Mapped[str] = mapped_column(String(80), default="America/Sao_Paulo")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

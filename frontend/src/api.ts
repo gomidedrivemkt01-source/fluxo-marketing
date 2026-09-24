@@ -19,7 +19,9 @@ function cookie(name: string): string | undefined {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
     const csrf = cookie("fm_csrf");
     if (csrf) headers.set("X-CSRF-Token", decodeURIComponent(csrf));
@@ -29,6 +31,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const fallback: ApiError = { code: "request_failed", message: "Não foi possível concluir." };
     throw Object.assign(new Error(fallback.message), (await response.json().catch(() => fallback)) as ApiError);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 

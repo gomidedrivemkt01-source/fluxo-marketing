@@ -1,17 +1,24 @@
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, EmailStr, Field
+from fastapi import APIRouter, Depends, File, Response, UploadFile
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.access import require_permission
+from app.api.access import require_active, require_permission
 from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
-from app.models import AuditEvent, Membership, MembershipStatus, PermissionRole, UserProfile
+from app.models import (
+    AuditEvent,
+    Membership,
+    MembershipStatus,
+    PermissionRole,
+    UserProfile,
+    utc_now,
+)
 
 router = APIRouter(prefix="/users", tags=["Usuários"])
 
@@ -28,6 +35,165 @@ class UserOut(BaseModel):
 class ApproveUserRequest(BaseModel):
     role: str = Field(pattern=r"^(admin|coordinator|collaborator|viewer)$")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class ProfileOut(BaseModel):
+    name: str
+    email: EmailStr
+    timezone: str
+    role: str | None
+    revision: int
+    avatar_url: str | None = Field(alias="avatarUrl")
+
+
+class ProfileUpdate(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    timezone: str = Field(default="America/Sao_Paulo", max_length=80)
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.split())
+
+
+def profile_out(principal: Principal) -> ProfileOut:
+    return ProfileOut(
+        name=principal.profile.full_name,
+        email=principal.profile.email,
+        timezone=principal.profile.timezone,
+        role=principal.role.code if principal.role else None,
+        revision=principal.profile.revision,
+        avatarUrl=(
+            f"/api/v1/users/me/avatar?v={principal.profile.revision}"
+            if principal.profile.avatar_path
+            else None
+        ),
+    )
+
+
+@router.get("/me", response_model=ProfileOut)
+def get_my_profile(principal: Principal = Depends(get_principal)) -> ProfileOut:
+    require_active(principal)
+    return profile_out(principal)
+
+
+@router.put(
+    "/me",
+    response_model=ProfileOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_my_profile(
+    payload: ProfileUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> ProfileOut:
+    require_active(principal)
+    profile = db.get(UserProfile, principal.profile.id)
+    assert profile is not None
+    if profile.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "Seu perfil foi alterado. Atualize a tela.")
+    before = {"name": profile.full_name, "timezone": profile.timezone}
+    profile.full_name = payload.name
+    profile.timezone = payload.timezone
+    profile.revision += 1
+    profile.updated_at = utc_now()
+    db.add(
+        AuditEvent(
+            organization_id=principal.membership.organization_id,
+            actor_user_id=profile.id,
+            event_type="PROFILE_UPDATED",
+            metadata_json={
+                "before": before,
+                "after": {"name": profile.full_name, "timezone": profile.timezone},
+            },
+        )
+    )
+    db.commit()
+    db.refresh(profile)
+    refreshed = Principal(principal.session, profile, principal.membership, principal.role)
+    return profile_out(refreshed)
+
+
+@router.get("/me/avatar", response_class=Response)
+def get_my_avatar(principal: Principal = Depends(get_principal)) -> Response:
+    require_active(principal)
+    if not principal.profile.avatar_data or not principal.profile.avatar_content_type:
+        raise ApiError(404, "avatar_not_found", "Foto de perfil não encontrada.")
+    return Response(
+        content=principal.profile.avatar_data,
+        media_type=principal.profile.avatar_content_type,
+        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.post(
+    "/me/avatar",
+    response_model=ProfileOut,
+    dependencies=[Depends(require_csrf)],
+)
+async def upload_my_avatar(
+    avatar: UploadFile = File(...),
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> ProfileOut:
+    require_active(principal)
+    allowed = {"image/jpeg", "image/png", "image/webp"}
+    if avatar.content_type not in allowed:
+        raise ApiError(422, "avatar_type_invalid", "Use uma imagem JPG, PNG ou WebP.")
+    content = await avatar.read(2_000_001)
+    if not content or len(content) > 2_000_000:
+        raise ApiError(422, "avatar_size_invalid", "A foto deve ter no máximo 2 MB.")
+    signatures = {
+        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
+        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": content.startswith(b"RIFF") and content[8:12] == b"WEBP",
+    }
+    if not signatures.get(avatar.content_type, False):
+        raise ApiError(422, "avatar_content_invalid", "O conteúdo da imagem não é válido.")
+    profile = db.get(UserProfile, principal.profile.id)
+    assert profile is not None
+    profile.avatar_data = content
+    profile.avatar_content_type = avatar.content_type
+    profile.avatar_path = "database"
+    profile.revision += 1
+    profile.updated_at = utc_now()
+    db.add(
+        AuditEvent(
+            organization_id=principal.membership.organization_id,
+            actor_user_id=profile.id,
+            event_type="PROFILE_AVATAR_UPDATED",
+            metadata_json={"contentType": avatar.content_type, "size": len(content)},
+        )
+    )
+    db.commit()
+    db.refresh(profile)
+    refreshed = Principal(principal.session, profile, principal.membership, principal.role)
+    return profile_out(refreshed)
+
+
+@router.delete("/me/avatar", status_code=204, dependencies=[Depends(require_csrf)])
+def delete_my_avatar(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> Response:
+    require_active(principal)
+    profile = db.get(UserProfile, principal.profile.id)
+    assert profile is not None
+    profile.avatar_data = None
+    profile.avatar_content_type = None
+    profile.avatar_path = None
+    profile.revision += 1
+    profile.updated_at = utc_now()
+    db.add(
+        AuditEvent(
+            organization_id=principal.membership.organization_id,
+            actor_user_id=profile.id,
+            event_type="PROFILE_AVATAR_REMOVED",
+            metadata_json={},
+        )
+    )
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("", response_model=list[UserOut])
