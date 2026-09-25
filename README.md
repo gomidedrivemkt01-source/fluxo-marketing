@@ -6,6 +6,8 @@ O MVP entrega autenticação por e-mail e senha com código, recuperação de se
 
 A criação manual é a entrada principal da operação. A interface organiza o trabalho em Início, Meu trabalho, Demandas, Calendário, Empresas, Equipe, Relatórios, Inteligência e Administração. Cada demanda pode receber empresa, categoria, responsável, etapa, prioridade, prazo, situação e descrição. **Demandas** mostra a operação completa; **Meu trabalho** mostra somente os cards atribuídos ao usuário. O formato Kanban ou lista é uma preferência individual sincronizada entre computadores, enquanto a etapa da demanda é única para toda a equipe.
 
+Administradores e coordenadores podem criar, editar, reordenar, ativar e desativar etapas na área **Workflows**. Etapas com demandas não podem ser desativadas até que seus cards sejam movidos.
+
 O upload de uma Daily é um recurso complementar na área de Inteligência e nunca altera cards automaticamente. A aplicação valida o JSON, abre cada item para revisão e exige uma escolha explícita: associar a um card existente, criar um card ou ignorar. As atualizações são aplicadas em uma única operação somente depois que todos os itens forem revisados. Revisões interrompidas ficam disponíveis para continuação.
 
 ## Execução local

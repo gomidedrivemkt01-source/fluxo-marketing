@@ -12,7 +12,7 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
-from app.models import AuditEvent, Company, DemandCategory, JobRole, WorkflowStage, utc_now
+from app.models import AuditEvent, Company, Demand, DemandCategory, JobRole, WorkflowStage, utc_now
 
 router = APIRouter(prefix="/catalogs", tags=["Cadastros"])
 
@@ -118,6 +118,15 @@ class WorkflowStageInput(BaseModel):
 class WorkflowStageUpdate(WorkflowStageInput):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     active: bool = True
+
+
+class WorkflowStageOrderItem(BaseModel):
+    id: uuid.UUID
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class WorkflowStageReorder(BaseModel):
+    stages: list[WorkflowStageOrderItem] = Field(min_length=1, max_length=50)
 
 
 class WorkflowStageOut(BaseModel):
@@ -413,6 +422,37 @@ def update_workflow_stage(
         raise ApiError(404, "workflow_stage_not_found", "Etapa não encontrada.")
     if stage.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A etapa foi alterada. Atualize a tela.")
+    if stage.active and not payload.active:
+        demand_id = db.scalar(
+            select(Demand.id)
+            .where(
+                Demand.organization_id == principal.membership.organization_id,
+                Demand.current_stage_id == stage.id,
+                Demand.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        if demand_id:
+            raise ApiError(
+                409,
+                "workflow_stage_in_use",
+                "Mova as demandas desta etapa antes de desativá-la.",
+            )
+        another_active_stage = db.scalar(
+            select(WorkflowStage.id)
+            .where(
+                WorkflowStage.organization_id == principal.membership.organization_id,
+                WorkflowStage.active.is_(True),
+                WorkflowStage.id != stage.id,
+            )
+            .limit(1)
+        )
+        if not another_active_stage:
+            raise ApiError(
+                409,
+                "workflow_requires_active_stage",
+                "O workflow precisa manter ao menos uma etapa ativa.",
+            )
     before = {"name": stage.name, "position": stage.position, "revision": stage.revision}
     stage.name = payload.name
     stage.code = payload.code
@@ -436,6 +476,56 @@ def update_workflow_stage(
         raise ApiError(409, "workflow_stage_conflict", "Este código de etapa já existe.") from exc
     db.refresh(stage)
     return stage
+
+
+@router.patch(
+    "/workflow-stages/order",
+    response_model=list[WorkflowStageOut],
+    dependencies=[Depends(require_csrf)],
+)
+def reorder_workflow_stages(
+    payload: WorkflowStageReorder,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> list[WorkflowStage]:
+    require_permission(principal, "catalog:write")
+    organization_id = principal.membership.organization_id
+    stages = list(
+        db.scalars(
+            select(WorkflowStage)
+            .where(
+                WorkflowStage.organization_id == organization_id,
+                WorkflowStage.active.is_(True),
+            )
+            .with_for_update()
+        )
+    )
+    by_id = {stage.id: stage for stage in stages}
+    requested_ids = [item.id for item in payload.stages]
+    if len(set(requested_ids)) != len(requested_ids) or set(requested_ids) != set(by_id):
+        raise ApiError(
+            422,
+            "workflow_order_invalid",
+            "A ordenação deve conter todas as etapas ativas uma única vez.",
+        )
+    before = [str(stage.id) for stage in sorted(stages, key=lambda item: item.position)]
+    for position, item in enumerate(payload.stages, start=1):
+        stage = by_id[item.id]
+        if stage.revision != item.expected_revision:
+            raise ApiError(409, "revision_conflict", "Uma etapa foi alterada. Atualize a tela.")
+        stage.position = position
+        stage.revision += 1
+        stage.updated_at = utc_now()
+    db.add(
+        AuditEvent(
+            organization_id=organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="WORKFLOW_STAGES_REORDERED",
+            metadata_json={"before": before, "after": [str(value) for value in requested_ids]},
+        )
+    )
+    db.commit()
+    return sorted(stages, key=lambda item: item.position)
 
 
 @router.get("/job-roles", response_model=list[JobRoleOut])

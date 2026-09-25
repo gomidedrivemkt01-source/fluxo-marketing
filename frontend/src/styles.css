@@ -433,6 +433,21 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .workflow-admin-list article small { margin-top: 3px; color: #95a4aa; font-size: .59rem; }
 .workflow-admin-list article > b { color: #72858e; font-size: .65rem; }
 .workflow-admin-list + .scope-note { margin-bottom: 22px; }
+.workflow-editor-error { padding: 14px 24px 0; }
+.workflow-admin-list.editable article { grid-template-columns: 27px 9px 1fr auto auto; }
+.stage-row-actions { display: flex; gap: 5px; }
+.stage-row-actions button { min-width: 31px; height: 31px; padding: 0 8px; border: 1px solid #d5e0e3; border-radius: 6px; color: #536a74; background: #fff; font-size: .66rem; font-weight: 800; }
+.stage-row-actions button:last-child { min-width: 58px; color: #087f76; }
+.stage-row-actions button:hover:not(:disabled) { border-color: #82bdb7; background: #f1faf8; }
+.inactive-stages { display: grid; gap: 7px; margin: 21px 24px 5px; padding-top: 20px; border-top: 1px solid #e3e9eb; }
+.inactive-stages > span { margin-bottom: 4px; }
+.inactive-stages > button { display: grid; grid-template-columns: 9px 1fr auto; gap: 12px; align-items: center; min-height: 49px; padding: 0 15px; border: 1px dashed #cedadd; border-radius: 7px; color: #61757e; background: #fafcfc; text-align: left; }
+.inactive-stages > button > i { width: 9px; height: 32px; border-radius: 5px; opacity: .55; }
+.inactive-stages > button > span { display: flex; flex-direction: column; }
+.inactive-stages > button strong { font-size: .73rem; }
+.inactive-stages > button small { margin-top: 3px; color: #9aa8ae; font-size: .58rem; }
+.inactive-stages > button b { color: #087f76; font-size: .62rem; }
+.stage-active-check { padding: 13px 14px; border: 1px solid #dce5e8; border-radius: 7px; background: #f8fafb; }
 
 @media (max-width: 850px) {
   .auth-page { grid-template-columns: 1fr; }
@@ -469,6 +484,9 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .view-switch { width: max-content; }
   .grouped-list { overflow-x: auto; }
   .grouped-list > section { min-width: 830px; }
+  .workflow-admin-list.editable article { grid-template-columns: 27px 9px 1fr auto; padding: 10px 13px; }
+  .workflow-admin-list.editable article > b { display: none; }
+  .stage-row-actions { grid-column: 3 / -1; }
   .modal-backdrop { padding: 0; }
   .daily-modal { max-height: 100vh; height: 100vh; border-radius: 0; }
   .review-layout { grid-template-columns: 1fr; }
