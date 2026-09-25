@@ -71,6 +71,7 @@ class UserProfile(Base):
     avatar_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     avatar_content_type: Mapped[str | None] = mapped_column(String(80))
     timezone: Mapped[str] = mapped_column(String(80), default="America/Sao_Paulo")
+    workspace_preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -183,6 +184,27 @@ class DemandCounter(Base):
     last_value: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
+class WorkflowStage(Base):
+    __tablename__ = "workflow_stages"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_workflow_stage_org_code"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    code: Mapped[str] = mapped_column(String(50))
+    color: Mapped[str] = mapped_column(String(7), default="#475569")
+    position: Mapped[int] = mapped_column(Integer)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class Demand(Base):
     __tablename__ = "demands"
     __table_args__ = (
@@ -205,6 +227,9 @@ class Demand(Base):
     )
     current_assignee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    current_stage_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflow_stages.id", ondelete="RESTRICT"), index=True
     )
     status: Mapped[str] = mapped_column(String(40), default="WAITING_EXECUTION")
     priority: Mapped[str] = mapped_column(String(20), default="NORMAL")

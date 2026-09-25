@@ -11,7 +11,18 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
-from app.models import AuditEvent, Company, Demand, DemandCategory, DemandUpdate, utc_now
+from app.models import (
+    AuditEvent,
+    Company,
+    Demand,
+    DemandCategory,
+    DemandUpdate,
+    Membership,
+    MembershipStatus,
+    UserProfile,
+    WorkflowStage,
+    utc_now,
+)
 
 router = APIRouter(prefix="/demands", tags=["Demandas"])
 
@@ -23,6 +34,8 @@ class DemandCreate(BaseModel):
     category_id: uuid.UUID | None = Field(default=None, alias="categoryId")
     priority: str = Field(default="NORMAL", pattern=r"^(LOW|NORMAL|HIGH|URGENT)$")
     deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
+    assignee_id: uuid.UUID | None = Field(default=None, alias="assigneeId")
+    stage_id: uuid.UUID | None = Field(default=None, alias="stageId")
 
 
 class DemandOut(BaseModel):
@@ -38,6 +51,14 @@ class DemandOut(BaseModel):
     category_id: uuid.UUID | None = Field(alias="categoryId")
     category_name: str | None = Field(alias="categoryName")
     category_color: str | None = Field(alias="categoryColor")
+    assignee_id: uuid.UUID | None = Field(alias="assigneeId")
+    assignee_name: str | None = Field(alias="assigneeName")
+    assignee_avatar_url: str | None = Field(alias="assigneeAvatarUrl")
+    stage_id: uuid.UUID | None = Field(alias="stageId")
+    stage_name: str | None = Field(alias="stageName")
+    stage_code: str | None = Field(alias="stageCode")
+    stage_color: str | None = Field(alias="stageColor")
+    stage_position: int | None = Field(alias="stagePosition")
     status: str
     priority: str
     deadline_at: datetime | None = Field(alias="deadlineAt")
@@ -56,6 +77,13 @@ class DemandEdit(BaseModel):
         pattern=r"^(WAITING_EXECUTION|IN_PROGRESS|WAITING_INFORMATION|WAITING_APPROVAL|BLOCKED|SCHEDULED|COMPLETED)$"
     )
     deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+    assignee_id: uuid.UUID | None = Field(default=None, alias="assigneeId")
+    stage_id: uuid.UUID | None = Field(default=None, alias="stageId")
+
+
+class DemandStageUpdate(BaseModel):
+    stage_id: uuid.UUID = Field(alias="stageId")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
@@ -91,6 +119,8 @@ def create_demand_record(
     category_id: uuid.UUID | None = None,
     priority: str = "NORMAL",
     deadline_at: datetime | None = None,
+    assignee_id: uuid.UUID | None = None,
+    stage_id: uuid.UUID | None = None,
     source: str = "interface",
 ) -> Demand:
     demand = Demand(
@@ -102,6 +132,8 @@ def create_demand_record(
         category_id=category_id,
         priority=priority,
         deadline_at=deadline_at,
+        current_assignee_id=assignee_id,
+        current_stage_id=stage_id,
         source=source,
         created_by=principal.profile.id,
     )
@@ -113,6 +145,8 @@ def create_demand_record(
 def demand_out(db: Session, demand: Demand) -> DemandOut:
     company = db.get(Company, demand.primary_company_id) if demand.primary_company_id else None
     category = db.get(DemandCategory, demand.category_id) if demand.category_id else None
+    assignee = db.get(UserProfile, demand.current_assignee_id) if demand.current_assignee_id else None
+    stage = db.get(WorkflowStage, demand.current_stage_id) if demand.current_stage_id else None
     return DemandOut(
         id=demand.id,
         publicId=demand.public_id,
@@ -124,6 +158,18 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
         categoryId=demand.category_id,
         categoryName=category.name if category else None,
         categoryColor=category.color if category else None,
+        assigneeId=demand.current_assignee_id,
+        assigneeName=assignee.full_name if assignee else None,
+        assigneeAvatarUrl=(
+            f"/api/v1/users/{assignee.id}/avatar?v={assignee.revision}"
+            if assignee and assignee.avatar_path
+            else None
+        ),
+        stageId=demand.current_stage_id,
+        stageName=stage.name if stage else None,
+        stageCode=stage.code if stage else None,
+        stageColor=stage.color if stage else None,
+        stagePosition=stage.position if stage else None,
         status=demand.status,
         priority=demand.priority,
         deadlineAt=demand.deadline_at,
@@ -131,6 +177,56 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
         revision=demand.revision,
         createdAt=demand.created_at,
     )
+
+
+def validate_references(
+    db: Session,
+    organization_id: uuid.UUID,
+    *,
+    company_id: uuid.UUID | None,
+    category_id: uuid.UUID | None,
+    assignee_id: uuid.UUID | None,
+    stage_id: uuid.UUID | None,
+) -> uuid.UUID | None:
+    if company_id and not db.scalar(
+        select(Company.id).where(
+            Company.id == company_id, Company.organization_id == organization_id, Company.active
+        )
+    ):
+        raise ApiError(422, "company_invalid", "A empresa selecionada não está disponível.")
+    if category_id and not db.scalar(
+        select(DemandCategory.id).where(
+            DemandCategory.id == category_id,
+            DemandCategory.organization_id == organization_id,
+            DemandCategory.active,
+        )
+    ):
+        raise ApiError(422, "category_invalid", "A categoria selecionada não está disponível.")
+    if assignee_id and not db.scalar(
+        select(Membership.id).where(
+            Membership.organization_id == organization_id,
+            Membership.user_profile_id == assignee_id,
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+    ):
+        raise ApiError(422, "assignee_invalid", "O responsável selecionado não está disponível.")
+    resolved_stage_id = stage_id
+    if resolved_stage_id and not db.scalar(
+        select(WorkflowStage.id).where(
+            WorkflowStage.id == resolved_stage_id,
+            WorkflowStage.organization_id == organization_id,
+            WorkflowStage.active,
+        )
+    ):
+        raise ApiError(422, "stage_invalid", "A etapa selecionada não está disponível.")
+    if not resolved_stage_id:
+        resolved_stage_id = db.scalar(
+            select(WorkflowStage.id)
+            .where(WorkflowStage.organization_id == organization_id, WorkflowStage.active)
+            .order_by(WorkflowStage.position)
+            .limit(1)
+        )
+    return resolved_stage_id
 
 
 @router.get("", response_model=list[DemandOut])
@@ -166,6 +262,14 @@ def create_demand(
     db: Session = Depends(get_db),
 ) -> DemandOut:
     require_any_permission(principal, "demands:write", "demands:work")
+    stage_id = validate_references(
+        db,
+        principal.membership.organization_id,
+        company_id=payload.company_id,
+        category_id=payload.category_id,
+        assignee_id=payload.assignee_id,
+        stage_id=payload.stage_id,
+    )
     demand = create_demand_record(
         db,
         principal,
@@ -175,6 +279,8 @@ def create_demand(
         category_id=payload.category_id,
         priority=payload.priority,
         deadline_at=payload.deadline_at,
+        assignee_id=payload.assignee_id,
+        stage_id=stage_id,
     )
     db.add(
         AuditEvent(
@@ -233,6 +339,14 @@ def update_demand(
         raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
     if demand.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    stage_id = validate_references(
+        db,
+        principal.membership.organization_id,
+        company_id=payload.company_id,
+        category_id=payload.category_id,
+        assignee_id=payload.assignee_id,
+        stage_id=payload.stage_id,
+    )
     before = {
         "title": demand.title,
         "status": demand.status,
@@ -246,6 +360,8 @@ def update_demand(
     demand.priority = payload.priority
     demand.status = payload.status
     demand.deadline_at = payload.deadline_at
+    demand.current_assignee_id = payload.assignee_id
+    demand.current_stage_id = stage_id
     demand.revision += 1
     demand.updated_at = utc_now()
     db.add(
@@ -262,6 +378,74 @@ def update_demand(
                     "priority": demand.priority,
                     "revision": demand.revision,
                 },
+            },
+        )
+    )
+    db.commit()
+    db.refresh(demand)
+    return demand_out(db, demand)
+
+
+@router.patch(
+    "/{demand_id}/stage",
+    response_model=DemandOut,
+    dependencies=[Depends(require_csrf)],
+)
+def move_demand_stage(
+    demand_id: uuid.UUID,
+    payload: DemandStageUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = db.scalar(
+        select(Demand)
+        .where(
+            Demand.id == demand_id,
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not demand:
+        raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    stage = db.scalar(
+        select(WorkflowStage).where(
+            WorkflowStage.id == payload.stage_id,
+            WorkflowStage.organization_id == principal.membership.organization_id,
+            WorkflowStage.active,
+        )
+    )
+    if not stage:
+        raise ApiError(422, "stage_invalid", "A etapa selecionada não está disponível.")
+    previous_stage_id = demand.current_stage_id
+    demand.current_stage_id = stage.id
+    demand.revision += 1
+    demand.updated_at = utc_now()
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="STAGE_CHANGED",
+            summary=f"Etapa alterada para {stage.name}.",
+            payload={
+                "fromStageId": str(previous_stage_id) if previous_stage_id else None,
+                "toStageId": str(stage.id),
+                "toStageName": stage.name,
+            },
+        )
+    )
+    db.add(
+        AuditEvent(
+            organization_id=principal.membership.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="DEMAND_STAGE_CHANGED",
+            metadata_json={
+                "demandId": str(demand.id),
+                "fromStageId": str(previous_stage_id) if previous_stage_id else None,
+                "toStageId": str(stage.id),
             },
         )
     )

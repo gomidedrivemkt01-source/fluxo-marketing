@@ -12,7 +12,7 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
-from app.models import AuditEvent, Company, DemandCategory, JobRole, utc_now
+from app.models import AuditEvent, Company, DemandCategory, JobRole, WorkflowStage, utc_now
 
 router = APIRouter(prefix="/catalogs", tags=["Cadastros"])
 
@@ -91,6 +91,41 @@ class JobRoleOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    active: bool
+    revision: int
+
+
+class WorkflowStageInput(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    code: str = Field(min_length=2, max_length=50)
+    color: str = Field(default="#475569", pattern=r"^#[0-9A-Fa-f]{6}$")
+    position: int = Field(ge=1, le=100)
+
+    @field_validator("name")
+    @classmethod
+    def clean_stage_name(cls, value: str) -> str:
+        return " ".join(value.split())
+
+    @field_validator("code")
+    @classmethod
+    def clean_stage_code(cls, value: str) -> str:
+        normalized = re.sub(r"[^A-Z0-9_]+", "_", value.upper()).strip("_")
+        if len(normalized) < 2:
+            raise ValueError("Código inválido")
+        return normalized
+
+
+class WorkflowStageUpdate(WorkflowStageInput):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+    active: bool = True
+
+
+class WorkflowStageOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    code: str
+    color: str
+    position: int
     active: bool
     revision: int
 
@@ -306,6 +341,101 @@ def update_category(
         raise ApiError(409, "category_conflict", "Nome ou código já utilizado.") from exc
     db.refresh(category)
     return category
+
+
+@router.get("/workflow-stages", response_model=list[WorkflowStageOut])
+def list_workflow_stages(
+    include_inactive: bool = Query(False, alias="includeInactive"),
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> list[WorkflowStage]:
+    require_permission(principal, "catalog:read")
+    statement = select(WorkflowStage).where(
+        WorkflowStage.organization_id == principal.membership.organization_id
+    )
+    if not include_inactive:
+        statement = statement.where(WorkflowStage.active.is_(True))
+    return list(db.scalars(statement.order_by(WorkflowStage.position, WorkflowStage.name)))
+
+
+@router.post(
+    "/workflow-stages",
+    response_model=WorkflowStageOut,
+    status_code=201,
+    dependencies=[Depends(require_csrf)],
+)
+def create_workflow_stage(
+    payload: WorkflowStageInput,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> WorkflowStage:
+    require_permission(principal, "catalog:write")
+    stage = WorkflowStage(
+        organization_id=principal.membership.organization_id,
+        name=payload.name,
+        code=payload.code,
+        color=payload.color.upper(),
+        position=payload.position,
+    )
+    db.add(stage)
+    try:
+        db.flush()
+        _audit(db, principal, "WORKFLOW_STAGE_CREATED", stage.id, after={"name": stage.name})
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ApiError(409, "workflow_stage_conflict", "Este código de etapa já existe.") from exc
+    db.refresh(stage)
+    return stage
+
+
+@router.put(
+    "/workflow-stages/{stage_id}",
+    response_model=WorkflowStageOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_workflow_stage(
+    stage_id: uuid.UUID,
+    payload: WorkflowStageUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> WorkflowStage:
+    require_permission(principal, "catalog:write")
+    stage = db.scalar(
+        select(WorkflowStage)
+        .where(
+            WorkflowStage.id == stage_id,
+            WorkflowStage.organization_id == principal.membership.organization_id,
+        )
+        .with_for_update()
+    )
+    if not stage:
+        raise ApiError(404, "workflow_stage_not_found", "Etapa não encontrada.")
+    if stage.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A etapa foi alterada. Atualize a tela.")
+    before = {"name": stage.name, "position": stage.position, "revision": stage.revision}
+    stage.name = payload.name
+    stage.code = payload.code
+    stage.color = payload.color.upper()
+    stage.position = payload.position
+    stage.active = payload.active
+    stage.revision += 1
+    stage.updated_at = utc_now()
+    _audit(
+        db,
+        principal,
+        "WORKFLOW_STAGE_UPDATED",
+        stage.id,
+        before=before,
+        after={"name": stage.name, "position": stage.position, "revision": stage.revision},
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ApiError(409, "workflow_stage_conflict", "Este código de etapa já existe.") from exc
+    db.refresh(stage)
+    return stage
 
 
 @router.get("/job-roles", response_model=list[JobRoleOut])

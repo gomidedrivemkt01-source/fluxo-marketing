@@ -2,9 +2,9 @@
 
 Fundação da plataforma interna de gestão e inteligência operacional do Marketing.
 
-O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, empresas, categorias, perfil com foto, auditoria e importação assistida de Dailys.
+O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, responsáveis, etapas compartilhadas, visões Kanban e lista, empresas, categorias, perfil com foto, auditoria e importação assistida de Dailys.
 
-A criação manual é a entrada principal da operação. A interface organiza o trabalho em Início, Meu trabalho, Demandas, Calendário, Empresas, Equipe, Relatórios, Inteligência e Administração. Cada demanda pode receber empresa, categoria, prioridade, prazo, situação e descrição.
+A criação manual é a entrada principal da operação. A interface organiza o trabalho em Início, Meu trabalho, Demandas, Calendário, Empresas, Equipe, Relatórios, Inteligência e Administração. Cada demanda pode receber empresa, categoria, responsável, etapa, prioridade, prazo, situação e descrição. **Demandas** mostra a operação completa; **Meu trabalho** mostra somente os cards atribuídos ao usuário. O formato Kanban ou lista é uma preferência individual sincronizada entre computadores, enquanto a etapa da demanda é única para toda a equipe.
 
 O upload de uma Daily é um recurso complementar na área de Inteligência e nunca altera cards automaticamente. A aplicação valida o JSON, abre cada item para revisão e exige uma escolha explícita: associar a um card existente, criar um card ou ignorar. As atualizações são aplicadas em uma única operação somente depois que todos os itens forem revisados. Revisões interrompidas ficam disponíveis para continuação.
 

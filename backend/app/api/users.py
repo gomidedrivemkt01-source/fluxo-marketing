@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -17,6 +18,7 @@ from app.models import (
     MembershipStatus,
     PermissionRole,
     UserProfile,
+    WorkflowStage,
     utc_now,
 )
 
@@ -25,11 +27,13 @@ router = APIRouter(prefix="/users", tags=["Usuários"])
 
 class UserOut(BaseModel):
     id: uuid.UUID
+    profile_id: uuid.UUID = Field(alias="profileId")
     name: str
     email: EmailStr
     state: str
     role: str | None
     revision: int
+    avatar_url: str | None = Field(alias="avatarUrl")
 
 
 class ApproveUserRequest(BaseModel):
@@ -38,11 +42,25 @@ class ApproveUserRequest(BaseModel):
 
 
 class ProfileOut(BaseModel):
+    profile_id: uuid.UUID = Field(alias="profileId")
     name: str
     email: EmailStr
     timezone: str
     role: str | None
     revision: int
+    avatar_url: str | None = Field(alias="avatarUrl")
+    preferences: dict[str, object]
+
+
+class PreferencesUpdate(BaseModel):
+    demand_view: Literal["kanban", "list"] = Field(alias="demandView")
+    show_empty_stages: bool = Field(alias="showEmptyStages")
+    stage_order: list[uuid.UUID] = Field(default_factory=list, alias="stageOrder", max_length=50)
+
+
+class UserOptionOut(BaseModel):
+    id: uuid.UUID
+    name: str
     avatar_url: str | None = Field(alias="avatarUrl")
 
 
@@ -58,7 +76,14 @@ class ProfileUpdate(BaseModel):
 
 
 def profile_out(principal: Principal) -> ProfileOut:
+    preferences: dict[str, object] = {
+        "demandView": "kanban",
+        "showEmptyStages": True,
+        "stageOrder": [],
+    }
+    preferences.update(principal.profile.workspace_preferences or {})
     return ProfileOut(
+        profileId=principal.profile.id,
         name=principal.profile.full_name,
         email=principal.profile.email,
         timezone=principal.profile.timezone,
@@ -69,6 +94,7 @@ def profile_out(principal: Principal) -> ProfileOut:
             if principal.profile.avatar_path
             else None
         ),
+        preferences=preferences,
     )
 
 
@@ -115,6 +141,70 @@ def update_my_profile(
     return profile_out(refreshed)
 
 
+@router.put(
+    "/me/preferences",
+    response_model=ProfileOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_my_preferences(
+    payload: PreferencesUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> ProfileOut:
+    require_active(principal)
+    if payload.stage_order:
+        valid_ids = set(
+            db.scalars(
+                select(WorkflowStage.id).where(
+                    WorkflowStage.organization_id == principal.membership.organization_id,
+                    WorkflowStage.id.in_(payload.stage_order),
+                )
+            )
+        )
+        if valid_ids != set(payload.stage_order):
+            raise ApiError(422, "stage_order_invalid", "A ordem de etapas é inválida.")
+    profile = db.get(UserProfile, principal.profile.id)
+    assert profile is not None
+    profile.workspace_preferences = {
+        "demandView": payload.demand_view,
+        "showEmptyStages": payload.show_empty_stages,
+        "stageOrder": [str(value) for value in payload.stage_order],
+    }
+    profile.updated_at = utc_now()
+    db.commit()
+    db.refresh(profile)
+    refreshed = Principal(principal.session, profile, principal.membership, principal.role)
+    return profile_out(refreshed)
+
+
+@router.get("/options", response_model=list[UserOptionOut])
+def list_user_options(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> list[UserOptionOut]:
+    require_active(principal)
+    rows = db.execute(
+        select(UserProfile)
+        .join(Membership, Membership.user_profile_id == UserProfile.id)
+        .where(
+            Membership.organization_id == principal.membership.organization_id,
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+        .order_by(UserProfile.full_name)
+    ).scalars()
+    return [
+        UserOptionOut(
+            id=profile.id,
+            name=profile.full_name,
+            avatarUrl=(
+                f"/api/v1/users/{profile.id}/avatar?v={profile.revision}"
+                if profile.avatar_path
+                else None
+            ),
+        )
+        for profile in rows
+    ]
+
+
 @router.get("/me/avatar", response_class=Response)
 def get_my_avatar(principal: Principal = Depends(get_principal)) -> Response:
     require_active(principal)
@@ -123,6 +213,32 @@ def get_my_avatar(principal: Principal = Depends(get_principal)) -> Response:
     return Response(
         content=principal.profile.avatar_data,
         media_type=principal.profile.avatar_content_type,
+        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/{profile_id}/avatar", response_class=Response)
+def get_profile_avatar(
+    profile_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> Response:
+    require_active(principal)
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.organization_id == principal.membership.organization_id,
+            Membership.user_profile_id == profile_id,
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+    )
+    if not membership:
+        raise ApiError(404, "avatar_not_found", "Foto de perfil não encontrada.")
+    profile = db.get(UserProfile, profile_id)
+    if not profile or not profile.avatar_data or not profile.avatar_content_type:
+        raise ApiError(404, "avatar_not_found", "Foto de perfil não encontrada.")
+    return Response(
+        content=profile.avatar_data,
+        media_type=profile.avatar_content_type,
         headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"},
     )
 
@@ -211,11 +327,17 @@ def list_users(
     return [
         UserOut(
             id=membership.id,
+            profileId=profile.id,
             name=profile.full_name,
             email=profile.email,
             state=membership.status.value,
             role=role.code if role else None,
             revision=membership.revision,
+            avatarUrl=(
+                f"/api/v1/users/{profile.id}/avatar?v={profile.revision}"
+                if profile.avatar_path
+                else None
+            ),
         )
         for membership, profile, role in rows
     ]
@@ -277,9 +399,15 @@ def approve_user(
     assert profile is not None
     return UserOut(
         id=membership.id,
+        profileId=profile.id,
         name=profile.full_name,
         email=profile.email,
         state=membership.status.value,
         role=role.code,
         revision=membership.revision,
+        avatarUrl=(
+            f"/api/v1/users/{profile.id}/avatar?v={profile.revision}"
+            if profile.avatar_path
+            else None
+        ),
     )

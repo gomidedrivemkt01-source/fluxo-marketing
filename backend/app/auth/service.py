@@ -21,6 +21,7 @@ from app.models import (
     PrivacyAcknowledgement,
     PrivacyNoticeVersion,
     UserProfile,
+    WorkflowStage,
     utc_now,
 )
 
@@ -41,6 +42,17 @@ ROLE_DEFINITIONS = {
     "collaborator": ["catalog:read", "profile:write", "demands:read", "demands:work"],
     "viewer": ["catalog:read", "demands:read"],
 }
+
+DEFAULT_WORKFLOW_STAGES = [
+    ("ENTRADA", "Entrada", "#64748B"),
+    ("BRIEFING", "Briefing", "#0F766E"),
+    ("PLANEJAMENTO", "Planejamento", "#2563EB"),
+    ("PRODUCAO", "Produção", "#7C3AED"),
+    ("REVISAO", "Revisão", "#D97706"),
+    ("APROVACAO", "Aprovação", "#DB2777"),
+    ("PUBLICACAO", "Publicação / entrega", "#0891B2"),
+    ("CONCLUIDA", "Concluída", "#15803D"),
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +98,16 @@ class SessionService:
                         "viewer": "Visualizador",
                     }[code],
                     permissions=permissions,
+                )
+            )
+        for position, (code, name, color) in enumerate(DEFAULT_WORKFLOW_STAGES, start=1):
+            self.db.add(
+                WorkflowStage(
+                    organization_id=organization.id,
+                    code=code,
+                    name=name,
+                    color=color,
+                    position=position,
                 )
             )
         self.db.flush()
