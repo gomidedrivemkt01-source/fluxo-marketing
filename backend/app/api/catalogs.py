@@ -2,7 +2,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -44,6 +44,8 @@ class CompanyUpdate(CompanyInput):
 
 
 class CompanyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: uuid.UUID
     name: str
     short_name: str = Field(alias="shortName")

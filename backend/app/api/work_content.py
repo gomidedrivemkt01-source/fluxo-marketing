@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -72,6 +72,8 @@ class BriefingFieldUpdate(BriefingFieldInput):
 
 
 class BriefingFieldOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: uuid.UUID
     label: str
     key: str
@@ -433,8 +435,8 @@ def get_demand_briefing(
                 id=field.id,
                 label=field.label,
                 key=field.key,
-                helpText=field.help_text,
-                fieldType=field.field_type,
+                help_text=field.help_text,
+                field_type=field.field_type,
                 options=field.options,
                 required=field.required,
                 position=field.position,

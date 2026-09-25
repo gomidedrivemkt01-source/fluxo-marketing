@@ -4,9 +4,11 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.orm import Session
 
+from app.api.catalogs import CompanyOut
 from app.api.errors import ApiError
 from app.api.work_content import (
     BriefingFieldInput,
+    BriefingFieldOut,
     ChecklistToggleInput,
     DemandBriefingInput,
     toggle_demand_checklist_item,
@@ -17,6 +19,7 @@ from app.models import (
     AuditEvent,
     BriefingField,
     ChecklistTemplateItem,
+    Company,
     Demand,
     DemandChecklistItem,
     DemandUpdate,
@@ -82,6 +85,36 @@ def test_briefing_field_normalizes_key_and_options() -> None:
     assert payload.label == "Objetivo principal"
     assert payload.key == "objetivo_da_campanha"
     assert payload.options == ["Conversão", "Alcance"]
+
+
+def test_orm_outputs_accept_python_names_for_aliased_fields() -> None:
+    company = Company(
+        id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
+        name="Gomide",
+        short_name="Gomide",
+        code="GOMIDE",
+        color="#155E75",
+        active=True,
+        revision=1,
+    )
+    field = BriefingField(
+        id=uuid.uuid4(),
+        organization_id=company.organization_id,
+        category_id=uuid.uuid4(),
+        label="Objetivo",
+        key="objetivo",
+        help_text="Descreva o resultado esperado.",
+        field_type="text",
+        options=[],
+        required=True,
+        position=1,
+        active=True,
+        revision=1,
+    )
+
+    assert CompanyOut.model_validate(company).short_name == "Gomide"
+    assert BriefingFieldOut.model_validate(field).help_text == "Descreva o resultado esperado."
 
 
 def test_required_briefing_field_blocks_incomplete_save() -> None:
