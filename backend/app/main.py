@@ -14,6 +14,8 @@ from app.api.daily_imports import router as daily_imports_router
 from app.api.demands import router as demands_router
 from app.api.errors import ApiError, api_error_handler
 from app.api.users import router as users_router
+from app.api.work_content import catalog_router as work_catalog_router
+from app.api.work_content import demand_router as work_demand_router
 from app.auth.router import router as auth_router
 from app.core.config import get_settings
 
@@ -69,6 +71,8 @@ app.include_router(users_router, prefix="/api/v1")
 app.include_router(catalogs_router, prefix="/api/v1")
 app.include_router(demands_router, prefix="/api/v1")
 app.include_router(daily_imports_router, prefix="/api/v1")
+app.include_router(work_catalog_router, prefix="/api/v1")
+app.include_router(work_demand_router, prefix="/api/v1")
 
 
 @app.get("/health", include_in_schema=False)

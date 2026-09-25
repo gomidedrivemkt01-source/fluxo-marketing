@@ -341,12 +341,13 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .entity-cards span { margin-top: 4px; color: #8799a1; font-size: .65rem; }
 .entity-cards p { margin: 7px 0 0; color: #6f838c; font-size: .74rem; }
 .category-table { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 11px; padding: 20px; }
-.category-table button { display: grid; grid-template-columns: 9px 1fr auto; gap: 12px; align-items: center; padding: 15px; border: 1px solid #e0e8ea; border-radius: 8px; color: inherit; background: #fbfcfc; text-align: left; }
-.category-table button > i { width: 9px; height: 36px; border-radius: 5px; }
-.category-table button > span { display: flex; flex-direction: column; }
+.category-table article { display: grid; grid-template-columns: 9px 1fr auto; gap: 12px; align-items: center; padding: 15px; border: 1px solid #e0e8ea; border-radius: 8px; color: inherit; background: #fbfcfc; text-align: left; }
+.category-table article > i { width: 9px; height: 36px; border-radius: 5px; }
+.category-table article > span { display: flex; flex-direction: column; }
 .category-table strong { font-size: .78rem; }
 .category-table small { margin-top: 4px; color: #8b9ca4; font-size: .61rem; }
-.category-table b { color: var(--teal-dark); font-size: .66rem; }
+.category-table article > div { display: flex; gap: 5px; }
+.category-table article button { min-height: 30px; padding: 0 8px; border: 1px solid #d6e1e4; border-radius: 5px; color: var(--teal-dark); background: #fff; font-size: .63rem; font-weight: 800; }
 .intelligence-hero { display: flex; justify-content: space-between; gap: 30px; align-items: center; padding: 30px; border-bottom: 1px solid #e5ebed; background: linear-gradient(110deg, #f5fbfa, #fff); }
 .intelligence-hero h3 { margin: 9px 0 8px; color: var(--ink); }
 .intelligence-hero p { max-width: 680px; margin: 0; color: #71858e; font-size: .8rem; line-height: 1.6; }
@@ -448,6 +449,42 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .inactive-stages > button small { margin-top: 3px; color: #9aa8ae; font-size: .58rem; }
 .inactive-stages > button b { color: #087f76; font-size: .62rem; }
 .stage-active-check { padding: 13px 14px; border: 1px solid #dce5e8; border-radius: 7px; background: #f8fafb; }
+.template-modal { overflow: hidden; width: min(760px, 100%); max-height: calc(100vh - 48px); }
+.template-body { overflow-y: auto; max-height: calc(100vh - 130px); padding-bottom: 22px; }
+.template-intro { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 24px; border-bottom: 1px solid #e5ebed; }
+.template-intro p { margin: 0; color: #71858e; font-size: .76rem; line-height: 1.5; }
+.template-list { display: grid; gap: 7px; padding: 18px 24px; }
+.template-list > button { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; min-height: 55px; padding: 9px 13px; border: 1px solid #dfe7e9; border-radius: 7px; color: inherit; background: #fbfcfc; text-align: left; }
+.template-list > button.inactive { opacity: .6; border-style: dashed; }
+.template-list > button > span { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; color: #607680; background: #eaf0f2; font-size: .64rem; font-weight: 800; }
+.template-list > button > div { display: flex; flex-direction: column; }
+.template-list strong { display: flex; gap: 7px; align-items: center; color: #304954; font-size: .76rem; }
+.template-list strong b, .demand-checklist strong b { padding: 3px 5px; border-radius: 4px; color: #98601f; background: #fff0dc; font-size: .52rem; text-transform: uppercase; }
+.template-list small { overflow: hidden; max-width: 510px; margin-top: 4px; color: #8b9ca4; font-size: .62rem; text-overflow: ellipsis; white-space: nowrap; }
+.template-list em { color: var(--teal-dark); font-size: .62rem; font-style: normal; font-weight: 800; }
+.compact-empty { min-height: 235px; padding: 44px 25px; }
+.feature-loading { display: grid; place-items: center; min-height: 320px; }
+.work-content-panel { overflow: hidden; max-width: 940px; }
+.work-content-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 25px; padding: 26px 30px; border-bottom: 1px solid #e5ebed; background: linear-gradient(110deg, #f5fbfa, #fff); }
+.work-content-head h3 { margin: 7px 0 6px; color: var(--ink); }
+.work-content-head p { margin: 0; color: #758891; font-size: .75rem; }
+.work-content-head > span { padding: 6px 9px; border-radius: 6px; color: #087f76; background: #e4f7f4; font-size: .65rem; font-weight: 800; white-space: nowrap; }
+.work-content-panel .field > small { margin-top: -2px; color: #8b9ca4; font-size: .68rem; font-weight: 500; }
+.required-mark { color: #a86122; font-size: .58rem; text-transform: uppercase; }
+.checklist-progress { display: flex; gap: 13px; align-items: center; padding: 18px 30px 7px; }
+.checklist-progress i { overflow: hidden; flex: 1; height: 7px; border-radius: 6px; background: #e2eaec; }
+.checklist-progress i b { display: block; height: 100%; border-radius: inherit; background: var(--teal-dark); }
+.checklist-progress strong { color: #607680; font-size: .68rem; }
+.work-content-error { padding: 12px 30px 0; }
+.demand-checklist { display: grid; gap: 8px; padding: 17px 30px 30px; }
+.demand-checklist > label { display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: start; padding: 15px; border: 1px solid #dfe7e9; border-radius: 7px; background: #fbfcfc; }
+.demand-checklist > label.done { border-color: #cce5df; background: #f1faf8; }
+.demand-checklist input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--teal-dark); }
+.demand-checklist label > span { display: flex; flex-direction: column; }
+.demand-checklist strong { display: flex; gap: 8px; align-items: center; color: #304954; font-size: .78rem; }
+.demand-checklist label.done strong { color: #6e848c; text-decoration: line-through; }
+.demand-checklist small { margin-top: 5px; color: #81939b; font-size: .68rem; line-height: 1.45; }
+.demand-checklist em { margin-top: 7px; color: #168174; font-size: .61rem; font-style: normal; font-weight: 700; }
 
 @media (max-width: 850px) {
   .auth-page { grid-template-columns: 1fr; }
@@ -487,6 +524,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .workflow-admin-list.editable article { grid-template-columns: 27px 9px 1fr auto; padding: 10px 13px; }
   .workflow-admin-list.editable article > b { display: none; }
   .stage-row-actions { grid-column: 3 / -1; }
+  .template-intro, .work-content-head { align-items: flex-start; flex-direction: column; }
   .modal-backdrop { padding: 0; }
   .daily-modal { max-height: 100vh; height: 100vh; border-radius: 0; }
   .review-layout { grid-template-columns: 1fr; }
