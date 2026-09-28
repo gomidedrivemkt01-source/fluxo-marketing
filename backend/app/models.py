@@ -199,6 +199,10 @@ class WorkflowStage(Base):
     code: Mapped[str] = mapped_column(String(50))
     color: Mapped[str] = mapped_column(String(7), default="#475569")
     position: Mapped[int] = mapped_column(Integer)
+    default_assignee_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    expected_duration_hours: Mapped[int | None] = mapped_column(Integer)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

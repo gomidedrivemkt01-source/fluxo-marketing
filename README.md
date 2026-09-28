@@ -6,7 +6,7 @@ O MVP entrega autenticação por e-mail e senha com código, recuperação de se
 
 A criação manual é a entrada principal da operação. A interface organiza o trabalho em Início, Meu trabalho, Demandas, Calendário, Empresas, Equipe, Relatórios, Inteligência e Administração. Cada demanda pode receber empresa, categoria, responsável, etapa, prioridade, prazo, situação e descrição. **Demandas** mostra a operação completa; **Meu trabalho** mostra somente os cards atribuídos ao usuário. O formato Kanban ou lista é uma preferência individual sincronizada entre computadores, enquanto a etapa da demanda é única para toda a equipe.
 
-Administradores e coordenadores podem criar, editar, reordenar, ativar e desativar etapas na área **Workflows**. Etapas com demandas não podem ser desativadas até que seus cards sejam movidos. Cada etapa também pode receber um checklist padrão.
+Administradores e coordenadores podem criar, editar, reordenar, ativar e desativar etapas na área **Workflows**. Etapas com demandas não podem ser desativadas até que seus cards sejam movidos. Cada etapa também pode receber um checklist, um responsável padrão e uma duração esperada em horas. Ao entrar nessa etapa, o card aplica o handoff configurado e calcula uma previsão, mantendo o prazo final da demanda como um campo separado.
 
 Na área **Categorias**, a administração configura o modelo de briefing com perguntas de texto, texto longo, número, data ou seleção, incluindo campos obrigatórios. Dentro do card, as abas **Briefing** e **Checklist** permitem preencher as respostas e concluir os itens da etapa atual. Toda alteração usa controle de revisão e gera histórico e auditoria.
 

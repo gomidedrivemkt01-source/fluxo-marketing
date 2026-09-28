@@ -12,7 +12,17 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
-from app.models import AuditEvent, Company, Demand, DemandCategory, JobRole, WorkflowStage, utc_now
+from app.models import (
+    AuditEvent,
+    Company,
+    Demand,
+    DemandCategory,
+    JobRole,
+    Membership,
+    MembershipStatus,
+    WorkflowStage,
+    utc_now,
+)
 
 router = APIRouter(prefix="/catalogs", tags=["Cadastros"])
 
@@ -102,6 +112,10 @@ class WorkflowStageInput(BaseModel):
     code: str = Field(min_length=2, max_length=50)
     color: str = Field(default="#475569", pattern=r"^#[0-9A-Fa-f]{6}$")
     position: int = Field(ge=1, le=100)
+    default_assignee_id: uuid.UUID | None = Field(default=None, alias="defaultAssigneeId")
+    expected_duration_hours: int | None = Field(
+        default=None, alias="expectedDurationHours", ge=1, le=8760
+    )
 
     @field_validator("name")
     @classmethod
@@ -132,13 +146,36 @@ class WorkflowStageReorder(BaseModel):
 
 
 class WorkflowStageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: uuid.UUID
     name: str
     code: str
     color: str
     position: int
+    default_assignee_id: uuid.UUID | None = Field(alias="defaultAssigneeId")
+    expected_duration_hours: int | None = Field(alias="expectedDurationHours")
     active: bool
     revision: int
+
+
+def _validate_stage_default_assignee(
+    db: Session, organization_id: uuid.UUID, assignee_id: uuid.UUID | None
+) -> None:
+    if assignee_id is None:
+        return
+    if not db.scalar(
+        select(Membership.id).where(
+            Membership.organization_id == organization_id,
+            Membership.user_profile_id == assignee_id,
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+    ):
+        raise ApiError(
+            422,
+            "default_assignee_invalid",
+            "O responsável padrão precisa ser um integrante ativo da equipe.",
+        )
 
 
 def _audit(
@@ -381,12 +418,17 @@ def create_workflow_stage(
     db: Session = Depends(get_db),
 ) -> WorkflowStage:
     require_permission(principal, "catalog:write")
+    _validate_stage_default_assignee(
+        db, principal.membership.organization_id, payload.default_assignee_id
+    )
     stage = WorkflowStage(
         organization_id=principal.membership.organization_id,
         name=payload.name,
         code=payload.code,
         color=payload.color.upper(),
         position=payload.position,
+        default_assignee_id=payload.default_assignee_id,
+        expected_duration_hours=payload.expected_duration_hours,
     )
     db.add(stage)
     try:
@@ -424,6 +466,9 @@ def update_workflow_stage(
         raise ApiError(404, "workflow_stage_not_found", "Etapa não encontrada.")
     if stage.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A etapa foi alterada. Atualize a tela.")
+    _validate_stage_default_assignee(
+        db, principal.membership.organization_id, payload.default_assignee_id
+    )
     if stage.active and not payload.active:
         demand_id = db.scalar(
             select(Demand.id)
@@ -455,11 +500,19 @@ def update_workflow_stage(
                 "workflow_requires_active_stage",
                 "O workflow precisa manter ao menos uma etapa ativa.",
             )
-    before = {"name": stage.name, "position": stage.position, "revision": stage.revision}
+    before = {
+        "name": stage.name,
+        "position": stage.position,
+        "defaultAssigneeId": str(stage.default_assignee_id) if stage.default_assignee_id else None,
+        "expectedDurationHours": stage.expected_duration_hours,
+        "revision": stage.revision,
+    }
     stage.name = payload.name
     stage.code = payload.code
     stage.color = payload.color.upper()
     stage.position = payload.position
+    stage.default_assignee_id = payload.default_assignee_id
+    stage.expected_duration_hours = payload.expected_duration_hours
     stage.active = payload.active
     stage.revision += 1
     stage.updated_at = utc_now()
@@ -469,7 +522,15 @@ def update_workflow_stage(
         "WORKFLOW_STAGE_UPDATED",
         stage.id,
         before=before,
-        after={"name": stage.name, "position": stage.position, "revision": stage.revision},
+        after={
+            "name": stage.name,
+            "position": stage.position,
+            "defaultAssigneeId": (
+                str(stage.default_assignee_id) if stage.default_assignee_id else None
+            ),
+            "expectedDurationHours": stage.expected_duration_hours,
+            "revision": stage.revision,
+        },
     )
     try:
         db.commit()

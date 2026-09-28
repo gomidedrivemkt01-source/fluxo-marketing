@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,6 +93,22 @@ class DemandUpdateOut(BaseModel):
     summary: str
     payload: dict[str, object]
     created_at: datetime = Field(alias="createdAt")
+
+
+def apply_stage_defaults(
+    demand: Demand,
+    stage: WorkflowStage,
+    *,
+    apply_assignee: bool = True,
+    entered_at: datetime | None = None,
+) -> None:
+    if apply_assignee and stage.default_assignee_id:
+        demand.current_assignee_id = stage.default_assignee_id
+    demand.forecast_at = (
+        (entered_at or utc_now()) + timedelta(hours=stage.expected_duration_hours)
+        if stage.expected_duration_hours
+        else None
+    )
 
 
 def next_public_id(db: Session) -> str:
@@ -270,6 +286,8 @@ def create_demand(
         assignee_id=payload.assignee_id,
         stage_id=payload.stage_id,
     )
+    stage = db.get(WorkflowStage, stage_id) if stage_id else None
+    resolved_assignee_id = payload.assignee_id or (stage.default_assignee_id if stage else None)
     demand = create_demand_record(
         db,
         principal,
@@ -279,9 +297,11 @@ def create_demand(
         category_id=payload.category_id,
         priority=payload.priority,
         deadline_at=payload.deadline_at,
-        assignee_id=payload.assignee_id,
+        assignee_id=resolved_assignee_id,
         stage_id=stage_id,
     )
+    if stage:
+        apply_stage_defaults(demand, stage, apply_assignee=payload.assignee_id is None)
     db.add(
         AuditEvent(
             organization_id=principal.membership.organization_id,
@@ -360,8 +380,12 @@ def update_demand(
     demand.priority = payload.priority
     demand.status = payload.status
     demand.deadline_at = payload.deadline_at
+    previous_stage_id = demand.current_stage_id
+    target_stage = db.get(WorkflowStage, stage_id) if stage_id else None
     demand.current_assignee_id = payload.assignee_id
     demand.current_stage_id = stage_id
+    if target_stage and previous_stage_id != stage_id:
+        apply_stage_defaults(demand, target_stage, apply_assignee=payload.assignee_id is None)
     demand.revision += 1
     demand.updated_at = utc_now()
     db.add(
@@ -422,6 +446,7 @@ def move_demand_stage(
         raise ApiError(422, "stage_invalid", "A etapa selecionada não está disponível.")
     previous_stage_id = demand.current_stage_id
     demand.current_stage_id = stage.id
+    apply_stage_defaults(demand, stage)
     demand.revision += 1
     demand.updated_at = utc_now()
     db.add(
@@ -434,6 +459,10 @@ def move_demand_stage(
                 "fromStageId": str(previous_stage_id) if previous_stage_id else None,
                 "toStageId": str(stage.id),
                 "toStageName": stage.name,
+                "assigneeId": (
+                    str(demand.current_assignee_id) if demand.current_assignee_id else None
+                ),
+                "forecastAt": demand.forecast_at.isoformat() if demand.forecast_at else None,
             },
         )
     )
@@ -446,6 +475,10 @@ def move_demand_stage(
                 "demandId": str(demand.id),
                 "fromStageId": str(previous_stage_id) if previous_stage_id else None,
                 "toStageId": str(stage.id),
+                "assigneeId": (
+                    str(demand.current_assignee_id) if demand.current_assignee_id else None
+                ),
+                "forecastAt": demand.forecast_at.isoformat() if demand.forecast_at else None,
             },
         )
     )

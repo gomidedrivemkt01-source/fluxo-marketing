@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,10 +11,12 @@ from app.api.catalogs import (
     reorder_workflow_stages,
     update_workflow_stage,
 )
+from app.api.demands import apply_stage_defaults
 from app.api.errors import ApiError
 from app.auth.service import Principal
 from app.models import (
     AuditEvent,
+    Demand,
     Membership,
     MembershipStatus,
     PermissionRole,
@@ -115,4 +118,69 @@ def test_stage_with_demands_cannot_be_deactivated() -> None:
         update_workflow_stage(stage.id, payload, principal, db)
 
     assert caught.value.code == "workflow_stage_in_use"
+    db.commit.assert_not_called()
+
+
+def test_stage_defaults_assign_owner_and_calculate_forecast() -> None:
+    principal = _principal()
+    assignee_id = uuid.uuid4()
+    entered_at = datetime(2026, 9, 28, 12, tzinfo=UTC)
+    stage = WorkflowStage(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        name="Produção",
+        code="PRODUCAO",
+        color="#7C3AED",
+        position=4,
+        default_assignee_id=assignee_id,
+        expected_duration_hours=48,
+        active=True,
+    )
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000010",
+        title="Vídeo institucional",
+        status="WAITING_EXECUTION",
+        priority="NORMAL",
+        source="interface",
+        revision=1,
+        created_by=principal.profile.id,
+    )
+
+    apply_stage_defaults(demand, stage, entered_at=entered_at)
+
+    assert demand.current_assignee_id == assignee_id
+    assert demand.forecast_at == entered_at + timedelta(hours=48)
+
+
+def test_stage_rejects_inactive_default_assignee() -> None:
+    principal = _principal()
+    stage = WorkflowStage(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        name="Produção",
+        code="PRODUCAO",
+        color="#7C3AED",
+        position=4,
+        revision=2,
+        active=True,
+    )
+    db = MagicMock(spec=Session)
+    db.scalar.side_effect = [stage, None]
+    payload = WorkflowStageUpdate(
+        name=stage.name,
+        code=stage.code,
+        color=stage.color,
+        position=stage.position,
+        defaultAssigneeId=uuid.uuid4(),
+        expectedDurationHours=24,
+        expectedRevision=stage.revision,
+        active=True,
+    )
+
+    with pytest.raises(ApiError) as caught:
+        update_workflow_stage(stage.id, payload, principal, db)
+
+    assert caught.value.code == "default_assignee_invalid"
     db.commit.assert_not_called()

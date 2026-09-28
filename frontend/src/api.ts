@@ -6,6 +6,7 @@ export type Session = {
 };
 
 export type ApiError = { code: string; message: string; requestId?: string };
+export const AUTH_EXPIRED_EVENT = "fluxo:auth-expired";
 
 function cookie(name: string): string | undefined {
   return document.cookie
@@ -29,7 +30,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api/v1${path}`, { ...init, headers, credentials: "include" });
   if (!response.ok) {
     const fallback: ApiError = { code: "request_failed", message: "Não foi possível concluir." };
-    throw Object.assign(new Error(fallback.message), (await response.json().catch(() => fallback)) as ApiError);
+    const detail = (await response.json().catch(() => fallback)) as ApiError;
+    if (response.status === 401 && path !== "/auth/session" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    }
+    throw Object.assign(new Error(detail.message), detail);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
