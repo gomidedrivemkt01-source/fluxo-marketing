@@ -129,14 +129,14 @@ def _file_out(item: DemandFile, uploader: UserProfile, principal: Principal) -> 
     return DemandFileOut(
         id=item.id,
         name=item.original_name,
-        contentType=item.content_type,
-        sizeBytes=item.size_bytes,
+        content_type=item.content_type,
+        size_bytes=item.size_bytes,
         sha256=item.sha256,
-        uploaderId=uploader.id,
-        uploaderName=uploader.full_name,
+        uploader_id=uploader.id,
+        uploader_name=uploader.full_name,
         revision=item.revision,
-        canDelete=can_delete_file(principal, item),
-        createdAt=item.created_at,
+        can_delete=can_delete_file(principal, item),
+        created_at=item.created_at,
     )
 
 
@@ -345,7 +345,10 @@ async def sign_file_download(
         settings,
         db,
     )
-    return SignedFileOut(url=url, expiresAt=utc_now() + timedelta(seconds=settings.storage_signed_url_ttl))
+    return SignedFileOut(
+        url=url,
+        expires_at=utc_now() + timedelta(seconds=settings.storage_signed_url_ttl),
+    )
 
 
 @router.delete(

@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.api.errors import ApiError
+
+logger = logging.getLogger(__name__)
 
 
 class StorageAuthenticationError(Exception):
@@ -52,6 +55,12 @@ class SupabaseStorageGateway:
             raise ApiError(413, "file_too_large", "O arquivo excede o limite permitido.")
         if response.status_code == 403:
             raise ApiError(403, "file_storage_denied", "O Storage recusou o acesso ao arquivo.")
+        logger.warning(
+            "Supabase Storage respondeu status=%s code=%s message=%s",
+            response.status_code,
+            code or "-",
+            raw_message[:500] or "-",
+        )
         raise ApiError(502, "file_storage_failed", "O Storage não conseguiu processar o arquivo.")
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
