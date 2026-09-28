@@ -303,6 +303,15 @@ def create_demand(
     if stage:
         apply_stage_defaults(demand, stage, apply_assignee=payload.assignee_id is None)
     db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="DEMAND_CREATED",
+            summary="Demanda criada.",
+            payload={"publicId": demand.public_id, "source": demand.source},
+        )
+    )
+    db.add(
         AuditEvent(
             organization_id=principal.membership.organization_id,
             actor_user_id=principal.profile.id,
@@ -388,6 +397,28 @@ def update_demand(
         apply_stage_defaults(demand, target_stage, apply_assignee=payload.assignee_id is None)
     demand.revision += 1
     demand.updated_at = utc_now()
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="DEMAND_UPDATED",
+            summary=(
+                f"Dados atualizados e etapa alterada para {target_stage.name}."
+                if target_stage and previous_stage_id != stage_id
+                else "Dados gerais da demanda atualizados."
+            ),
+            payload={
+                "before": before,
+                "after": {
+                    "title": demand.title,
+                    "status": demand.status,
+                    "priority": demand.priority,
+                    "stageId": str(stage_id) if stage_id else None,
+                    "revision": demand.revision,
+                },
+            },
+        )
+    )
     db.add(
         AuditEvent(
             organization_id=principal.membership.organization_id,

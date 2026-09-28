@@ -10,6 +10,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from app.api.catalogs import router as catalogs_router
+from app.api.collaboration import router as collaboration_router
 from app.api.daily_imports import router as daily_imports_router
 from app.api.demands import router as demands_router
 from app.api.errors import ApiError, api_error_handler
@@ -73,6 +74,7 @@ app.include_router(demands_router, prefix="/api/v1")
 app.include_router(daily_imports_router, prefix="/api/v1")
 app.include_router(work_catalog_router, prefix="/api/v1")
 app.include_router(work_demand_router, prefix="/api/v1")
+app.include_router(collaboration_router, prefix="/api/v1")
 
 
 @app.get("/health", include_in_schema=False)
