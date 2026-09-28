@@ -217,7 +217,10 @@ async def _with_storage_token[T](
         principal.session.access_token_ciphertext = cipher.encrypt(tokens.access_token)
         principal.session.refresh_token_ciphertext = cipher.encrypt(tokens.refresh_token)
         db.commit()
-        return await operation(tokens.access_token)
+        try:
+            return await operation(tokens.access_token)
+        except StorageAuthenticationError as exc:
+            raise ApiError(401, "session_token_invalid", "Faça login novamente.") from exc
 
 
 @router.get("/{demand_id}/files", response_model=list[DemandFileOut])

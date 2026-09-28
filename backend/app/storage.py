@@ -24,22 +24,26 @@ class SupabaseStorageGateway:
         }
 
     @staticmethod
-    def _message(response: httpx.Response) -> str:
+    def _error_details(response: httpx.Response) -> tuple[str, str]:
         try:
             payload = response.json()
         except ValueError:
-            return ""
+            return "", ""
         if not isinstance(payload, dict):
-            return ""
-        return str(payload.get("message") or payload.get("error") or "")
+            return "", ""
+        code = str(payload.get("code") or payload.get("errorCode") or "")
+        message = str(payload.get("message") or payload.get("error") or "")
+        return code, message
 
     @classmethod
     def _raise_for_status(cls, response: httpx.Response) -> None:
         if response.status_code < 400:
             return
-        if response.status_code == 401:
+        code, raw_message = cls._error_details(response)
+        normalized_code = code.lower()
+        message = raw_message.lower()
+        if response.status_code == 401 or normalized_code in {"invalidjwt", "expiredtoken"}:
             raise StorageAuthenticationError
-        message = cls._message(response).lower()
         if response.status_code == 404:
             raise ApiError(404, "file_object_not_found", "O arquivo não está disponível.")
         if response.status_code == 409 or "already exists" in message:
@@ -76,7 +80,7 @@ class SupabaseStorageGateway:
             self._object_url(path),
             headers=self._headers(
                 access_token,
-                **{"Content-Type": content_type, "x-upsert": "false"},
+                **{"Content-Type": content_type},
             ),
             content=data,
         )
