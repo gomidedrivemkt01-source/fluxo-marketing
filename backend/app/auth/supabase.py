@@ -104,6 +104,14 @@ class SupabaseAuthGateway:
         )
         return self._tokens(data)
 
+    async def refresh(self, refresh_token: str) -> AuthTokens:
+        data = await self._request(
+            "POST",
+            "/token?grant_type=refresh_token",
+            body={"refresh_token": refresh_token},
+        )
+        return self._tokens(data)
+
     async def request_recovery(self, email: str) -> None:
         await self._request("POST", "/recover", body={"email": email})
 

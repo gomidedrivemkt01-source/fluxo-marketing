@@ -2,13 +2,13 @@
 
 Fundação da plataforma interna de gestão e inteligência operacional do Marketing.
 
-O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, responsáveis, etapas compartilhadas, visões Kanban e lista, empresas, categorias, briefings configuráveis, checklists por etapa, comentários, acompanhantes, atividade cronológica, perfil com foto, auditoria e importação assistida de Dailys.
+O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, responsáveis, etapas compartilhadas, visões Kanban e lista, empresas, categorias, briefings configuráveis, checklists por etapa, comentários, acompanhantes, atividade cronológica, arquivos privados, perfil com foto, auditoria e importação assistida de Dailys.
 
 A criação manual é a entrada principal da operação. A interface organiza o trabalho em Início, Meu trabalho, Demandas, Calendário, Empresas, Equipe, Relatórios, Inteligência e Administração. Cada demanda pode receber empresa, categoria, responsável, etapa, prioridade, prazo, situação e descrição. **Demandas** mostra a operação completa; **Meu trabalho** mostra somente os cards atribuídos ao usuário. O formato Kanban ou lista é uma preferência individual sincronizada entre computadores, enquanto a etapa da demanda é única para toda a equipe.
 
 Administradores e coordenadores podem criar, editar, reordenar, ativar e desativar etapas na área **Workflows**. Etapas com demandas não podem ser desativadas até que seus cards sejam movidos. Cada etapa também pode receber um checklist, um responsável padrão e uma duração esperada em horas. Ao entrar nessa etapa, o card aplica o handoff configurado e calcula uma previsão, mantendo o prazo final da demanda como um campo separado.
 
-Na área **Categorias**, a administração configura o modelo de briefing com perguntas de texto, texto longo, número, data ou seleção, incluindo campos obrigatórios. Dentro do card, as abas **Briefing** e **Checklist** permitem preencher as respostas e concluir os itens da etapa atual. A aba **Atividade** reúne comentários e eventos operacionais, permite acompanhar a demanda e preserva edições e remoções na auditoria. Toda alteração usa controle de revisão e gera histórico e auditoria.
+Na área **Categorias**, a administração configura o modelo de briefing com perguntas de texto, texto longo, número, data ou seleção, incluindo campos obrigatórios. Dentro do card, as abas **Briefing** e **Checklist** permitem preencher as respostas e concluir os itens da etapa atual. A aba **Atividade** reúne comentários e eventos operacionais, permite acompanhar a demanda e preserva edições e remoções na auditoria. A aba **Arquivos** envia anexos ao bucket privado da demanda, entrega downloads por links temporários e registra inclusão e remoção no histórico. Toda alteração usa controle de revisão e gera histórico e auditoria.
 
 O upload de uma Daily é um recurso complementar na área de Inteligência e nunca altera cards automaticamente. A aplicação valida o JSON, abre cada item para revisão e exige uma escolha explícita: associar a um card existente, criar um card ou ignorar. As atualizações são aplicadas em uma única operação somente depois que todos os itens forem revisados. Revisões interrompidas ficam disponíveis para continuação.
 
@@ -44,6 +44,14 @@ Como alternativa operacional, após aplicar as migrations e verificar a identida
 
 Depois disso, o administrador libera novos cadastros pela área **Usuários**, escolhendo um dos perfis: administrador, coordenador, colaborador ou visualizador.
 
+## Arquivos privados
+
+A migration cria o bucket privado `demand-files` no Supabase Storage e aplica políticas que verificam o usuário, a organização e a demanda. O backend envia e assina arquivos com o token do próprio usuário; nenhuma chave administrativa do Storage é necessária.
+
+O limite inicial é de 25 MB por arquivo. São aceitos PDF, imagens, documentos do Microsoft 365, texto, CSV, áudio e vídeo nos formatos configurados na migration. A remoção é lógica e interrompe novos downloads; links assinados expiram em 120 segundos. Os metadados, a soma SHA-256, os eventos da demanda e a auditoria permanecem no PostgreSQL.
+
+Os valores podem ser ajustados por `APP_STORAGE_BUCKET`, `APP_STORAGE_MAX_FILE_SIZE` e `APP_STORAGE_SIGNED_URL_TTL`. O limite configurado na aplicação deve permanecer alinhado ao limite do bucket.
+
 ## Formato da Daily
 
 Use o schema `2.0` descrito em `../outputs/daily-import-v2.schema.json`. O arquivo `../outputs/daily-exemplo.json` pode ser usado como referência e para validação inicial do fluxo.
@@ -51,6 +59,7 @@ Use o schema `2.0` descrito em `../outputs/daily-import-v2.schema.json`. O arqui
 ## Segurança operacional
 
 - Segredos ficam apenas nas variáveis do serviço.
+- O bucket de demandas permanece privado e libera downloads somente por URLs assinadas de curta duração.
 - O schema operacional não deve ser exposto pela Data API.
 - A conexão de runtime não deve ser dona das tabelas nem possuir `BYPASSRLS`.
 - Nunca usar dados reais nos ambientes de desenvolvimento e CI.

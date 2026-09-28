@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     token_encryption_key: SecretStr = Field(min_length=32)
     supabase_url: AnyHttpUrl
     supabase_publishable_key: SecretStr
+    storage_bucket: str = "demand-files"
+    storage_max_file_size: int = Field(default=25 * 1024 * 1024, ge=1, le=50 * 1024 * 1024)
+    storage_signed_url_ttl: int = Field(default=120, ge=30, le=900)
     bootstrap_organization_name: str = "Marketing"
     bootstrap_admin_email: EmailStr | None = None
     cookie_secure: bool = False

@@ -35,6 +35,12 @@ services:
         sync: false
       - key: APP_SUPABASE_PUBLISHABLE_KEY
         sync: false
+      - key: APP_STORAGE_BUCKET
+        value: demand-files
+      - key: APP_STORAGE_MAX_FILE_SIZE
+        value: "26214400"
+      - key: APP_STORAGE_SIGNED_URL_TTL
+        value: "120"
       - key: APP_BOOTSTRAP_ORGANIZATION_NAME
         value: Marketing
       - key: APP_BOOTSTRAP_ADMIN_EMAIL

@@ -364,6 +364,32 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .activity-empty strong { margin-top: 12px; color: #405862; font-size: .82rem; }
 .activity-empty p { margin: 6px 0 0; color: #8a9aa1; font-size: .7rem; }
 .activity-more { width: 100%; min-height: 44px; border: 0; border-top: 1px solid #e5ebed; color: #50727a; background: #f8fafb; font-size: .68rem; font-weight: 800; }
+.files-panel { overflow: hidden; max-width: 940px; }
+.files-loading { display: grid; place-items: center; min-height: 340px; }
+.files-head { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 25px 28px; border-bottom: 1px solid #e3eaec; }
+.files-head h3 { margin: 6px 0 5px; color: var(--ink); }
+.files-head p { margin: 0; color: #7b8e97; font-size: .75rem; }
+.files-head > span { min-width: max-content; padding: 6px 9px; border-radius: 999px; color: #607780; background: #edf3f4; font-size: .62rem; font-weight: 800; }
+.file-uploader { display: flex; align-items: center; gap: 14px; padding: 20px 28px; border-bottom: 1px solid #e5ecee; background: #fafcfc; }
+.file-picker { position: relative; display: grid; flex: 1; grid-template-columns: 38px 1fr; column-gap: 11px; min-width: 0; padding: 11px 13px; border: 1px dashed #a8c9c5; border-radius: 8px; color: #49656e; background: #fff; cursor: pointer; }
+.file-picker input { position: absolute; overflow: hidden; width: 1px; height: 1px; opacity: 0; }
+.file-picker > span { display: grid; grid-row: 1 / 3; place-items: center; width: 36px; height: 36px; border-radius: 7px; color: #087f76; background: #e7f7f4; font-size: 1rem; font-weight: 700; }
+.file-picker strong { overflow: hidden; align-self: end; font-size: .73rem; text-overflow: ellipsis; white-space: nowrap; }
+.file-picker small { color: #8a9ca3; font-size: .59rem; }
+.files-empty { display: flex; flex-direction: column; align-items: center; padding: 64px 22px; text-align: center; }
+.files-empty > span { color: #78bfb7; font-size: 2rem; }
+.files-empty strong { margin-top: 12px; color: #405862; font-size: .82rem; }
+.files-empty p { margin: 6px 0 0; color: #8a9aa1; font-size: .7rem; }
+.file-list { padding: 7px 28px 20px; }
+.file-list article { display: grid; grid-template-columns: 45px minmax(0, 1fr) auto; gap: 13px; align-items: center; padding: 16px 0; border-bottom: 1px solid #edf1f2; }
+.file-list article:last-child { border-bottom: 0; }
+.file-icon { display: grid; place-items: center; width: 43px; height: 43px; border: 1px solid #d5e3e4; border-radius: 9px; color: #167c74; background: #eff8f7; font-size: .62rem; font-weight: 900; }
+.file-copy { display: flex; overflow: hidden; flex-direction: column; gap: 4px; }
+.file-copy strong { overflow: hidden; color: #304954; font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.file-copy span { color: #7e929a; font-size: .63rem; }
+.file-copy small { color: #a0adb2; font: 500 .55rem/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.file-actions { display: flex; gap: 8px; align-items: center; }
+.file-remove { padding: 7px 8px; border: 0; color: #a25555; background: transparent; font-size: .61rem; font-weight: 800; }
 .feature-preview { display: flex; flex-direction: column; align-items: center; min-height: 320px; padding: 70px 30px; text-align: center; }
 .feature-preview > span { color: #68bdb4; font-size: 2.2rem; }
 .feature-preview h3 { margin: 17px 0 7px; color: var(--ink); }
@@ -567,6 +593,10 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .stage-row-actions { grid-column: 3 / -1; }
   .template-intro, .work-content-head { align-items: flex-start; flex-direction: column; }
   .activity-head { align-items: flex-start; flex-direction: column; }
+  .files-head { align-items: flex-start; flex-direction: column; }
+  .file-uploader { align-items: stretch; flex-direction: column; }
+  .file-list article { grid-template-columns: 43px minmax(0, 1fr); }
+  .file-actions { grid-column: 2; }
   .watcher-control { width: 100%; justify-content: space-between; }
   .comment-composer footer { align-items: stretch; flex-direction: column; }
   .comment-composer footer .action-primary { width: 100%; }
