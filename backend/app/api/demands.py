@@ -63,6 +63,7 @@ class DemandOut(BaseModel):
     priority: str
     deadline_at: datetime | None = Field(alias="deadlineAt")
     forecast_at: datetime | None = Field(alias="forecastAt")
+    expected_effort_minutes: int | None = Field(alias="expectedEffortMinutes")
     revision: int
     created_at: datetime = Field(alias="createdAt")
 
@@ -190,6 +191,7 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
         priority=demand.priority,
         deadlineAt=demand.deadline_at,
         forecastAt=demand.forecast_at,
+        expectedEffortMinutes=demand.expected_effort_minutes,
         revision=demand.revision,
         createdAt=demand.created_at,
     )

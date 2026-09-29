@@ -288,6 +288,7 @@ class Demand(Base):
     priority: Mapped[str] = mapped_column(String(20), default="NORMAL")
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     forecast_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expected_effort_minutes: Mapped[int | None] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(30), default="interface")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -511,6 +512,35 @@ class DemandFile(Base):
     content_type: Mapped[str] = mapped_column(String(160))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class TimeEntry(Base):
+    __tablename__ = "time_entries"
+    __table_args__ = (
+        Index("ix_time_entries_demand_started", "demand_id", "started_at"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    demand_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demands.id", ondelete="CASCADE"), index=True
+    )
+    user_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    source: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(20))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    note: Mapped[str | None] = mapped_column(Text)
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
