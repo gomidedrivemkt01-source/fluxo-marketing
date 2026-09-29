@@ -15,4 +15,4 @@ COPY backend/alembic.ini ./backend/alembic.ini
 RUN python -m pip install --no-cache-dir ./backend
 COPY --from=frontend /src/frontend/dist ./frontend/dist
 EXPOSE 8000
-CMD ["sh", "-c", "alembic -c backend/alembic.ini upgrade head && uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port ${PORT}"]
+CMD ["python", "-m", "app.startup"]
