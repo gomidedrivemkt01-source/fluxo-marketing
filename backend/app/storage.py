@@ -45,7 +45,14 @@ class SupabaseStorageGateway:
         code, raw_message = cls._error_details(response)
         normalized_code = code.lower()
         message = raw_message.lower()
-        if response.status_code == 401 or normalized_code in {"invalidjwt", "expiredtoken"}:
+        expired_claim = (
+            normalized_code == "accessdenied" and "claim timestamp check failed" in message
+        )
+        if (
+            response.status_code == 401
+            or normalized_code in {"invalidjwt", "expiredtoken"}
+            or expired_claim
+        ):
             raise StorageAuthenticationError
         if response.status_code == 404:
             raise ApiError(404, "file_object_not_found", "O arquivo não está disponível.")

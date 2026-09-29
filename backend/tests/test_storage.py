@@ -17,6 +17,19 @@ def test_invalid_jwt_requests_token_refresh(status_code: int) -> None:
         )
 
 
+def test_expired_claim_requests_token_refresh() -> None:
+    with pytest.raises(StorageAuthenticationError):
+        SupabaseStorageGateway._raise_for_status(
+            response(
+                400,
+                {
+                    "code": "AccessDenied",
+                    "message": '"exp" claim timestamp check failed',
+                },
+            )
+        )
+
+
 def test_generic_bad_request_is_not_mistaken_for_expired_session() -> None:
     with pytest.raises(ApiError) as caught:
         SupabaseStorageGateway._raise_for_status(
