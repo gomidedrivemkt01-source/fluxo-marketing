@@ -671,6 +671,10 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .coming-section { grid-template-columns: 1fr; }
   .timeline-list button { grid-template-columns: 95px 8px 1fr; }
   .timeline-list button > b { display: none; }
+  .focus-tabs { overflow-x: auto; display: flex; padding-bottom: 4px; }
+  .focus-tabs button { flex: 0 0 125px; }
+  .quick-add { grid-template-columns: minmax(0, 1fr) 130px auto; }
+  .quick-add > div { grid-column: 1 / -1; padding: 4px 2px; }
   .work-filterbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .work-filterbar .search-box { grid-column: 1 / -1; }
   .work-viewbar { grid-template-columns: 1fr; gap: 11px; }
@@ -717,10 +721,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .demand-detail-head { padding: 21px; }
   .demand-detail-head h2 { font-size: 1.25rem; }
   .focus-dashboard { padding: 13px; }
-  .focus-tabs { overflow-x: auto; display: flex; padding-bottom: 4px; }
-  .focus-tabs button { flex: 0 0 125px; }
   .quick-add { grid-template-columns: 1fr; }
-  .quick-add > div { padding: 4px 2px; }
   .work-filterbar { grid-template-columns: 1fr 1fr; }
   .work-filterbar .search-box { grid-column: 1 / -1; }
   .work-viewbar { grid-template-columns: 1fr; }
