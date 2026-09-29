@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from app.api.users import PreferencesUpdate
 from app.auth.schemas import RegisterRequest, VerifyRequest
 
 
@@ -23,3 +24,23 @@ def test_verification_code_accepts_six_to_eight_digits() -> None:
         VerifyRequest(email="pessoa@example.com", code="12345", purpose="signup")
     with pytest.raises(ValidationError):
         VerifyRequest(email="pessoa@example.com", code="12345x", purpose="signup")
+
+
+def test_preferences_accept_focus_views() -> None:
+    preferences = PreferencesUpdate(
+        demandView="list",
+        showEmptyStages=False,
+        stageOrder=[],
+        focusView="today",
+    )
+    assert preferences.focus_view == "today"
+
+
+def test_preferences_reject_unknown_focus_view() -> None:
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(
+            demandView="list",
+            showEmptyStages=False,
+            stageOrder=[],
+            focusView="tomorrow",
+        )

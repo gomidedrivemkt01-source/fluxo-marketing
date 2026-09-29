@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, AUTH_EXPIRED_EVENT, messageFrom, type Session } from "./api";
 import { ActivityPanel } from "./features/collaboration/ActivityPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
+import { focusCounts, matchesFocus, type FocusView } from "./features/focus/focus";
 import { TimePanel } from "./features/time/TimePanel";
 
 type Page = "login" | "register" | "verify-signup" | "forgot" | "verify-recovery" | "reset";
@@ -14,7 +15,7 @@ type BriefingFieldTemplate = { id: string; label: string; key: string; helpText:
 type ChecklistTemplateItem = { id: string; title: string; description: string | null; position: number; required: boolean; active: boolean; revision: number };
 type DemandBriefing = { categoryId: string | null; categoryName: string | null; fields: (BriefingFieldTemplate & { value: string | null })[] };
 type DemandChecklist = { stageId: string | null; stageName: string | null; completed: number; total: number; items: { id: string; title: string; description: string | null; position: number; required: boolean; completed: boolean; completedByName: string | null; completedAt: string | null }[] };
-type ViewPreferences = { demandView: "kanban" | "list"; showEmptyStages: boolean; stageOrder: string[] };
+type ViewPreferences = { demandView: "kanban" | "list"; showEmptyStages: boolean; stageOrder: string[]; focusView: FocusView };
 type Demand = {
   id: string;
   publicId: string;
@@ -34,6 +35,8 @@ type Demand = {
   assigneeId: string | null;
   assigneeName: string | null;
   assigneeAvatarUrl: string | null;
+  createdById: string;
+  createdByName: string;
   stageId: string | null;
   stageName: string | null;
   stageCode: string | null;
@@ -100,6 +103,16 @@ const roleNames: Record<string, string> = {
   collaborator: "Colaborador",
   viewer: "Visualizador",
 };
+
+const focusOptions: { id: FocusView; label: string; icon: string }[] = [
+  { id: "all", label: "Todos", icon: "◎" },
+  { id: "inbox", label: "Inbox", icon: "⌑" },
+  { id: "today", label: "Hoje", icon: "●" },
+  { id: "upcoming", label: "Próximos", icon: "→" },
+  { id: "overdue", label: "Atrasadas", icon: "!" },
+  { id: "waiting", label: "Aguardando", icon: "◷" },
+  { id: "delegated", label: "Delegadas", icon: "↗" },
+];
 
 function Brand() {
   return (
@@ -441,7 +454,7 @@ function WorkCard({ demand, canEdit, onOpen }: { demand: Demand; canEdit: boolea
   </article>;
 }
 
-function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit, onOpen, onMoveStage, onPreferenceChange, onCalendar }: {
+function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit, onOpen, onMoveStage, onPreferenceChange, onQuickCreate, onCalendar }: {
   demands: Demand[];
   stages: WorkflowStage[];
   people: Person[];
@@ -451,7 +464,8 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   canEdit: boolean;
   onOpen: (demand: Demand) => void;
   onMoveStage: (demand: Demand, stageId: string) => void;
-  onPreferenceChange: (view: "kanban" | "list", showEmptyStages: boolean) => void;
+  onPreferenceChange: (view: "kanban" | "list", showEmptyStages: boolean, focusView: FocusView) => void;
+  onQuickCreate: (title: string, deadlineAt: string | null) => Promise<void>;
   onCalendar: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -459,20 +473,26 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   const [company, setCompany] = useState("ALL");
   const [assignee, setAssignee] = useState("ALL");
   const [priority, setPriority] = useState("ALL");
-  const preferences = profile?.preferences ?? { demandView: "kanban" as const, showEmptyStages: true, stageOrder: [] };
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickError, setQuickError] = useState("");
+  const preferences = profile?.preferences ?? { demandView: "kanban" as const, showEmptyStages: true, stageOrder: [], focusView: "all" as const };
+  const counts = useMemo(
+    () => profile ? focusCounts(demands, profile.profileId, profile.timezone) : null,
+    [demands, profile],
+  );
   const orderedStages = useMemo(() => {
     const order = new Map(preferences.stageOrder.map((id, index) => [id, index]));
     return [...stages].sort((a, b) => (order.get(a.id) ?? a.position + stages.length) - (order.get(b.id) ?? b.position + stages.length));
   }, [stages, preferences.stageOrder]);
   const visible = useMemo(() => demands.filter((demand) => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
-    return (!mine || demand.assigneeId === profile?.profileId)
+    return (!mine || Boolean(profile && matchesFocus(demand, preferences.focusView, profile.profileId, profile.timezone)))
       && (status === "ALL" || demand.status === status)
       && (company === "ALL" || demand.primaryCompanyId === company)
       && (assignee === "ALL" || (assignee === "NONE" ? !demand.assigneeId : demand.assigneeId === assignee))
       && (priority === "ALL" || demand.priority === priority)
       && (!needle || `${demand.publicId} ${demand.title} ${demand.companyName ?? ""} ${demand.assigneeName ?? ""}`.toLocaleLowerCase("pt-BR").includes(needle));
-  }), [demands, mine, profile?.profileId, status, company, assignee, priority, query]);
+  }), [demands, mine, profile, preferences.focusView, status, company, assignee, priority, query]);
   const countFor = (stageId: string) => visible.filter((demand) => demand.stageId === stageId).length;
   const shownStages = orderedStages.filter((stage) => preferences.showEmptyStages || countFor(stage.id) > 0);
   function drop(event: React.DragEvent, stageId: string) {
@@ -481,7 +501,29 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     const demand = demands.find((item) => item.id === id);
     if (demand && demand.stageId !== stageId) onMoveStage(demand, stageId);
   }
+  async function quickCreate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setQuickBusy(true); setQuickError("");
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const schedule = String(data.get("schedule") || "none");
+    let deadlineAt: string | null = null;
+    if (schedule !== "none") {
+      const deadline = new Date();
+      if (schedule === "tomorrow") deadline.setDate(deadline.getDate() + 1);
+      deadline.setHours(17, 0, 0, 0);
+      deadlineAt = deadline.toISOString();
+    }
+    try {
+      await onQuickCreate(String(data.get("title") || ""), deadlineAt);
+      form.reset();
+    } catch (caught) { setQuickError(messageFrom(caught)); } finally { setQuickBusy(false); }
+  }
   return <section className="work-control">
+    {mine && <div className="focus-dashboard">
+      <div className="focus-tabs" role="group" aria-label="Foco do meu trabalho">{focusOptions.map((item) => <button key={item.id} className={preferences.focusView === item.id ? "active" : ""} onClick={() => onPreferenceChange(preferences.demandView, preferences.showEmptyStages, item.id)}><span>{item.icon}</span><strong>{item.label}</strong><b>{counts?.[item.id] ?? 0}</b></button>)}</div>
+      {canEdit && <form className="quick-add" onSubmit={quickCreate}><div><span>Captura rápida</span><strong>Adicionar ao meu trabalho</strong></div><input name="title" minLength={2} maxLength={300} placeholder="Digite o título da nova demanda" required /><select name="schedule" aria-label="Prazo rápido"><option value="none">Sem prazo</option><option value="today">Hoje · 17h</option><option value="tomorrow">Amanhã · 17h</option></select><button disabled={quickBusy}>{quickBusy ? "Criando…" : "+ Adicionar"}</button></form>}
+      {quickError && <div className="quick-error"><Notice>{quickError}</Notice></div>}
+    </div>}
     <div className="work-filterbar">
       <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar demanda, código, empresa ou pessoa" /></label>
       <label><span>Empresa</span><select value={company} onChange={(event) => setCompany(event.target.value)}><option value="ALL">Todas</option>{companies.map((item) => <option value={item.id} key={item.id}>{item.shortName}</option>)}</select></label>
@@ -491,11 +533,11 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     </div>
     <div className="work-viewbar">
       <div><strong>{mine ? "Meu fluxo de trabalho" : "Controle de demandas"}</strong><span>{visible.length} {visible.length === 1 ? "demanda" : "demandas"}</span></div>
-      <div className="view-switch" role="group" aria-label="Formato de visualização"><button className={preferences.demandView === "list" ? "active" : ""} onClick={() => onPreferenceChange("list", preferences.showEmptyStages)}>☷ Lista</button><button className={preferences.demandView === "kanban" ? "active" : ""} onClick={() => onPreferenceChange("kanban", preferences.showEmptyStages)}>▥ Kanban</button><button onClick={onCalendar}>□ Calendário</button></div>
-      <label className="empty-toggle"><input type="checkbox" checked={preferences.showEmptyStages} onChange={(event) => onPreferenceChange(preferences.demandView, event.target.checked)} /> Exibir etapas vazias</label>
+      <div className="view-switch" role="group" aria-label="Formato de visualização"><button className={preferences.demandView === "list" ? "active" : ""} onClick={() => onPreferenceChange("list", preferences.showEmptyStages, preferences.focusView)}>☷ Lista</button><button className={preferences.demandView === "kanban" ? "active" : ""} onClick={() => onPreferenceChange("kanban", preferences.showEmptyStages, preferences.focusView)}>▥ Kanban</button><button onClick={onCalendar}>□ Calendário</button></div>
+      <label className="empty-toggle"><input type="checkbox" checked={preferences.showEmptyStages} onChange={(event) => onPreferenceChange(preferences.demandView, event.target.checked, preferences.focusView)} /> Exibir etapas vazias</label>
     </div>
     <div className="stage-strip" aria-label="Etapas do fluxo compartilhado">{orderedStages.map((stage) => <span key={stage.id}><i style={{ background: stage.color }} />{stage.name}<b>{countFor(stage.id)}</b></span>)}</div>
-    {mine && <div className="scope-note"><strong>Visão individual</strong><span>Aqui aparecem somente as demandas atribuídas a você. As etapas e qualquer movimentação continuam iguais para toda a equipe.</span></div>}
+    {mine && <div className="scope-note"><strong>Visão individual · {focusOptions.find((item) => item.id === preferences.focusView)?.label}</strong><span>O foco organiza o que você vê. Etapas, situação e movimentações continuam compartilhadas com toda a equipe.</span></div>}
     {visible.length === 0 ? <div className="empty-state"><span>⌕</span><h3>Nenhuma demanda encontrada</h3><p>Ajuste os filtros ou atribua uma demanda a este usuário.</p></div> : preferences.demandView === "kanban" ? <div className="kanban-board">{shownStages.map((stage) => {
       const items = visible.filter((demand) => demand.stageId === stage.id);
       return <section className="kanban-column" key={stage.id} onDragOver={(event) => { if (canEdit) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => canEdit && drop(event, stage.id)}><header><span><i style={{ background: stage.color }} />{stage.name}</span><b>{items.length}</b></header><div>{items.map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={canEdit} onOpen={() => onOpen(demand)} />)}{items.length === 0 && <p className="column-empty">Solte uma demanda nesta etapa</p>}</div></section>;
@@ -529,6 +571,30 @@ function ManualDemandModal({ companies, categories, people, stages, onClose, onC
       <footer className="form-actions"><button className="secondary compact" type="button" onClick={onClose}>Cancelar</button><button className="primary action-primary" disabled={busy}>{busy ? "Criando…" : "Criar demanda"}</button></footer>
     </form>
   </section></div>;
+}
+
+function TaskDrawer({ demand, people, canEdit, onClose, onOpenFull, onSaved }: {
+  demand: Demand;
+  people: Person[];
+  canEdit: boolean;
+  onClose: () => void;
+  onOpenFull: () => void;
+  onSaved: (demand: Demand) => void;
+}) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [success, setSuccess] = useState("");
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); setSuccess("");
+    const data = new FormData(event.currentTarget); const deadline = String(data.get("deadlineAt") || "");
+    try {
+      const updated = await api<Demand>(`/demands/${demand.id}`, { method: "PUT", body: JSON.stringify({ title: data.get("title"), description: data.get("description") || null, companyId: demand.primaryCompanyId, categoryId: demand.categoryId, assigneeId: data.get("assigneeId") || null, stageId: demand.stageId, priority: data.get("priority"), status: data.get("status"), deadlineAt: deadline ? new Date(deadline).toISOString() : null, expectedRevision: demand.revision }) });
+      onSaved(updated); setSuccess("Alterações salvas.");
+    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  return <div className="drawer-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="task-drawer" role="dialog" aria-modal="true" aria-labelledby="task-drawer-title">
+    <header><div><span className="demand-id">{demand.publicId}</span><h2 id="task-drawer-title">Consulta rápida</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header>
+    <div className="drawer-context"><span className="stage-badge" style={{ borderColor: demand.stageColor ?? undefined }}><i style={{ background: demand.stageColor ?? "#94a3b8" }} />{demand.stageName ?? "Sem etapa"}</span><small>Criada por {demand.createdByName}</small></div>
+    <form className="drawer-form" onSubmit={save}>{error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}<Field label="Título" name="title" defaultValue={demand.title} required disabled={!canEdit} /><label className="field"><span>Situação</span><select name="status" defaultValue={demand.status} disabled={!canEdit}>{Object.entries(statusNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Descrição</span><textarea name="description" rows={5} defaultValue={demand.description ?? ""} disabled={!canEdit} /></label><div className="form-grid"><label className="field"><span>Responsável</span><select name="assigneeId" defaultValue={demand.assigneeId ?? ""} disabled={!canEdit}><option value="">Sem responsável</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label className="field"><span>Prioridade</span><select name="priority" defaultValue={demand.priority} disabled={!canEdit}>{Object.entries(priorityNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><Field label="Prazo" name="deadlineAt" type="datetime-local" defaultValue={demand.deadlineAt ? demand.deadlineAt.slice(0, 16) : ""} disabled={!canEdit} /><footer><button className="secondary compact" type="button" onClick={onOpenFull}>Abrir card completo</button>{canEdit && <button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar"}</button>}</footer></form>
+  </aside></div>;
 }
 
 function CatalogModal({ kind, item, onClose, onSaved }: { kind: "company" | "category"; item?: Company | Category | null; onClose: () => void; onSaved: () => void }) {
@@ -690,21 +756,26 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   const canManage = session.role === "admin" || session.role === "coordinator"; const canCreate = session.role !== "viewer";
   const hashPage = window.location.hash.replace(/^#\/?/, "").split("/")[0] as WorkspacePage;
   const [page, setPage] = useState<WorkspacePage>(validPages.includes(hashPage) && (canManage || !adminPages.includes(hashPage)) ? hashPage : "overview");
-  const [companies, setCompanies] = useState<Company[]>([]); const [categories, setCategories] = useState<Category[]>([]); const [stages, setStages] = useState<WorkflowStage[]>([]); const [workflowStages, setWorkflowStages] = useState<WorkflowStage[]>([]); const [people, setPeople] = useState<Person[]>([]); const [users, setUsers] = useState<User[]>([]); const [demands, setDemands] = useState<Demand[]>([]); const [imports, setImports] = useState<DailyImport[]>([]); const [profile, setProfile] = useState<Profile | null>(null); const [error, setError] = useState(""); const [showImport, setShowImport] = useState(false); const [showCreate, setShowCreate] = useState(false); const [resumeImport, setResumeImport] = useState<DailyImport | null>(null); const [catalogModal, setCatalogModal] = useState<{ kind: "company" | "category"; item?: Company | Category | null } | null>(null); const [briefingCategory, setBriefingCategory] = useState<Category | null>(null); const [selectedDemand, setSelectedDemand] = useState<Demand | null>(null); const [approvalRoles, setApprovalRoles] = useState<Record<string, string>>({}); const [approvingUser, setApprovingUser] = useState("");
-  function go(next: WorkspacePage) { setPage(next); setSelectedDemand(null); window.location.hash = next; window.scrollTo({ top: 0 }); }
+  const [companies, setCompanies] = useState<Company[]>([]); const [categories, setCategories] = useState<Category[]>([]); const [stages, setStages] = useState<WorkflowStage[]>([]); const [workflowStages, setWorkflowStages] = useState<WorkflowStage[]>([]); const [people, setPeople] = useState<Person[]>([]); const [users, setUsers] = useState<User[]>([]); const [demands, setDemands] = useState<Demand[]>([]); const [imports, setImports] = useState<DailyImport[]>([]); const [profile, setProfile] = useState<Profile | null>(null); const [error, setError] = useState(""); const [showImport, setShowImport] = useState(false); const [showCreate, setShowCreate] = useState(false); const [resumeImport, setResumeImport] = useState<DailyImport | null>(null); const [catalogModal, setCatalogModal] = useState<{ kind: "company" | "category"; item?: Company | Category | null } | null>(null); const [briefingCategory, setBriefingCategory] = useState<Category | null>(null); const [selectedDemand, setSelectedDemand] = useState<Demand | null>(null); const [drawerDemand, setDrawerDemand] = useState<Demand | null>(null); const [approvalRoles, setApprovalRoles] = useState<Record<string, string>>({}); const [approvingUser, setApprovingUser] = useState("");
+  function go(next: WorkspacePage) { setPage(next); setSelectedDemand(null); setDrawerDemand(null); window.location.hash = next; window.scrollTo({ top: 0 }); }
   function loadData() {
     setError("");
     return Promise.all([api<Company[]>("/catalogs/companies"), api<Category[]>("/catalogs/categories"), api<WorkflowStage[]>("/catalogs/workflow-stages"), canManage ? api<WorkflowStage[]>("/catalogs/workflow-stages?includeInactive=true") : Promise.resolve([] as WorkflowStage[]), api<Person[]>("/users/options"), api<Demand[]>("/demands"), api<Profile>("/users/me"), canManage ? api<User[]>("/users") : Promise.resolve([]), canManage ? api<DailyImport[]>("/imports/dailys") : Promise.resolve([])]).then(([c, k, s, w, o, d, p, u, i]) => { setCompanies(c); setCategories(k); setStages(s); setWorkflowStages(w); setPeople(o); setDemands(d); setProfile(p); setUsers(u); setImports(i); }).catch((caught) => setError(messageFrom(caught)));
   }
   useEffect(() => { void loadData(); }, [session.role]);
-  useEffect(() => { const listener = () => { const value = window.location.hash.replace(/^#\/?/, "").split("/")[0] as WorkspacePage; if (validPages.includes(value) && (canManage || !adminPages.includes(value))) { setPage(value); setSelectedDemand(null); } else if (adminPages.includes(value) && !canManage) { setPage("overview"); setSelectedDemand(null); window.location.hash = "overview"; } }; window.addEventListener("hashchange", listener); listener(); return () => window.removeEventListener("hashchange", listener); }, [canManage]);
+  useEffect(() => { const listener = () => { const value = window.location.hash.replace(/^#\/?/, "").split("/")[0] as WorkspacePage; if (validPages.includes(value) && (canManage || !adminPages.includes(value))) { setPage(value); setSelectedDemand(null); setDrawerDemand(null); } else if (adminPages.includes(value) && !canManage) { setPage("overview"); setSelectedDemand(null); setDrawerDemand(null); window.location.hash = "overview"; } }; window.addEventListener("hashchange", listener); listener(); return () => window.removeEventListener("hashchange", listener); }, [canManage]);
   async function approveUser(user: User) { setApprovingUser(user.id); setError(""); try { await api(`/users/${user.id}/approve`, { method: "POST", body: JSON.stringify({ role: approvalRoles[user.id] ?? "collaborator", expectedRevision: user.revision }) }); await loadData(); } catch (caught) { setError(messageFrom(caught)); } finally { setApprovingUser(""); } }
-  async function savePreferences(demandView: "kanban" | "list", showEmptyStages: boolean) {
+  async function savePreferences(demandView: "kanban" | "list", showEmptyStages: boolean, focusView: FocusView) {
     if (!profile) return;
-    const preferences = { ...profile.preferences, demandView, showEmptyStages };
+    const preferences = { ...profile.preferences, demandView, showEmptyStages, focusView };
     setProfile({ ...profile, preferences });
     try { const updated = await api<Profile>("/users/me/preferences", { method: "PUT", body: JSON.stringify(preferences) }); setProfile(updated); }
     catch (caught) { setError(messageFrom(caught)); setProfile(profile); }
+  }
+  async function quickCreate(title: string, deadlineAt: string | null) {
+    if (!profile) throw new Error("Seu perfil ainda está carregando.");
+    const created = await api<Demand>("/demands", { method: "POST", body: JSON.stringify({ title, description: null, companyId: null, categoryId: null, assigneeId: profile.profileId, stageId: stages[0]?.id ?? null, priority: "NORMAL", deadlineAt }) });
+    setDemands((items) => [created, ...items]); setDrawerDemand(created);
   }
   async function moveDemand(demand: Demand, stageId: string) {
     setError("");
@@ -720,9 +791,9 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     ...(canManage ? [{ label: "Administração", links: [{ id: "workflows" as WorkspacePage, icon: "⇄", label: "Workflows" }, { id: "categories" as WorkspacePage, icon: "◆", label: "Categorias" }, { id: "users" as WorkspacePage, icon: "◉", label: "Acessos", badge: pending.length }, { id: "settings" as WorkspacePage, icon: "⚙", label: "Configurações" }] }] : []),
   ];
   let content: React.ReactNode;
-  if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} onBack={() => { setSelectedDemand(null); go("demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />;
+  if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} onBack={() => { setSelectedDemand(null); go(page === "my-work" ? "my-work" : "demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />;
   else if (page === "overview") content = <><section className="welcome"><div><p className="kicker">Fluxo centralizado</p><h2>Olá, {session.name.split(" ")[0]}.</h2><p>Crie, acompanhe e atualize as demandas da operação em um espaço compartilhado por toda a equipe.</p>{canCreate && <button className="welcome-action" onClick={() => setShowCreate(true)}>+ Criar primeira demanda</button>}</div><div className="pulse"><span>{String(demands.length).padStart(2, "0")}</span><small>cards ativos</small></div></section><section className="stats"><article><span>Demandas abertas</span><strong>{demands.filter((item) => item.status !== "COMPLETED").length}</strong><small>em acompanhamento</small></article><article><span>Em andamento</span><strong>{demands.filter((item) => item.status === "IN_PROGRESS").length}</strong><small>na operação</small></article><article><span>Com prazo</span><strong>{demands.filter((item) => item.deadlineAt).length}</strong><small>planejadas</small></article><article><span>Acessos pendentes</span><strong>{pending.length}</strong><small>aguardando liberação</small></article></section><section className="panel full"><div className="panel-head"><div><span className="eyebrow dark">Últimas movimentações</span><h3>Demandas recentes</h3></div><button className="small-button" onClick={() => go("demands")}>Ver todas</button></div>{demands.length ? <div className="demand-grid">{demands.slice(0, 6).map((demand) => <DemandCard key={demand.id} demand={demand} onOpen={() => setSelectedDemand(demand)} />)}</div> : <div className="empty-state"><span>▤</span><h3>Comece pela primeira demanda</h3><p>Cadastre manualmente o trabalho que precisa ser acompanhado.</p>{canCreate && <button className="primary compact" onClick={() => setShowCreate(true)}>+ Nova demanda</button>}</div>}</section></>;
-  else if (page === "demands" || page === "my-work") content = <WorkBoard demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={setSelectedDemand} onMoveStage={(demand, stageId) => void moveDemand(demand, stageId)} onPreferenceChange={(view, showEmpty) => void savePreferences(view, showEmpty)} onCalendar={() => go("calendar")} />;
+  else if (page === "demands" || page === "my-work") content = <WorkBoard demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : setSelectedDemand} onMoveStage={(demand, stageId) => void moveDemand(demand, stageId)} onPreferenceChange={(view, showEmpty, focusView) => void savePreferences(view, showEmpty, focusView)} onQuickCreate={quickCreate} onCalendar={() => go("calendar")} />;
   else if (page === "calendar") { const scheduled = demands.filter((item) => item.deadlineAt).sort((a, b) => String(a.deadlineAt).localeCompare(String(b.deadlineAt))); content = <section className="panel page-panel"><div className="calendar-head"><strong>Próximos prazos</strong><span>{scheduled.length} demandas planejadas</span></div>{scheduled.length ? <div className="timeline-list">{scheduled.map((demand) => <button key={demand.id} onClick={() => setSelectedDemand(demand)}><time>{dateLabel(demand.deadlineAt)}</time><i style={{ background: demand.companyColor ?? "#94a3b8" }} /><span><strong>{demand.title}</strong><small>{demand.companyName ?? "Sem empresa"} · {statusNames[demand.status]}</small></span><b>{priorityNames[demand.priority]}</b></button>)}</div> : <div className="empty-state"><span>□</span><h3>Nenhum prazo cadastrado</h3><p>Defina prazos nos cards para montar a agenda da operação.</p></div>}</section>; }
   else if (page === "companies") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Cadastros ativos</span><h3>Empresas atendidas</h3></div>{canManage && <button className="small-button" onClick={() => setCatalogModal({ kind: "company" })}>+ Nova empresa</button>}</div>{companies.length ? <div className="entity-cards">{companies.map((company) => <article key={company.id}><i style={{ background: company.color }} /><div><strong>{company.name}</strong><span>{company.shortName} · {company.code}</span><p>{company.description || "Sem descrição cadastrada."}</p></div>{canManage && <button className="table-action" onClick={() => setCatalogModal({ kind: "company", item: company })}>Editar</button>}</article>)}</div> : <div className="empty-state"><span>▦</span><h3>Nenhuma empresa cadastrada</h3></div>}</section>;
   else if (page === "team") content = <><ComingSection icon="○" title="Diretório da equipe" text="A estrutura visual está preparada para cargos, capacidade e distribuição de trabalho." items={["Perfil e foto individual", "Cargo e papel de acesso", "Capacidade por período"]} />{canManage && users.length > 0 && <section className="panel full"><div className="panel-head"><div><span className="eyebrow dark">Pessoas cadastradas</span><h3>Equipe atual</h3></div><span className="count">{users.length}</span></div><div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{user.role ? roleNames[user.role] : "A definir"}</td></tr>)}</tbody></table></div></section>}</>;
@@ -733,7 +804,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   else if (page === "profile") content = <ProfilePage profile={profile} session={session} onUpdated={(updated) => { setProfile(updated); onSession({ ...session, name: updated.name }); }} />;
   else if (page === "workflows") content = <WorkflowEditor stages={workflowStages} demands={demands} people={people} onReload={loadData} />;
   else content = <ComingSection icon="⚙" title="Configurações da organização" text="Preferências gerais, notificações e dados institucionais serão concentrados aqui." items={["Preferências de notificação", "Política de privacidade e LGPD", "Parâmetros da organização"]} />;
-  return <div className="app-shell"><aside className="sidebar"><Brand /><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <button key={link.id} className={!selectedDemand && page === link.id ? "active" : ""} onClick={() => go(link.id)}><span>{link.icon}</span>{link.label}{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</button>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair">↗</button></div></aside><main className="workspace"><header><div><span className="eyebrow dark">{currentTitle.eyebrow}</span><h1>{currentTitle.title}</h1></div>{canCreate && !selectedDemand && <button className="new-demand-button" onClick={() => setShowCreate(true)}><span>+</span> Nova demanda</button>}</header>{error && <Notice>{error}</Notice>}{content}</main>{showCreate && <ManualDemandModal companies={companies} categories={categories} people={people} stages={stages} onClose={() => setShowCreate(false)} onCreated={(created) => { setDemands((items) => [created, ...items]); setShowCreate(false); setSelectedDemand(created); setPage("demands"); window.location.hash = "demands"; }} />}{catalogModal && <CatalogModal kind={catalogModal.kind} item={catalogModal.item} onClose={() => setCatalogModal(null)} onSaved={loadData} />}{briefingCategory && <BriefingTemplateModal category={briefingCategory} onClose={() => setBriefingCategory(null)} />}{showImport && <DailyImportModal demands={demands} initialImport={resumeImport} onClose={() => { setShowImport(false); setResumeImport(null); void loadData(); }} onApplied={() => { void loadData(); }} />}</div>;
+  return <div className="app-shell"><aside className="sidebar"><Brand /><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <button key={link.id} className={!selectedDemand && page === link.id ? "active" : ""} onClick={() => go(link.id)}><span>{link.icon}</span>{link.label}{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</button>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair">↗</button></div></aside><main className="workspace"><header><div><span className="eyebrow dark">{currentTitle.eyebrow}</span><h1>{currentTitle.title}</h1></div>{canCreate && !selectedDemand && <button className="new-demand-button" onClick={() => setShowCreate(true)}><span>+</span> Nova demanda</button>}</header>{error && <Notice>{error}</Notice>}{content}</main>{drawerDemand && <TaskDrawer key={drawerDemand.id} demand={drawerDemand} people={people} canEdit={canCreate} onClose={() => setDrawerDemand(null)} onOpenFull={() => { setSelectedDemand(drawerDemand); setDrawerDemand(null); }} onSaved={(updated) => { setDrawerDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}{showCreate && <ManualDemandModal companies={companies} categories={categories} people={people} stages={stages} onClose={() => setShowCreate(false)} onCreated={(created) => { setDemands((items) => [created, ...items]); setShowCreate(false); setSelectedDemand(created); setPage("demands"); window.location.hash = "demands"; }} />}{catalogModal && <CatalogModal kind={catalogModal.kind} item={catalogModal.item} onClose={() => setCatalogModal(null)} onSaved={loadData} />}{briefingCategory && <BriefingTemplateModal category={briefingCategory} onClose={() => setBriefingCategory(null)} />}{showImport && <DailyImportModal demands={demands} initialImport={resumeImport} onClose={() => { setShowImport(false); setResumeImport(null); void loadData(); }} onApplied={() => { void loadData(); }} />}</div>;
 }
 
 export default function App() {

@@ -54,6 +54,8 @@ class DemandOut(BaseModel):
     assignee_id: uuid.UUID | None = Field(alias="assigneeId")
     assignee_name: str | None = Field(alias="assigneeName")
     assignee_avatar_url: str | None = Field(alias="assigneeAvatarUrl")
+    created_by_id: uuid.UUID = Field(alias="createdById")
+    created_by_name: str = Field(alias="createdByName")
     stage_id: uuid.UUID | None = Field(alias="stageId")
     stage_name: str | None = Field(alias="stageName")
     stage_code: str | None = Field(alias="stageCode")
@@ -163,6 +165,8 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
     company = db.get(Company, demand.primary_company_id) if demand.primary_company_id else None
     category = db.get(DemandCategory, demand.category_id) if demand.category_id else None
     assignee = db.get(UserProfile, demand.current_assignee_id) if demand.current_assignee_id else None
+    creator = db.get(UserProfile, demand.created_by)
+    assert creator is not None
     stage = db.get(WorkflowStage, demand.current_stage_id) if demand.current_stage_id else None
     return DemandOut(
         id=demand.id,
@@ -182,6 +186,8 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
             if assignee and assignee.avatar_path
             else None
         ),
+        createdById=creator.id,
+        createdByName=creator.full_name,
         stageId=demand.current_stage_id,
         stageName=stage.name if stage else None,
         stageCode=stage.code if stage else None,

@@ -56,6 +56,9 @@ class PreferencesUpdate(BaseModel):
     demand_view: Literal["kanban", "list"] = Field(alias="demandView")
     show_empty_stages: bool = Field(alias="showEmptyStages")
     stage_order: list[uuid.UUID] = Field(default_factory=list, alias="stageOrder", max_length=50)
+    focus_view: Literal[
+        "all", "inbox", "today", "upcoming", "overdue", "waiting", "delegated"
+    ] = Field(default="all", alias="focusView")
 
 
 class UserOptionOut(BaseModel):
@@ -80,6 +83,7 @@ def profile_out(principal: Principal) -> ProfileOut:
         "demandView": "kanban",
         "showEmptyStages": True,
         "stageOrder": [],
+        "focusView": "all",
     }
     preferences.update(principal.profile.workspace_preferences or {})
     return ProfileOut(
@@ -169,6 +173,7 @@ def update_my_preferences(
         "demandView": payload.demand_view,
         "showEmptyStages": payload.show_empty_stages,
         "stageOrder": [str(value) for value in payload.stage_order],
+        "focusView": payload.focus_view,
     }
     profile.updated_at = utc_now()
     db.commit()

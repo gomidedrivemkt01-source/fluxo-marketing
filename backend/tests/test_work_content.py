@@ -173,7 +173,9 @@ def test_checklist_toggle_updates_card_revision_and_history() -> None:
     )
     db = MagicMock(spec=Session)
     db.scalar.side_effect = [demand, template, None]
-    db.get.return_value = stage
+    db.get.side_effect = lambda model, _identifier: (
+        principal.profile if model is UserProfile else stage
+    )
 
     result = toggle_demand_checklist_item(
         demand.id,
