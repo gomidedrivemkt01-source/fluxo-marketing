@@ -81,7 +81,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .loader { width: 28px; height: 28px; border: 3px solid #ccdade; border-top-color: var(--teal-dark); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.app-shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; background: #edf2f4; }
+.app-shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-width: 0; min-height: 100vh; background: #edf2f4; }
 .sidebar { position: sticky; top: 0; display: flex; flex-direction: column; height: 100vh; padding: 28px 18px 20px; color: #eef6f8; background: var(--ink); }
 .sidebar > .brand { padding: 0 10px 32px; border-bottom: 1px solid rgba(255,255,255,.09); }
 .sidebar nav { display: grid; gap: 5px; margin-top: 25px; }
@@ -99,7 +99,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .side-profile small { margin-top: 3px; color: #78909a; font-size: .68rem; }
 .side-profile button { border: 0; color: #78909a; background: none; font-size: 1rem; }
 
-.workspace { width: min(100%, 1500px); padding: 38px clamp(26px, 4vw, 64px) 70px; }
+.workspace { width: min(100%, 1500px); min-width: 0; padding: 38px clamp(26px, 4vw, 64px) 70px; }
 .workspace > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; }
 .workspace > header h1 { margin: 6px 0 0; font: 600 2rem/1.1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -.04em; color: var(--ink); }
 .phase { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border: 1px solid #d5e1e4; border-radius: 8px; background: rgba(255,255,255,.55); }
@@ -649,15 +649,15 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .story-copy h1 { font-size: clamp(2.2rem, 10vw, 3.2rem); }
   .story-copy p, .story-footer { display: none; }
   .auth-panel { padding: 42px 24px; }
-  .app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; width: 100%; height: auto; padding: 18px; }
+  .app-shell { grid-template-columns: minmax(0, 1fr); width: 100%; overflow-x: hidden; }
+  .sidebar { position: static; overflow: hidden; width: 100%; min-width: 0; max-width: 100%; height: auto; padding: 18px; }
   .sidebar > .brand { padding-bottom: 18px; }
-  .sidebar nav { display: flex; overflow-x: auto; margin: 15px 0 0; padding: 0 0 5px; }
+  .sidebar nav { display: flex; overflow-x: auto; width: 100%; min-width: 0; margin: 15px 0 0; padding: 0 0 5px; }
   .nav-group { display: flex; min-width: max-content; margin: 0 8px 0 0; }
   .nav-group > small { display: none; }
   .sidebar nav button { min-width: max-content; grid-template-columns: 22px auto auto; }
   .sidebar nav button.active::before, .side-profile { display: none; }
-  .workspace { padding: 28px 18px 55px; }
+  .workspace { width: 100%; max-width: 100%; padding: 28px 18px 55px; }
   .phase { display: none; }
   .welcome { padding: 28px; }
   .pulse { display: none; }
