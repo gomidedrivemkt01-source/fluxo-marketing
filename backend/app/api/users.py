@@ -52,6 +52,32 @@ class ProfileOut(BaseModel):
     preferences: dict[str, object]
 
 
+class SavedViewUpdate(BaseModel):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9-]+$")
+    name: str = Field(min_length=2, max_length=40)
+    query: str = Field(default="", max_length=120)
+    company_id: str = Field(default="ALL", alias="companyId", max_length=40)
+    status: Literal[
+        "ALL",
+        "WAITING_EXECUTION",
+        "IN_PROGRESS",
+        "WAITING_INFORMATION",
+        "WAITING_APPROVAL",
+        "BLOCKED",
+        "SCHEDULED",
+        "COMPLETED",
+    ] = "ALL"
+    priority: Literal["ALL", "LOW", "NORMAL", "HIGH", "URGENT"] = "ALL"
+    focus_view: Literal[
+        "all", "inbox", "today", "upcoming", "overdue", "waiting", "delegated"
+    ] = Field(default="all", alias="focusView")
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.split())
+
+
 class PreferencesUpdate(BaseModel):
     demand_view: Literal["kanban", "list"] = Field(alias="demandView")
     show_empty_stages: bool = Field(alias="showEmptyStages")
@@ -59,6 +85,9 @@ class PreferencesUpdate(BaseModel):
     focus_view: Literal[
         "all", "inbox", "today", "upcoming", "overdue", "waiting", "delegated"
     ] = Field(default="all", alias="focusView")
+    saved_views: list[SavedViewUpdate] = Field(
+        default_factory=list, alias="savedViews", max_length=12
+    )
 
 
 class UserOptionOut(BaseModel):
@@ -84,6 +113,7 @@ def profile_out(principal: Principal) -> ProfileOut:
         "showEmptyStages": True,
         "stageOrder": [],
         "focusView": "all",
+        "savedViews": [],
     }
     preferences.update(principal.profile.workspace_preferences or {})
     return ProfileOut(
@@ -174,6 +204,18 @@ def update_my_preferences(
         "showEmptyStages": payload.show_empty_stages,
         "stageOrder": [str(value) for value in payload.stage_order],
         "focusView": payload.focus_view,
+        "savedViews": [
+            {
+                "id": view.id,
+                "name": view.name,
+                "query": view.query,
+                "companyId": view.company_id,
+                "status": view.status,
+                "priority": view.priority,
+                "focusView": view.focus_view,
+            }
+            for view in payload.saved_views
+        ],
     }
     profile.updated_at = utc_now()
     db.commit()

@@ -32,8 +32,20 @@ def test_preferences_accept_focus_views() -> None:
         showEmptyStages=False,
         stageOrder=[],
         focusView="today",
+        savedViews=[
+            {
+                "id": "minha-visao",
+                "name": "  Urgentes hoje  ",
+                "query": "campanha",
+                "companyId": "ALL",
+                "status": "ALL",
+                "priority": "URGENT",
+                "focusView": "today",
+            }
+        ],
     )
     assert preferences.focus_view == "today"
+    assert preferences.saved_views[0].name == "Urgentes hoje"
 
 
 def test_preferences_reject_unknown_focus_view() -> None:
@@ -43,4 +55,24 @@ def test_preferences_reject_unknown_focus_view() -> None:
             showEmptyStages=False,
             stageOrder=[],
             focusView="tomorrow",
+        )
+
+
+def test_preferences_reject_invalid_saved_view() -> None:
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(
+            demandView="kanban",
+            showEmptyStages=True,
+            stageOrder=[],
+            focusView="all",
+            savedViews=[
+                {
+                    "id": "invalida",
+                    "name": "X",
+                    "companyId": "ALL",
+                    "status": "UNKNOWN",
+                    "priority": "ALL",
+                    "focusView": "all",
+                }
+            ],
         )

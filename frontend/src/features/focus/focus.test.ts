@@ -10,7 +10,7 @@ function demand(values: Partial<FocusDemand> = {}): FocusDemand {
     assigneeId: me,
     createdById: me,
     deadlineAt: null,
-    status: "IN_PROGRESS",
+    status: "WAITING_EXECUTION",
     ...values,
   };
 }
@@ -27,6 +27,10 @@ describe("matchesFocus", () => {
     const waiting = demand({ status: "WAITING_APPROVAL" });
     expect(matchesFocus(waiting, "waiting", me, zone, now)).toBe(true);
     expect(matchesFocus(waiting, "inbox", me, zone, now)).toBe(false);
+  });
+
+  it("removes an inbox item when work starts even without a deadline", () => {
+    expect(matchesFocus(demand({ status: "IN_PROGRESS" }), "inbox", me, zone, now)).toBe(false);
   });
 
   it("finds work created by me and assigned to another person", () => {

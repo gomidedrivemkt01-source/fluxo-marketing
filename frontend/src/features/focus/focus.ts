@@ -39,7 +39,7 @@ export function matchesFocus(
   if (view === "waiting") return waitingStatuses.has(demand.status);
 
   const waiting = waitingStatuses.has(demand.status);
-  if (view === "inbox") return demand.deadlineAt === null && !waiting;
+  if (view === "inbox") return demand.deadlineAt === null && demand.status === "WAITING_EXECUTION";
   if (!demand.deadlineAt) return false;
 
   const today = dateKey(now, timeZone);
