@@ -1,5 +1,17 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { api, AUTH_EXPIRED_EVENT, messageFrom, type Session } from "./api";
+import accessIcon from "./assets/navigation/access.svg";
+import calendarIcon from "./assets/navigation/calendar.svg";
+import categoriesIcon from "./assets/navigation/categories.svg";
+import companiesIcon from "./assets/navigation/companies.svg";
+import dailyIcon from "./assets/navigation/daily.svg";
+import demandsIcon from "./assets/navigation/demands.svg";
+import homeIcon from "./assets/navigation/home.svg";
+import myWorkIcon from "./assets/navigation/my-work.svg";
+import reportsIcon from "./assets/navigation/reports.svg";
+import settingsIcon from "./assets/navigation/settings.svg";
+import teamIcon from "./assets/navigation/team.svg";
+import workflowIcon from "./assets/navigation/workflow.svg";
 import { ActivityPanel } from "./features/collaboration/ActivityPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { focusCounts, matchesFocus, type FocusView } from "./features/focus/focus";
@@ -580,6 +592,10 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   </section>;
 }
 
+function NavIcon({ src }: { src: string }) {
+  return <span className="nav-icon" style={{ "--nav-icon": `url(${src})` } as CSSProperties} aria-hidden="true" />;
+}
+
 function SaveViewModal({ filters, onClose, onSave }: { filters: SavedViewFilters; onClose: () => void; onSave: (name: string) => void }) {
   const [error, setError] = useState("");
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -818,6 +834,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   const [page, setPage] = useState<WorkspacePage>(validPages.includes(hashPage) && (canManage || !adminPages.includes(hashPage)) ? hashPage : "overview");
   const [companies, setCompanies] = useState<Company[]>([]); const [categories, setCategories] = useState<Category[]>([]); const [stages, setStages] = useState<WorkflowStage[]>([]); const [workflowStages, setWorkflowStages] = useState<WorkflowStage[]>([]); const [people, setPeople] = useState<Person[]>([]); const [users, setUsers] = useState<User[]>([]); const [demands, setDemands] = useState<Demand[]>([]); const [imports, setImports] = useState<DailyImport[]>([]); const [profile, setProfile] = useState<Profile | null>(null); const [error, setError] = useState(""); const [showImport, setShowImport] = useState(false); const [showCreate, setShowCreate] = useState(false); const [resumeImport, setResumeImport] = useState<DailyImport | null>(null); const [catalogModal, setCatalogModal] = useState<{ kind: "company" | "category"; item?: Company | Category | null } | null>(null); const [briefingCategory, setBriefingCategory] = useState<Category | null>(null); const [selectedDemand, setSelectedDemand] = useState<Demand | null>(null); const [drawerDemand, setDrawerDemand] = useState<Demand | null>(null); const [approvalRoles, setApprovalRoles] = useState<Record<string, string>>({}); const [approvingUser, setApprovingUser] = useState("");
   const [selectedDemandTab, setSelectedDemandTab] = useState<DemandDetailTab>("overview"); const [showQuickCapture, setShowQuickCapture] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem("fluxo.sidebar-collapsed") === "true");
   function go(next: WorkspacePage) { setPage(next); setSelectedDemand(null); setSelectedDemandTab("overview"); setDrawerDemand(null); window.location.hash = next; window.scrollTo({ top: 0 }); }
   function openDemand(demand: Demand, tab: DemandDetailTab = "overview") { setSelectedDemandTab(tab); setSelectedDemand(demand); }
   function loadData() {
@@ -825,6 +842,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     return Promise.all([api<Company[]>("/catalogs/companies"), api<Category[]>("/catalogs/categories"), api<WorkflowStage[]>("/catalogs/workflow-stages"), canManage ? api<WorkflowStage[]>("/catalogs/workflow-stages?includeInactive=true") : Promise.resolve([] as WorkflowStage[]), api<Person[]>("/users/options"), api<Demand[]>("/demands"), api<Profile>("/users/me"), canManage ? api<User[]>("/users") : Promise.resolve([]), canManage ? api<DailyImport[]>("/imports/dailys") : Promise.resolve([])]).then(([c, k, s, w, o, d, p, u, i]) => { setCompanies(c); setCategories(k); setStages(s); setWorkflowStages(w); setPeople(o); setDemands(d); setProfile(p); setUsers(u); setImports(i); }).catch((caught) => setError(messageFrom(caught)));
   }
   useEffect(() => { void loadData(); }, [session.role]);
+  useEffect(() => { window.localStorage.setItem("fluxo.sidebar-collapsed", String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => { const listener = () => { const value = window.location.hash.replace(/^#\/?/, "").split("/")[0] as WorkspacePage; if (validPages.includes(value) && (canManage || !adminPages.includes(value))) { setPage(value); setSelectedDemand(null); setSelectedDemandTab("overview"); setDrawerDemand(null); } else if (adminPages.includes(value) && !canManage) { setPage("overview"); setSelectedDemand(null); setSelectedDemandTab("overview"); setDrawerDemand(null); window.location.hash = "overview"; } }; window.addEventListener("hashchange", listener); listener(); return () => window.removeEventListener("hashchange", listener); }, [canManage]);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -857,10 +875,10 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   const pending = useMemo(() => users.filter((user) => user.state === "pending_approval"), [users]);
   const currentTitle = selectedDemand ? { eyebrow: "Demanda", title: selectedDemand.publicId } : pageTitles[page];
   const navigation: { label: string; links: { id: WorkspacePage; icon: string; label: string; badge?: number; beta?: boolean }[] }[] = [
-    { label: "Trabalho", links: [{ id: "overview", icon: "⌂", label: "Início" }, { id: "my-work", icon: "◎", label: "Meu trabalho" }, { id: "demands", icon: "▤", label: "Demandas" }, { id: "calendar", icon: "□", label: "Calendário" }] },
-    { label: "Organização", links: [{ id: "companies", icon: "▦", label: "Empresas" }, { id: "team", icon: "○", label: "Equipe" }, { id: "reports", icon: "↗", label: "Relatórios" }] },
-    { label: "Inteligência", links: [{ id: "intelligence", icon: "◇", label: "Dailys", badge: imports.filter((item) => item.state === "reviewing").length, beta: true }] },
-    ...(canManage ? [{ label: "Administração", links: [{ id: "workflows" as WorkspacePage, icon: "⇄", label: "Workflows" }, { id: "categories" as WorkspacePage, icon: "◆", label: "Categorias" }, { id: "users" as WorkspacePage, icon: "◉", label: "Acessos", badge: pending.length }, { id: "settings" as WorkspacePage, icon: "⚙", label: "Configurações" }] }] : []),
+    { label: "Trabalho", links: [{ id: "overview", icon: homeIcon, label: "Início" }, { id: "my-work", icon: myWorkIcon, label: "Meu trabalho" }, { id: "demands", icon: demandsIcon, label: "Demandas" }, { id: "calendar", icon: calendarIcon, label: "Calendário" }] },
+    { label: "Organização", links: [{ id: "companies", icon: companiesIcon, label: "Empresas" }, { id: "team", icon: teamIcon, label: "Equipe" }, { id: "reports", icon: reportsIcon, label: "Relatórios" }] },
+    { label: "Inteligência", links: [{ id: "intelligence", icon: dailyIcon, label: "Dailys", badge: imports.filter((item) => item.state === "reviewing").length, beta: true }] },
+    ...(canManage ? [{ label: "Administração", links: [{ id: "workflows" as WorkspacePage, icon: workflowIcon, label: "Workflows" }, { id: "categories" as WorkspacePage, icon: categoriesIcon, label: "Categorias" }, { id: "users" as WorkspacePage, icon: accessIcon, label: "Acessos", badge: pending.length }, { id: "settings" as WorkspacePage, icon: settingsIcon, label: "Configurações" }] }] : []),
   ];
   let content: React.ReactNode;
   if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} initialTab={selectedDemandTab} onBack={() => { setSelectedDemand(null); go(page === "my-work" ? "my-work" : "demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />;
@@ -876,8 +894,8 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   else if (page === "profile") content = <ProfilePage profile={profile} session={session} onUpdated={(updated) => { setProfile(updated); onSession({ ...session, name: updated.name }); }} />;
   else if (page === "workflows") content = <WorkflowEditor stages={workflowStages} demands={demands} people={people} onReload={loadData} />;
   else content = <ComingSection icon="⚙" title="Configurações da organização" text="Preferências gerais, notificações e dados institucionais serão concentrados aqui." items={["Preferências de notificação", "Política de privacidade e LGPD", "Parâmetros da organização"]} />;
-  return <div className="app-shell">
-    <aside className="sidebar"><Brand /><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <button key={link.id} className={!selectedDemand && page === link.id ? "active" : ""} onClick={() => go(link.id)}><span>{link.icon}</span>{link.label}{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</button>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair">↗</button></div></aside>
+  return <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <aside className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}><div className="sidebar-head"><Brand /><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}><span aria-hidden="true" /></button></div><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <button key={link.id} className={!selectedDemand && page === link.id ? "active" : ""} onClick={() => go(link.id)} aria-label={sidebarCollapsed ? link.label : undefined} title={sidebarCollapsed ? link.label : undefined}><NavIcon src={link.icon} /><span className="nav-label">{link.label}</span>{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</button>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")} aria-label={sidebarCollapsed ? "Abrir meu perfil" : undefined} title={sidebarCollapsed ? "Meu perfil" : undefined}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair" title="Sair">↗</button></div></aside>
     <main className="workspace"><header><div><span className="eyebrow dark">{currentTitle.eyebrow}</span><h1>{currentTitle.title}</h1></div>{canCreate && !selectedDemand && <div className="workspace-header-actions"><button className="quick-capture-button" onClick={() => setShowQuickCapture(true)}><span>⌁</span> Captura rápida <kbd>Q</kbd></button><button className="new-demand-button" onClick={() => setShowCreate(true)}><span>+</span> Nova demanda</button></div>}</header>{error && <Notice>{error}</Notice>}{content}</main>
     {drawerDemand && <TaskDrawer key={drawerDemand.id} demand={drawerDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} onClose={() => setDrawerDemand(null)} onOpenFull={(tab) => { openDemand(drawerDemand, tab); setDrawerDemand(null); }} onSaved={(updated) => { setDrawerDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} />}
     {showQuickCapture && <QuickCaptureModal onClose={() => setShowQuickCapture(false)} onCreate={quickCreate} />}
