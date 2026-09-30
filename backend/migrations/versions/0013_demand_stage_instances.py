@@ -140,6 +140,7 @@ def upgrade() -> None:
                 LIMIT 1
             ) AS current_stage ON TRUE
             WHERE (target.item->>'position')::integer > current_stage.position
+              AND target.item->>'expectedDurationHours' IS NOT NULL
         )
         UPDATE app.demand_stage_instances AS instance
         SET forecast_at = stage_forecasts.forecast_at
