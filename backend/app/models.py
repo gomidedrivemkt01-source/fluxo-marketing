@@ -210,6 +210,28 @@ class Workflow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class WorkflowVersion(Base):
+    __tablename__ = "workflow_versions"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "version", name="uq_workflow_version_number"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflows.id", ondelete="RESTRICT"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class WorkflowStage(Base):
     __tablename__ = "workflow_stages"
     __table_args__ = (
@@ -314,6 +336,9 @@ class Demand(Base):
     )
     workflow_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.workflows.id", ondelete="RESTRICT"), index=True
+    )
+    workflow_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflow_versions.id", ondelete="RESTRICT"), index=True
     )
     status: Mapped[str] = mapped_column(String(40), default="WAITING_EXECUTION")
     priority: Mapped[str] = mapped_column(String(20), default="NORMAL")

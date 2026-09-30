@@ -12,17 +12,25 @@ from app.api.catalogs import (
     reorder_workflow_stages,
     update_workflow_stage,
 )
-from app.api.demands import apply_stage_defaults
+from app.api.demands import (
+    apply_stage_defaults,
+    get_demand_timeline,
+    version_stage,
+    workflow_definition,
+)
 from app.api.errors import ApiError
 from app.auth.service import Principal
 from app.models import (
     AuditEvent,
     Demand,
+    DemandUpdate,
     Membership,
     MembershipStatus,
     PermissionRole,
     UserProfile,
+    Workflow,
     WorkflowStage,
+    WorkflowVersion,
 )
 
 
@@ -45,7 +53,7 @@ def _principal() -> Principal:
         organization_id=organization_id,
         code="coordinator",
         name="Coordenador",
-        permissions=["catalog:write"],
+        permissions=["catalog:write", "demands:read"],
     )
     return Principal(MagicMock(), profile, membership, role)
 
@@ -153,6 +161,113 @@ def test_stage_defaults_assign_owner_and_calculate_forecast() -> None:
 
     assert demand.current_assignee_id == assignee_id
     assert demand.forecast_at == entered_at + timedelta(hours=48)
+
+
+def test_workflow_definition_preserves_the_version_used_by_a_card() -> None:
+    principal = _principal()
+    stage = WorkflowStage(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        workflow_id=uuid.uuid4(),
+        name="Edição",
+        code="EDICAO",
+        color="#2563EB",
+        position=2,
+        expected_duration_hours=24,
+        active=True,
+    )
+    definition = workflow_definition([stage])
+    version = WorkflowVersion(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        workflow_id=stage.workflow_id,
+        version=1,
+        definition=definition,
+    )
+
+    stage.name = "Pós-produção"
+    stage.expected_duration_hours = 48
+    frozen = version_stage(version, stage.id)
+
+    assert frozen is not None
+    assert frozen["name"] == "Edição"
+    assert frozen["expectedDurationHours"] == 24
+
+
+def test_demand_timeline_combines_history_with_the_frozen_future() -> None:
+    principal = _principal()
+    workflow_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    first_id = uuid.uuid4()
+    second_id = uuid.uuid4()
+    third_id = uuid.uuid4()
+    entered_second = datetime(2026, 9, 30, 12, tzinfo=UTC)
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000011",
+        title="Campanha institucional",
+        workflow_id=workflow_id,
+        workflow_version_id=version_id,
+        current_stage_id=second_id,
+        forecast_at=entered_second + timedelta(hours=8),
+        status="IN_PROGRESS",
+        priority="NORMAL",
+        source="interface",
+        revision=2,
+        created_by=principal.profile.id,
+        created_at=entered_second - timedelta(hours=4),
+    )
+    definition = {
+        "stages": [
+            {"id": str(first_id), "name": "Briefing", "code": "BRIEFING", "color": "#64748B", "position": 1, "defaultAssigneeId": None, "expectedDurationHours": 4},
+            {"id": str(second_id), "name": "Produção", "code": "PRODUCAO", "color": "#2563EB", "position": 2, "defaultAssigneeId": None, "expectedDurationHours": 8},
+            {"id": str(third_id), "name": "Aprovação", "code": "APROVACAO", "color": "#7C3AED", "position": 3, "defaultAssigneeId": None, "expectedDurationHours": 2},
+        ]
+    }
+    version = WorkflowVersion(
+        id=version_id,
+        organization_id=principal.membership.organization_id,
+        workflow_id=workflow_id,
+        version=3,
+        definition=definition,
+    )
+    workflow = Workflow(
+        id=workflow_id,
+        organization_id=principal.membership.organization_id,
+        name="Campanha",
+        code="CAMPANHA",
+        is_default=False,
+        active=True,
+    )
+    update = DemandUpdate(
+        id=uuid.uuid4(),
+        demand_id=demand.id,
+        created_by=principal.profile.id,
+        kind="STAGE_CHANGED",
+        summary="Etapa alterada para Produção.",
+        payload={"fromStageId": str(first_id), "toStageId": str(second_id)},
+        created_at=entered_second,
+    )
+    db = MagicMock(spec=Session)
+    db.scalar.return_value = demand
+    db.scalars.return_value = iter([update])
+
+    def get_model(model: object, identifier: object) -> object | None:
+        if model is WorkflowVersion and identifier == version_id:
+            return version
+        if model is Workflow and identifier == workflow_id:
+            return workflow
+        return None
+
+    db.get.side_effect = get_model
+
+    result = get_demand_timeline(demand.id, principal, db)
+
+    assert result.version == 3
+    assert [stage.state for stage in result.stages] == ["completed", "current", "upcoming"]
+    assert result.stages[0].left_at == entered_second
+    assert result.stages[2].forecast_at == demand.forecast_at + timedelta(hours=2)
 
 
 def test_stage_rejects_inactive_default_assignee() -> None:
