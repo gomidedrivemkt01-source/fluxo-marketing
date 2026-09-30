@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, AUTH_EXPIRED_EVENT, messageFrom, type Session } from "./api";
 import accessIcon from "./assets/navigation/access.svg";
 import calendarIcon from "./assets/navigation/calendar.svg";
@@ -593,7 +593,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
 }
 
 function NavIcon({ src }: { src: string }) {
-  return <span className="nav-icon" style={{ "--nav-icon": `url(${src})` } as CSSProperties} aria-hidden="true" />;
+  return <img className="nav-icon" src={src} alt="" aria-hidden="true" />;
 }
 
 function SaveViewModal({ filters, onClose, onSave }: { filters: SavedViewFilters; onClose: () => void; onSave: (name: string) => void }) {

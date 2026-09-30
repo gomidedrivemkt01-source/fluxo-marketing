@@ -257,8 +257,8 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .sidebar nav button { position: relative; display: grid; grid-template-columns: 25px 1fr auto; align-items: center; width: 100%; min-height: 39px; padding: 0 11px; border: 0; border-radius: 7px; color: #91a6b0; background: transparent; text-align: left; font-size: .82rem; font-weight: 600; }
 .sidebar nav button:hover, .sidebar nav button.active { color: #effaf9; background: rgba(72,213,197,.1); }
 .sidebar nav button.active::before { content: ""; position: absolute; left: -11px; width: 3px; height: 22px; border-radius: 0 3px 3px 0; background: var(--teal); }
-.sidebar nav button > .nav-icon { width: 17px; height: 17px; color: #78c8c0; background: currentColor; -webkit-mask: var(--nav-icon) center / contain no-repeat; mask: var(--nav-icon) center / contain no-repeat; transition: color .15s ease, transform .15s ease; }
-.sidebar nav button:hover > .nav-icon, .sidebar nav button.active > .nav-icon { color: var(--teal); transform: scale(1.05); }
+.sidebar nav button > .nav-icon { width: 17px; height: 17px; object-fit: contain; opacity: .82; transition: opacity .15s ease, filter .15s ease, transform .15s ease; }
+.sidebar nav button:hover > .nav-icon, .sidebar nav button.active > .nav-icon { opacity: 1; filter: brightness(1.18) saturate(1.14); transform: scale(1.05); }
 .nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar nav button em { padding: 3px 5px; border-radius: 4px; color: #65c9bf; background: rgba(55,200,183,.08); font-size: .53rem; font-style: normal; letter-spacing: .06em; text-transform: uppercase; }
 .sidebar nav button b { display: grid; place-items: center; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px; color: var(--ink); background: var(--orange); font-size: .61rem; }
