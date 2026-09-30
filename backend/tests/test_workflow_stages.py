@@ -15,6 +15,9 @@ from app.api.catalogs import (
 from app.api.demands import (
     apply_stage_defaults,
     get_demand_timeline,
+    move_stage_plan,
+    stage_risk,
+    validate_stage_handoff,
     version_stage,
     workflow_definition,
 )
@@ -23,6 +26,7 @@ from app.auth.service import Principal
 from app.models import (
     AuditEvent,
     Demand,
+    DemandStageInstance,
     DemandUpdate,
     Membership,
     MembershipStatus,
@@ -268,6 +272,108 @@ def test_demand_timeline_combines_history_with_the_frozen_future() -> None:
     assert [stage.state for stage in result.stages] == ["completed", "current", "upcoming"]
     assert result.stages[0].left_at == entered_second
     assert result.stages[2].forecast_at == demand.forecast_at + timedelta(hours=2)
+
+
+def test_stage_plan_records_advance_skip_and_return_states() -> None:
+    first_id = uuid.uuid4()
+    second_id = uuid.uuid4()
+    third_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    demand_id = uuid.uuid4()
+    organization_id = uuid.uuid4()
+    instances = [
+        DemandStageInstance(
+            id=uuid.uuid4(),
+            organization_id=organization_id,
+            demand_id=demand_id,
+            workflow_version_id=version_id,
+            workflow_stage_id=stage_id,
+            position=position,
+            state="current" if position == 1 else "upcoming",
+            revision=1,
+        )
+        for position, stage_id in enumerate((first_id, second_id, third_id), start=1)
+    ]
+    moved_at = datetime(2026, 9, 30, 14, tzinfo=UTC)
+
+    move_stage_plan(instances, first_id, second_id, action="advance", moved_at=moved_at)
+    assert [item.state for item in instances] == ["completed", "current", "upcoming"]
+
+    move_stage_plan(instances, second_id, third_id, action="skip", moved_at=moved_at)
+    assert [item.state for item in instances] == ["completed", "skipped", "current"]
+
+    move_stage_plan(instances, third_id, second_id, action="return", moved_at=moved_at)
+    assert [item.state for item in instances] == ["completed", "current", "upcoming"]
+
+
+def test_stage_risk_prioritizes_overdue_and_forecast_overrun() -> None:
+    now = datetime(2026, 9, 30, 14, tzinfo=UTC)
+    instance = DemandStageInstance(
+        id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
+        demand_id=uuid.uuid4(),
+        workflow_version_id=uuid.uuid4(),
+        workflow_stage_id=uuid.uuid4(),
+        position=1,
+        state="current",
+        deadline_at=now - timedelta(hours=1),
+        forecast_at=now + timedelta(hours=2),
+    )
+    assert stage_risk(instance, now) == "overdue"
+
+    instance.deadline_at = now + timedelta(hours=1)
+    assert stage_risk(instance, now) == "at_risk"
+
+    instance.state = "completed"
+    assert stage_risk(instance, now) == "none"
+
+
+def test_handoff_requires_open_timer_to_be_closed() -> None:
+    principal = _principal()
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000012",
+        title="Vídeo com timer aberto",
+        current_stage_id=uuid.uuid4(),
+        status="IN_PROGRESS",
+        priority="NORMAL",
+        source="interface",
+        revision=1,
+        created_by=principal.profile.id,
+    )
+    db = MagicMock(spec=Session)
+    db.scalar.return_value = uuid.uuid4()
+
+    with pytest.raises(ApiError) as caught:
+        validate_stage_handoff(db, demand, require_checklist=False)
+
+    assert caught.value.code == "active_timer_requires_closure"
+
+
+def test_handoff_requires_mandatory_checklist_to_be_completed() -> None:
+    principal = _principal()
+    required_id = uuid.uuid4()
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000013",
+        title="Campanha com checklist pendente",
+        current_stage_id=uuid.uuid4(),
+        status="IN_PROGRESS",
+        priority="NORMAL",
+        source="interface",
+        revision=1,
+        created_by=principal.profile.id,
+    )
+    db = MagicMock(spec=Session)
+    db.scalar.return_value = None
+    db.scalars.side_effect = [iter([required_id]), iter([])]
+
+    with pytest.raises(ApiError) as caught:
+        validate_stage_handoff(db, demand, require_checklist=True)
+
+    assert caught.value.code == "required_checklist_incomplete"
 
 
 def test_stage_rejects_inactive_default_assignee() -> None:

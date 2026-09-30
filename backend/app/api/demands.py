@@ -14,12 +14,16 @@ from app.auth.service import Principal
 from app.database import get_db
 from app.models import (
     AuditEvent,
+    ChecklistTemplateItem,
     Company,
     Demand,
     DemandCategory,
+    DemandChecklistItem,
+    DemandStageInstance,
     DemandUpdate,
     Membership,
     MembershipStatus,
+    TimeEntry,
     UserProfile,
     Workflow,
     WorkflowStage,
@@ -98,6 +102,17 @@ class DemandStageUpdate(BaseModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
+class DemandWorkflowAction(BaseModel):
+    action: str = Field(pattern=r"^(advance|return|skip)$")
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class DemandStageScheduleUpdate(BaseModel):
+    deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
+    forecast_at: datetime | None = Field(default=None, alias="forecastAt")
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
 class DemandUpdateOut(BaseModel):
     id: uuid.UUID
     kind: str
@@ -115,7 +130,10 @@ class DemandTimelineStageOut(BaseModel):
     state: str
     entered_at: datetime | None = Field(alias="enteredAt")
     left_at: datetime | None = Field(alias="leftAt")
+    deadline_at: datetime | None = Field(alias="deadlineAt")
     forecast_at: datetime | None = Field(alias="forecastAt")
+    risk: str
+    revision: int
     expected_duration_hours: int | None = Field(alias="expectedDurationHours")
     assignee_id: uuid.UUID | None = Field(alias="assigneeId")
     assignee_name: str | None = Field(alias="assigneeName")
@@ -324,7 +342,163 @@ def create_demand_record(
         )
     db.add(demand)
     db.flush()
+    ensure_demand_stage_instances(db, demand, workflow_version)
     return demand
+
+
+def sorted_version_stages(version: WorkflowVersion) -> list[dict[str, Any]]:
+    raw_stages = version.definition.get("stages", [])
+    return sorted(
+        (item for item in raw_stages if isinstance(item, dict)),
+        key=lambda item: int(item.get("position", 0)),
+    )
+
+
+def ensure_demand_stage_instances(
+    db: Session,
+    demand: Demand,
+    version: WorkflowVersion,
+) -> list[DemandStageInstance]:
+    instances = list(
+        db.scalars(
+            select(DemandStageInstance)
+            .where(
+                DemandStageInstance.demand_id == demand.id,
+                DemandStageInstance.workflow_version_id == version.id,
+            )
+            .order_by(DemandStageInstance.position)
+        )
+    )
+    if instances:
+        return instances
+
+    stages = sorted_version_stages(version)
+    current_id = str(demand.current_stage_id) if demand.current_stage_id else None
+    current_position = next(
+        (int(item.get("position", 0)) for item in stages if item.get("id") == current_id),
+        0,
+    )
+    now = demand.created_at or utc_now()
+    forecast_cursor = demand.forecast_at or now
+    created: list[DemandStageInstance] = []
+    for item in stages:
+        item_id = uuid.UUID(str(item["id"]))
+        position = int(item.get("position", 0))
+        is_current = str(item_id) == current_id
+        if is_current:
+            state = "current"
+            entered_at = now
+            forecast_at = demand.forecast_at
+            if forecast_at is None and item.get("expectedDurationHours"):
+                forecast_at = now + timedelta(hours=int(item["expectedDurationHours"]))
+            forecast_cursor = forecast_at or forecast_cursor
+        elif position < current_position:
+            state = "completed"
+            entered_at = None
+            forecast_at = None
+        else:
+            state = "upcoming"
+            entered_at = None
+            expected_duration = item.get("expectedDurationHours")
+            if expected_duration:
+                forecast_cursor += timedelta(hours=int(expected_duration))
+                forecast_at = forecast_cursor
+            else:
+                forecast_at = None
+        default_assignee_id = item.get("defaultAssigneeId")
+        instance = DemandStageInstance(
+            organization_id=demand.organization_id,
+            demand_id=demand.id,
+            workflow_version_id=version.id,
+            workflow_stage_id=item_id,
+            position=position,
+            state=state,
+            assignee_id=(
+                demand.current_assignee_id
+                if is_current and demand.current_assignee_id
+                else uuid.UUID(str(default_assignee_id)) if default_assignee_id else None
+            ),
+            deadline_at=demand.deadline_at if is_current else None,
+            forecast_at=forecast_at,
+            entered_at=entered_at,
+        )
+        db.add(instance)
+        created.append(instance)
+    db.flush()
+    return created
+
+
+def stage_risk(instance: DemandStageInstance, now: datetime | None = None) -> str:
+    if instance.state in {"completed", "skipped"}:
+        return "none"
+    reference = now or utc_now()
+    if instance.deadline_at and instance.deadline_at < reference:
+        return "overdue"
+    if (
+        instance.deadline_at
+        and instance.forecast_at
+        and instance.forecast_at > instance.deadline_at
+    ):
+        return "at_risk"
+    if instance.deadline_at or instance.forecast_at:
+        return "on_track"
+    return "unscheduled"
+
+
+def move_stage_plan(
+    instances: list[DemandStageInstance],
+    from_stage_id: uuid.UUID | None,
+    to_stage_id: uuid.UUID,
+    *,
+    action: str,
+    moved_at: datetime,
+) -> DemandStageInstance:
+    target = next(
+        (item for item in instances if item.workflow_stage_id == to_stage_id),
+        None,
+    )
+    if target is None:
+        raise ApiError(422, "stage_invalid", "A etapa selecionada não está no plano da demanda.")
+    previous = next(
+        (item for item in instances if item.workflow_stage_id == from_stage_id),
+        None,
+    )
+    previous_position = previous.position if previous else target.position
+    for item in instances:
+        changed = False
+        if item.id == target.id:
+            item.state = "current"
+            item.entered_at = moved_at
+            item.left_at = None
+            changed = True
+        elif previous is None and item.position < target.position:
+            item.state = "skipped"
+            item.left_at = moved_at
+            changed = True
+        elif previous is None and item.position > target.position:
+            item.state = "upcoming"
+            item.left_at = None
+            changed = True
+        elif previous and item.id == previous.id:
+            item.state = (
+                "skipped"
+                if action == "skip"
+                else "completed" if target.position > previous.position else "upcoming"
+            )
+            item.left_at = moved_at
+            changed = True
+        elif target.position > previous_position and previous_position < item.position < target.position:
+            item.state = "skipped"
+            item.left_at = moved_at
+            changed = True
+        elif target.position < previous_position and target.position < item.position <= previous_position:
+            item.state = "upcoming"
+            item.left_at = None
+            changed = True
+        if changed:
+            item.revision += 1
+            item.updated_at = moved_at
+    return target
 
 
 def demand_out(db: Session, demand: Demand) -> DemandOut:
@@ -664,6 +838,18 @@ def update_demand(
         )
     elif target_stage and previous_stage_id != stage_id:
         apply_stage_defaults(demand, target_stage, apply_assignee=payload.assignee_id is None)
+    if target_version:
+        stage_instances = ensure_demand_stage_instances(db, demand, target_version)
+        if previous_stage_id != stage_id and stage_id:
+            target_instance = move_stage_plan(
+                stage_instances,
+                previous_stage_id if current_version and current_version.id == target_version.id else None,
+                stage_id,
+                action="manual",
+                moved_at=utc_now(),
+            )
+            target_instance.assignee_id = demand.current_assignee_id
+            target_instance.forecast_at = demand.forecast_at
     demand.revision += 1
     demand.updated_at = utc_now()
     db.add(
@@ -753,9 +939,37 @@ def move_demand_stage(
         or stage.workflow_id != demand.workflow_id
     ):
         raise ApiError(422, "stage_invalid", "A etapa selecionada não está disponível.")
+    assert version is not None
+    stage_instances = ensure_demand_stage_instances(db, demand, version)
+    current_instance = next(
+        (item for item in stage_instances if item.workflow_stage_id == demand.current_stage_id),
+        None,
+    )
+    target_instance = next(
+        (item for item in stage_instances if item.workflow_stage_id == stage.id),
+        None,
+    )
+    if target_instance is None:
+        raise ApiError(422, "stage_invalid", "A etapa selecionada não está no plano da demanda.")
+    validate_stage_handoff(
+        db,
+        demand,
+        require_checklist=bool(
+            current_instance and target_instance.position > current_instance.position
+        ),
+    )
     previous_stage_id = demand.current_stage_id
     demand.current_stage_id = stage.id
     apply_stage_snapshot_defaults(demand, stage_snapshot)
+    target_instance = move_stage_plan(
+        stage_instances,
+        previous_stage_id,
+        stage.id,
+        action="manual",
+        moved_at=utc_now(),
+    )
+    target_instance.assignee_id = demand.current_assignee_id
+    target_instance.forecast_at = demand.forecast_at
     demand.revision += 1
     demand.updated_at = utc_now()
     db.add(
@@ -796,6 +1010,240 @@ def move_demand_stage(
     return demand_out(db, demand)
 
 
+def validate_stage_handoff(
+    db: Session,
+    demand: Demand,
+    *,
+    require_checklist: bool,
+) -> None:
+    active_timer = db.scalar(
+        select(TimeEntry.id).where(
+            TimeEntry.demand_id == demand.id,
+            TimeEntry.deleted_at.is_(None),
+            TimeEntry.state.in_(("RUNNING", "PAUSED")),
+        )
+    )
+    if active_timer:
+        raise ApiError(
+            409,
+            "active_timer_requires_closure",
+            "Finalize o timer aberto nesta demanda antes de mudar de etapa.",
+        )
+    if not require_checklist or not demand.current_stage_id:
+        return
+    required_ids = list(
+        db.scalars(
+            select(ChecklistTemplateItem.id).where(
+                ChecklistTemplateItem.workflow_stage_id == demand.current_stage_id,
+                ChecklistTemplateItem.active.is_(True),
+                ChecklistTemplateItem.required.is_(True),
+            )
+        )
+    )
+    if not required_ids:
+        return
+    completed_ids = set(
+        db.scalars(
+            select(DemandChecklistItem.template_item_id).where(
+                DemandChecklistItem.demand_id == demand.id,
+                DemandChecklistItem.template_item_id.in_(required_ids),
+                DemandChecklistItem.completed.is_(True),
+            )
+        )
+    )
+    missing = len(set(required_ids) - completed_ids)
+    if missing:
+        raise ApiError(
+            409,
+            "required_checklist_incomplete",
+            f"Conclua {missing} item(ns) obrigatório(s) do checklist antes de avançar.",
+        )
+
+
+@router.post(
+    "/{demand_id}/workflow-actions",
+    response_model=DemandOut,
+    dependencies=[Depends(require_csrf)],
+)
+def apply_workflow_action(
+    demand_id: uuid.UUID,
+    payload: DemandWorkflowAction,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = db.scalar(
+        select(Demand)
+        .where(
+            Demand.id == demand_id,
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not demand:
+        raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    version = db.get(WorkflowVersion, demand.workflow_version_id) if demand.workflow_version_id else None
+    if not version:
+        raise ApiError(409, "workflow_version_missing", "O fluxo desta demanda precisa ser revisado.")
+    instances = ensure_demand_stage_instances(db, demand, version)
+    current_index = next(
+        (index for index, item in enumerate(instances) if item.workflow_stage_id == demand.current_stage_id),
+        -1,
+    )
+    if current_index < 0:
+        raise ApiError(409, "current_stage_missing", "A etapa atual não está no plano da demanda.")
+    validate_stage_handoff(
+        db,
+        demand,
+        require_checklist=payload.action == "advance",
+    )
+    now = utc_now()
+    current = instances[current_index]
+    action_labels = {"advance": "avançada", "return": "retornada", "skip": "pulada"}
+    if payload.action == "advance" and current_index == len(instances) - 1:
+        current.state = "completed"
+        current.left_at = now
+        current.revision += 1
+        current.updated_at = now
+        demand.status = "COMPLETED"
+        event_kind = "DEMAND_COMPLETED"
+        summary = "Demanda concluída após a última etapa do workflow."
+        target: DemandStageInstance | None = None
+    else:
+        if payload.action == "return":
+            target_index = current_index - 1
+            if target_index < 0:
+                raise ApiError(422, "workflow_start_reached", "A demanda já está na primeira etapa.")
+        else:
+            target_index = current_index + 1
+            if target_index >= len(instances):
+                raise ApiError(422, "workflow_end_reached", "Não há próxima etapa neste workflow.")
+        target = move_stage_plan(
+            instances,
+            current.workflow_stage_id,
+            instances[target_index].workflow_stage_id,
+            action=payload.action,
+            moved_at=now,
+        )
+        demand.current_stage_id = target.workflow_stage_id
+        demand.current_assignee_id = target.assignee_id
+        demand.forecast_at = target.forecast_at
+        if demand.status in {"WAITING_EXECUTION", "COMPLETED"}:
+            demand.status = "IN_PROGRESS"
+        target_snapshot = version_stage(version, target.workflow_stage_id)
+        target_name = str(target_snapshot.get("name", "nova etapa")) if target_snapshot else "nova etapa"
+        event_kind = f"WORKFLOW_{payload.action.upper()}"
+        summary = f"Demanda {action_labels[payload.action]} para {target_name}."
+    demand.revision += 1
+    demand.updated_at = now
+    event_payload: dict[str, object] = {
+        "action": payload.action,
+        "fromStageId": str(current.workflow_stage_id),
+        "toStageId": str(target.workflow_stage_id) if target else None,
+        "workflowVersion": version.version,
+    }
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind=event_kind,
+            summary=summary,
+            payload=event_payload,
+        )
+    )
+    db.add(
+        AuditEvent(
+            organization_id=demand.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type=event_kind,
+            metadata_json={"demandId": str(demand.id), **event_payload},
+        )
+    )
+    db.commit()
+    db.refresh(demand)
+    return demand_out(db, demand)
+
+
+@router.patch(
+    "/{demand_id}/timeline/{stage_id}",
+    response_model=DemandOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_stage_schedule(
+    demand_id: uuid.UUID,
+    stage_id: uuid.UUID,
+    payload: DemandStageScheduleUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = db.scalar(
+        select(Demand)
+        .where(
+            Demand.id == demand_id,
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not demand:
+        raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    instance = db.scalar(
+        select(DemandStageInstance)
+        .where(
+            DemandStageInstance.demand_id == demand.id,
+            DemandStageInstance.workflow_version_id == demand.workflow_version_id,
+            DemandStageInstance.workflow_stage_id == stage_id,
+        )
+        .with_for_update()
+    )
+    if not instance:
+        raise ApiError(404, "stage_plan_not_found", "A etapa não está no plano desta demanda.")
+    previous_deadline = instance.deadline_at
+    previous_forecast = instance.forecast_at
+    now = utc_now()
+    instance.deadline_at = payload.deadline_at
+    instance.forecast_at = payload.forecast_at
+    instance.revision += 1
+    instance.updated_at = now
+    if instance.state == "current":
+        demand.forecast_at = payload.forecast_at
+    demand.revision += 1
+    demand.updated_at = now
+    event_payload = {
+        "stageId": str(stage_id),
+        "deadlineAt": payload.deadline_at.isoformat() if payload.deadline_at else None,
+        "forecastAt": payload.forecast_at.isoformat() if payload.forecast_at else None,
+        "previousDeadlineAt": previous_deadline.isoformat() if previous_deadline else None,
+        "previousForecastAt": previous_forecast.isoformat() if previous_forecast else None,
+    }
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="STAGE_SCHEDULE_UPDATED",
+            summary="Prazo e previsão da etapa atualizados.",
+            payload=event_payload,
+        )
+    )
+    db.add(
+        AuditEvent(
+            organization_id=demand.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="DEMAND_STAGE_SCHEDULE_UPDATED",
+            metadata_json={"demandId": str(demand.id), **event_payload},
+        )
+    )
+    db.commit()
+    db.refresh(demand)
+    return demand_out(db, demand)
+
+
 @router.get("/{demand_id}/timeline", response_model=DemandTimelineOut)
 def get_demand_timeline(
     demand_id: uuid.UUID,
@@ -821,8 +1269,53 @@ def get_demand_timeline(
     if not version or not workflow:
         raise ApiError(409, "workflow_version_missing", "O fluxo desta demanda precisa ser revisado.")
 
-    raw_stages = version.definition.get("stages", [])
-    stages = [item for item in raw_stages if isinstance(item, dict)]
+    stages = sorted_version_stages(version)
+    stage_instances = list(
+        db.execute(
+            select(DemandStageInstance)
+            .where(
+                DemandStageInstance.demand_id == demand.id,
+                DemandStageInstance.workflow_version_id == version.id,
+            )
+            .order_by(DemandStageInstance.position)
+        ).scalars()
+    )
+    if stage_instances:
+        snapshots = {str(item.get("id")): item for item in stages}
+        persisted_timeline: list[DemandTimelineStageOut] = []
+        for instance in stage_instances:
+            snapshot = snapshots.get(str(instance.workflow_stage_id), {})
+            assignee = db.get(UserProfile, instance.assignee_id) if instance.assignee_id else None
+            persisted_timeline.append(
+                DemandTimelineStageOut(
+                    id=instance.workflow_stage_id,
+                    name=str(snapshot.get("name", "Etapa")),
+                    code=str(snapshot.get("code", "ETAPA")),
+                    color=str(snapshot.get("color", "#94A3B8")),
+                    position=instance.position,
+                    state=instance.state,
+                    enteredAt=instance.entered_at,
+                    leftAt=instance.left_at,
+                    deadlineAt=instance.deadline_at,
+                    forecastAt=instance.forecast_at,
+                    risk=stage_risk(instance),
+                    revision=instance.revision,
+                    expectedDurationHours=(
+                        int(snapshot["expectedDurationHours"])
+                        if snapshot.get("expectedDurationHours")
+                        else None
+                    ),
+                    assigneeId=instance.assignee_id,
+                    assigneeName=assignee.full_name if assignee else None,
+                )
+            )
+        return DemandTimelineOut(
+            workflowId=workflow.id,
+            workflowName=workflow.name,
+            version=version.version,
+            stages=persisted_timeline,
+        )
+
     updates = list(
         db.scalars(
             select(DemandUpdate)
@@ -896,6 +1389,17 @@ def get_demand_timeline(
         if item_id == current_stage_id and demand.current_assignee_id:
             assignee_id = demand.current_assignee_id
         assignee = db.get(UserProfile, assignee_id) if assignee_id else None
+        fallback_deadline = demand.deadline_at if item_id == current_stage_id else None
+        fallback_risk = "unscheduled"
+        if state not in {"completed", "skipped"}:
+            if fallback_deadline and fallback_deadline < utc_now():
+                fallback_risk = "overdue"
+            elif fallback_deadline and stage_forecast and stage_forecast > fallback_deadline:
+                fallback_risk = "at_risk"
+            elif fallback_deadline or stage_forecast:
+                fallback_risk = "on_track"
+        else:
+            fallback_risk = "none"
         timeline.append(
             DemandTimelineStageOut(
                 id=uuid.UUID(item_id),
@@ -906,7 +1410,10 @@ def get_demand_timeline(
                 state=state,
                 enteredAt=entered_at.get(item_id),
                 leftAt=left_at.get(item_id),
+                deadlineAt=fallback_deadline,
                 forecastAt=stage_forecast,
+                risk=fallback_risk,
+                revision=1,
                 expectedDurationHours=(
                     int(item["expectedDurationHours"])
                     if item.get("expectedDurationHours")

@@ -8,7 +8,7 @@ A criação manual é a entrada principal da operação. **Início** funciona co
 
 Administradores e coordenadores mantêm uma biblioteca de workflows na área **Workflows**. Cada modelo possui suas próprias etapas, checklists, responsáveis padrão e durações esperadas. Uma categoria pode apontar para seu workflow padrão, e um card pode substituir esse modelo quando precisar de um fluxo específico. A migração inicial preserva o fluxo existente como **Fluxo padrão**.
 
-Cada demanda guarda a versão imutável do workflow usada no momento da criação ou da troca explícita de fluxo. Alterações posteriores no modelo passam a valer para novos cards sem modificar retroativamente as demandas em andamento. A aba **Workflow** combina o histórico real de passagem pelas etapas com as próximas etapas e suas previsões; uma versão compacta dessa timeline aparece na visão geral do card.
+Cada demanda guarda a versão imutável do workflow usada no momento da criação ou da troca explícita de fluxo. Alterações posteriores no modelo passam a valer para novos cards sem modificar retroativamente as demandas em andamento. A aba **Workflow** combina o histórico real com a agenda de cada etapa, permite ajustar prazo e previsão e destaca etapas vencidas ou em risco. As ações **Retornar**, **Pular** e **Avançar** registram o handoff; a saída é bloqueada enquanto houver timer aberto e o avanço também exige os itens obrigatórios do checklist. Uma versão compacta dessa timeline aparece na visão geral do card.
 
 Na área **Categorias**, a administração combina workflow e modelo de briefing. Dentro do card, a visão geral reúne dados essenciais, timer, checklist rápido e uma lateral que alterna entre comentários e histórico. As abas avançadas preservam o briefing completo, workflow, checklist, arquivos, atividade e tempo. O timer pode ser iniciado, pausado, retomado e concluído; a aba de tempo mantém o ajuste manual e o histórico da equipe.
 
@@ -18,8 +18,8 @@ O upload de uma Daily é um recurso complementar na área de Inteligência e nun
 
 - **Marco 1 — Fundação e acesso:** autenticação, aprovação, perfis, cadastros, auditoria e infraestrutura online concluídos.
 - **Marco 2 — Card operacional:** criação manual, briefing, checklist, comentários, histórico, arquivos privados e timer concluídos.
-- **Marco 3 — Fluxo e foco pessoal:** agenda Todoist, Kanban pessoal, biblioteca de workflows, versões imutáveis e timeline operacional concluídos nesta base.
-- **Próxima fatia do Marco 3:** prazo e previsão por etapa, regras de avanço/retorno/skip e alertas de risco. Essa fatia prepara os dados antes do Marco 4 de relatórios operacionais.
+- **Marco 3 — Fluxo e foco pessoal:** agenda Todoist, Kanban pessoal, biblioteca de workflows, versões imutáveis, agenda por etapa, handoffs validados e alertas de risco concluídos nesta base.
+- **Próximo marco — Relatórios operacionais:** indicadores de prazo, volume, tempo investido e gargalos por empresa, categoria, responsável e etapa, usando o histórico operacional já persistido.
 
 ## Execução local
 

@@ -356,6 +356,46 @@ class Demand(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class DemandStageInstance(Base):
+    __tablename__ = "demand_stage_instances"
+    __table_args__ = (
+        UniqueConstraint(
+            "demand_id",
+            "workflow_version_id",
+            "workflow_stage_id",
+            name="uq_demand_stage_instance",
+        ),
+        Index("ix_demand_stage_instances_demand_position", "demand_id", "position"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    demand_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demands.id", ondelete="CASCADE"), index=True
+    )
+    workflow_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflow_versions.id", ondelete="RESTRICT"), index=True
+    )
+    workflow_stage_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflow_stages.id", ondelete="RESTRICT"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(20), default="upcoming")
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    forecast_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class DemandBriefingAnswer(Base):
     __tablename__ = "demand_briefing_answers"
     __table_args__ = (
