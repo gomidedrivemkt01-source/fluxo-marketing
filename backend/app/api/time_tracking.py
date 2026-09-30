@@ -185,6 +185,11 @@ def _format_duration(minutes: int) -> str:
     return f"{remaining}min"
 
 
+def _elapsed_minutes(entry: TimeEntry, ended_at: datetime) -> int:
+    current_segment = max(1, math.ceil((ended_at - entry.started_at).total_seconds() / 60))
+    return (entry.duration_minutes or 0) + current_segment
+
+
 def _event(
     demand: Demand,
     principal: Principal,
@@ -215,7 +220,8 @@ def _summary(db: Session, demand: Demand, principal: Principal) -> TimeSummaryOu
         (
             _entry_out(entry, profile, principal)
             for entry, profile in rows
-            if entry.state == "RUNNING" and entry.user_profile_id == principal.profile.id
+            if entry.state in {"RUNNING", "PAUSED"}
+            and entry.user_profile_id == principal.profile.id
         ),
         None,
     )
@@ -470,7 +476,7 @@ def start_timer(
         select(TimeEntry).where(
             TimeEntry.organization_id == demand.organization_id,
             TimeEntry.user_profile_id == principal.profile.id,
-            TimeEntry.state == "RUNNING",
+            TimeEntry.state.in_(["RUNNING", "PAUSED"]),
             TimeEntry.deleted_at.is_(None),
         )
     )
@@ -533,7 +539,7 @@ def stop_timer(
             TimeEntry.organization_id == demand.organization_id,
             TimeEntry.demand_id == demand.id,
             TimeEntry.user_profile_id == principal.profile.id,
-            TimeEntry.state == "RUNNING",
+            TimeEntry.state.in_(["RUNNING", "PAUSED"]),
             TimeEntry.deleted_at.is_(None),
         )
         .with_for_update()
@@ -543,7 +549,11 @@ def stop_timer(
     if entry.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "O timer foi alterado. Atualize os dados.")
     ended_at = utc_now()
-    duration_minutes = max(1, math.ceil((ended_at - entry.started_at).total_seconds() / 60))
+    duration_minutes = (
+        _elapsed_minutes(entry, ended_at)
+        if entry.state == "RUNNING"
+        else max(1, entry.duration_minutes or 0)
+    )
     entry.state = "COMPLETED"
     entry.ended_at = ended_at
     entry.duration_minutes = duration_minutes
@@ -569,5 +579,101 @@ def stop_timer(
             },
         )
     )
+    db.commit()
+    return _entry_out(entry, principal.profile, principal)
+
+
+@router.post(
+    "/{demand_id}/time/timer/pause",
+    response_model=TimeEntryOut,
+    dependencies=[Depends(require_csrf)],
+)
+def pause_timer(
+    demand_id: uuid.UUID,
+    payload: TimerStop,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> TimeEntryOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = _get_demand(db, demand_id, principal)
+    entry = db.scalar(
+        select(TimeEntry)
+        .where(
+            TimeEntry.organization_id == demand.organization_id,
+            TimeEntry.demand_id == demand.id,
+            TimeEntry.user_profile_id == principal.profile.id,
+            TimeEntry.state == "RUNNING",
+            TimeEntry.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not entry:
+        raise ApiError(404, "timer_not_found", "Não há timer em andamento nesta demanda.")
+    if entry.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "O timer foi alterado. Atualize os dados.")
+    paused_at = utc_now()
+    entry.duration_minutes = _elapsed_minutes(entry, paused_at)
+    entry.state = "PAUSED"
+    entry.ended_at = paused_at
+    entry.revision += 1
+    entry.updated_at = paused_at
+    db.add(
+        _event(
+            demand,
+            principal,
+            kind="TIMER_PAUSED",
+            summary=f"Timer pausado em {_format_duration(entry.duration_minutes)}.",
+            payload={"timeEntryId": str(entry.id), "durationMinutes": entry.duration_minutes},
+        )
+    )
+    db.add(_audit(principal, "TIME_TIMER_PAUSED", {"demandId": str(demand.id), "timeEntryId": str(entry.id)}))
+    db.commit()
+    return _entry_out(entry, principal.profile, principal)
+
+
+@router.post(
+    "/{demand_id}/time/timer/resume",
+    response_model=TimeEntryOut,
+    dependencies=[Depends(require_csrf)],
+)
+def resume_timer(
+    demand_id: uuid.UUID,
+    payload: TimerStop,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> TimeEntryOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = _get_demand(db, demand_id, principal)
+    entry = db.scalar(
+        select(TimeEntry)
+        .where(
+            TimeEntry.organization_id == demand.organization_id,
+            TimeEntry.demand_id == demand.id,
+            TimeEntry.user_profile_id == principal.profile.id,
+            TimeEntry.state == "PAUSED",
+            TimeEntry.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not entry:
+        raise ApiError(404, "timer_not_found", "Não há timer pausado nesta demanda.")
+    if entry.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "O timer foi alterado. Atualize os dados.")
+    resumed_at = utc_now()
+    entry.state = "RUNNING"
+    entry.started_at = resumed_at
+    entry.ended_at = None
+    entry.revision += 1
+    entry.updated_at = resumed_at
+    db.add(
+        _event(
+            demand,
+            principal,
+            kind="TIMER_RESUMED",
+            summary="Timer retomado na demanda.",
+            payload={"timeEntryId": str(entry.id)},
+        )
+    )
+    db.add(_audit(principal, "TIME_TIMER_RESUMED", {"demandId": str(demand.id), "timeEntryId": str(entry.id)}))
     db.commit()
     return _entry_out(entry, principal.profile, principal)

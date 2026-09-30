@@ -43,9 +43,27 @@ def test_preferences_accept_focus_views() -> None:
                 "focusView": "today",
             }
         ],
+        personalColumns=[
+            {"id": "fila", "name": "  Minha fila  ", "color": "#0F766E"},
+            {"id": "fazendo", "name": "Fazendo", "color": "#2563EB"},
+        ],
+        personalPlacements={"demand-id": "fazendo"},
     )
     assert preferences.focus_view == "today"
     assert preferences.saved_views[0].name == "Urgentes hoje"
+    assert preferences.personal_columns[0].name == "Minha fila"
+    assert preferences.personal_placements["demand-id"] == "fazendo"
+
+
+def test_preferences_require_at_least_one_personal_column() -> None:
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(
+            demandView="kanban",
+            showEmptyStages=True,
+            stageOrder=[],
+            focusView="all",
+            personalColumns=[],
+        )
 
 
 def test_preferences_reject_unknown_focus_view() -> None:

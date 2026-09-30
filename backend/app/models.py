@@ -173,6 +173,9 @@ class DemandCategory(Base):
     name: Mapped[str] = mapped_column(String(120))
     code: Mapped[str] = mapped_column(String(50))
     color: Mapped[str] = mapped_column(String(7), default="#475569")
+    default_workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflows.id", ondelete="RESTRICT"), index=True
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
@@ -185,16 +188,41 @@ class DemandCounter(Base):
     last_value: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
-class WorkflowStage(Base):
-    __tablename__ = "workflow_stages"
+class Workflow(Base):
+    __tablename__ = "workflows"
     __table_args__ = (
-        UniqueConstraint("organization_id", "code", name="uq_workflow_stage_org_code"),
+        UniqueConstraint("organization_id", "code", name="uq_workflow_org_code"),
+        UniqueConstraint("organization_id", "name", name="uq_workflow_org_name"),
         {"schema": "app"},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    code: Mapped[str] = mapped_column(String(50))
+    description: Mapped[str | None] = mapped_column(Text)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class WorkflowStage(Base):
+    __tablename__ = "workflow_stages"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "code", name="uq_workflow_stage_workflow_code"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflows.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(120))
     code: Mapped[str] = mapped_column(String(50))
@@ -284,6 +312,9 @@ class Demand(Base):
     current_stage_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.workflow_stages.id", ondelete="RESTRICT"), index=True
     )
+    workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflows.id", ondelete="RESTRICT"), index=True
+    )
     status: Mapped[str] = mapped_column(String(40), default="WAITING_EXECUTION")
     priority: Mapped[str] = mapped_column(String(20), default="NORMAL")
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -345,6 +376,36 @@ class DemandChecklistItem(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DemandTodoItem(Base):
+    __tablename__ = "demand_todo_items"
+    __table_args__ = (
+        Index("ix_demand_todo_items_demand_position", "demand_id", "position"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    demand_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demands.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(240))
+    position: Mapped[int] = mapped_column(Integer)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    completed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 

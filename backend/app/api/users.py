@@ -78,6 +78,17 @@ class SavedViewUpdate(BaseModel):
         return " ".join(value.split())
 
 
+class PersonalColumnUpdate(BaseModel):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9-]+$")
+    name: str = Field(min_length=2, max_length=40)
+    color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.split())
+
+
 class PreferencesUpdate(BaseModel):
     demand_view: Literal["kanban", "list"] = Field(alias="demandView")
     show_empty_stages: bool = Field(alias="showEmptyStages")
@@ -88,6 +99,28 @@ class PreferencesUpdate(BaseModel):
     saved_views: list[SavedViewUpdate] = Field(
         default_factory=list, alias="savedViews", max_length=12
     )
+    personal_columns: list[PersonalColumnUpdate] = Field(
+        default_factory=lambda: [
+            PersonalColumnUpdate(id="inbox", name="Entrada", color="#64748B"),
+            PersonalColumnUpdate(id="planned", name="Planejado", color="#2563EB"),
+            PersonalColumnUpdate(id="doing", name="Em andamento", color="#0F766E"),
+            PersonalColumnUpdate(id="review", name="Revisar", color="#D97706"),
+            PersonalColumnUpdate(id="done", name="Concluído", color="#15803D"),
+        ],
+        alias="personalColumns",
+        min_length=1,
+        max_length=12,
+    )
+    personal_placements: dict[str, str] = Field(
+        default_factory=dict, alias="personalPlacements", max_length=500
+    )
+
+
+class BoardViewOut(BaseModel):
+    profile_id: uuid.UUID = Field(alias="profileId")
+    name: str
+    personal_columns: list[dict[str, str]] = Field(alias="personalColumns")
+    personal_placements: dict[str, str] = Field(alias="personalPlacements")
 
 
 class UserOptionOut(BaseModel):
@@ -114,6 +147,14 @@ def profile_out(principal: Principal) -> ProfileOut:
         "stageOrder": [],
         "focusView": "all",
         "savedViews": [],
+        "personalColumns": [
+            {"id": "inbox", "name": "Entrada", "color": "#64748B"},
+            {"id": "planned", "name": "Planejado", "color": "#2563EB"},
+            {"id": "doing", "name": "Em andamento", "color": "#0F766E"},
+            {"id": "review", "name": "Revisar", "color": "#D97706"},
+            {"id": "done", "name": "Concluído", "color": "#15803D"},
+        ],
+        "personalPlacements": {},
     }
     preferences.update(principal.profile.workspace_preferences or {})
     return ProfileOut(
@@ -216,12 +257,56 @@ def update_my_preferences(
             }
             for view in payload.saved_views
         ],
+        "personalColumns": [
+            {"id": column.id, "name": column.name, "color": column.color.upper()}
+            for column in payload.personal_columns
+        ],
+        "personalPlacements": {
+            demand_id: column_id
+            for demand_id, column_id in payload.personal_placements.items()
+            if column_id in {column.id for column in payload.personal_columns}
+        },
     }
     profile.updated_at = utc_now()
     db.commit()
     db.refresh(profile)
     refreshed = Principal(principal.session, profile, principal.membership, principal.role)
     return profile_out(refreshed)
+
+
+@router.get("/{profile_id}/board-view", response_model=BoardViewOut)
+def get_user_board_view(
+    profile_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> BoardViewOut:
+    require_active(principal)
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.organization_id == principal.membership.organization_id,
+            Membership.user_profile_id == profile_id,
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+    )
+    if not membership:
+        raise ApiError(404, "user_not_found", "Usuário não encontrado.")
+    profile = db.get(UserProfile, profile_id)
+    if not profile:
+        raise ApiError(404, "user_not_found", "Usuário não encontrado.")
+    stored = profile.workspace_preferences or {}
+    default_columns = [
+        {"id": "inbox", "name": "Entrada", "color": "#64748B"},
+        {"id": "planned", "name": "Planejado", "color": "#2563EB"},
+        {"id": "doing", "name": "Em andamento", "color": "#0F766E"},
+        {"id": "review", "name": "Revisar", "color": "#D97706"},
+        {"id": "done", "name": "Concluído", "color": "#15803D"},
+    ]
+    return BoardViewOut(
+        profileId=profile.id,
+        name=profile.full_name,
+        personalColumns=stored.get("personalColumns", default_columns),
+        personalPlacements=stored.get("personalPlacements", {}),
+    )
 
 
 @router.get("/options", response_model=list[UserOptionOut])

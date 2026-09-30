@@ -13,6 +13,8 @@ from app.api.time_tracking import (
     TimerStop,
     can_change_time_entry,
     create_manual_time_entry,
+    pause_timer,
+    resume_timer,
     start_timer,
     stop_timer,
     update_time_estimate,
@@ -206,6 +208,52 @@ def test_start_and_stop_timer_use_minimum_one_minute_and_register_events() -> No
         for call in stop_db.add.call_args_list
     )
     stop_db.commit.assert_called_once()
+
+
+def test_timer_can_pause_resume_and_complete_without_losing_accumulated_time() -> None:
+    principal = _principal()
+    demand = _demand(principal)
+    entry = _entry(principal, demand, state="RUNNING")
+    entry.started_at = utc_now() - timedelta(minutes=4)
+    pause_db = MagicMock(spec=Session)
+    pause_db.scalar.side_effect = [demand, entry]
+
+    paused = pause_timer(
+        demand.id,
+        TimerStop(expectedRevision=entry.revision),
+        principal,
+        pause_db,
+    )
+
+    assert paused.state == "PAUSED"
+    assert paused.duration_minutes is not None and paused.duration_minutes >= 4
+    accumulated = paused.duration_minutes
+
+    resume_db = MagicMock(spec=Session)
+    resume_db.scalar.side_effect = [demand, entry]
+    resumed = resume_timer(
+        demand.id,
+        TimerStop(expectedRevision=entry.revision),
+        principal,
+        resume_db,
+    )
+
+    assert resumed.state == "RUNNING"
+    assert resumed.duration_minutes == accumulated
+    assert resumed.ended_at is None
+
+    entry.started_at = utc_now()
+    stop_db = MagicMock(spec=Session)
+    stop_db.scalar.side_effect = [demand, entry]
+    completed = stop_timer(
+        demand.id,
+        TimerStop(expectedRevision=entry.revision),
+        principal,
+        stop_db,
+    )
+
+    assert completed.state == "COMPLETED"
+    assert completed.duration_minutes == accumulated + 1
 
 
 def test_estimate_requires_current_demand_revision_and_updates_timeline() -> None:

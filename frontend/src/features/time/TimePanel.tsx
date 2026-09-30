@@ -7,7 +7,7 @@ type TimeEntry = {
   userId: string;
   userName: string;
   source: "MANUAL" | "TIMER";
-  state: "RUNNING" | "COMPLETED";
+  state: "RUNNING" | "PAUSED" | "COMPLETED";
   startedAt: string;
   endedAt: string | null;
   durationMinutes: number | null;
@@ -62,8 +62,8 @@ function localDateTimeValue(date = new Date()): string {
   return local.toISOString().slice(0, 16);
 }
 
-function runningLabel(startedAt: string, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+function runningLabel(startedAt: string, now: number, accumulatedMinutes = 0): string {
+  const seconds = accumulatedMinutes * 60 + Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const remaining = seconds % 60;
@@ -171,6 +171,25 @@ export function TimePanel({
         body: JSON.stringify({ expectedRevision: summary.activeTimer.revision }),
       });
       setSuccess("Timer encerrado e tempo registrado.");
+      await load();
+    } catch (caught) {
+      setError(messageFrom(caught));
+      await load();
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function changeTimer(action: "pause" | "resume") {
+    if (!summary?.activeTimer) return;
+    setBusy("timer"); setError(""); setSuccess("");
+    try {
+      await api(`/demands/${demandId}/time/timer/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: summary.activeTimer.revision }),
+      });
+      setSuccess(action === "pause" ? "Timer pausado." : "Timer retomado.");
+      setNow(Date.now());
       await load();
     } catch (caught) {
       setError(messageFrom(caught));
@@ -326,19 +345,13 @@ export function TimePanel({
         <section className="timer-card">
           <div>
             <span className="eyebrow dark">Cronômetro</span>
-            <h4>{summary.activeTimer ? "Timer em andamento" : "Iniciar trabalho"}</h4>
+            <h4>{summary.activeTimer ? (summary.activeTimer.state === "PAUSED" ? "Timer pausado" : "Timer em andamento") : "Iniciar trabalho"}</h4>
           </div>
           {summary.activeTimer ? (
             <>
-              <strong className="timer-clock">{runningLabel(summary.activeTimer.startedAt, now)}</strong>
+              <strong className="timer-clock">{summary.activeTimer.state === "PAUSED" ? durationLabel(summary.activeTimer.durationMinutes) : runningLabel(summary.activeTimer.startedAt, now, summary.activeTimer.durationMinutes ?? 0)}</strong>
               <p>{summary.activeTimer.note || "Sem observação"}</p>
-              <button
-                className="timer-stop"
-                disabled={busy === "timer"}
-                onClick={() => void stopTimer()}
-              >
-                ■ {busy === "timer" ? "Encerrando…" : "Parar e registrar"}
-              </button>
+              <div className="timer-action-row"><button className="timer-pause" disabled={busy === "timer"} onClick={() => void changeTimer(summary.activeTimer?.state === "PAUSED" ? "resume" : "pause")}>{summary.activeTimer.state === "PAUSED" ? "▶ Continuar" : "Ⅱ Pausar"}</button><button className="timer-stop" disabled={busy === "timer"} onClick={() => void stopTimer()}>✓ {busy === "timer" ? "Salvando…" : "Concluir"}</button></div>
             </>
           ) : (
             <>
@@ -442,7 +455,7 @@ export function TimePanel({
         ) : (
           <div className="time-entry-list">
             {summary.entries.map((entry) => (
-              <article className={entry.state === "RUNNING" ? "running" : ""} key={entry.id}>
+              <article className={entry.state === "RUNNING" ? "running" : entry.state === "PAUSED" ? "paused" : ""} key={entry.id}>
                 <span className="time-source">{entry.source === "TIMER" ? "◷" : "+"}</span>
                 {editingId === entry.id ? (
                   <div className="time-entry-edit">
@@ -483,7 +496,7 @@ export function TimePanel({
                       <strong>{entry.userName}<em>{entry.source === "TIMER" ? "Timer" : "Manual"}</em></strong>
                       <span>{dateLabel(entry.startedAt)}{entry.note ? ` · ${entry.note}` : ""}</span>
                     </div>
-                    <b>{entry.state === "RUNNING" ? runningLabel(entry.startedAt, now) : durationLabel(entry.durationMinutes)}</b>
+                    <b>{entry.state === "RUNNING" ? runningLabel(entry.startedAt, now, entry.durationMinutes ?? 0) : durationLabel(entry.durationMinutes)}</b>
                     {entry.canEdit && entry.state === "COMPLETED" && (
                       <div className="time-entry-actions">
                         <button disabled={busy === entry.id} onClick={() => beginEdit(entry)}>Editar</button>

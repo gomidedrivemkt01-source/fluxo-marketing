@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.api.catalogs import (
+    WorkflowInput,
     WorkflowStageReorder,
     WorkflowStageUpdate,
     reorder_workflow_stages,
@@ -184,3 +185,13 @@ def test_stage_rejects_inactive_default_assignee() -> None:
 
     assert caught.value.code == "default_assignee_invalid"
     db.commit.assert_not_called()
+def test_workflow_input_normalizes_reusable_model_code() -> None:
+    payload = WorkflowInput(
+        name="  Produção de vídeo  ",
+        code="Vídeo social",
+        description="Etapas padrão para vídeos.",
+        isDefault=False,
+    )
+
+    assert payload.name == "Produção de vídeo"
+    assert payload.code == "V_DEO_SOCIAL"

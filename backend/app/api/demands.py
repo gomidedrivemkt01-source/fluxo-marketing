@@ -20,6 +20,7 @@ from app.models import (
     Membership,
     MembershipStatus,
     UserProfile,
+    Workflow,
     WorkflowStage,
     utc_now,
 )
@@ -36,6 +37,7 @@ class DemandCreate(BaseModel):
     deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
     assignee_id: uuid.UUID | None = Field(default=None, alias="assigneeId")
     stage_id: uuid.UUID | None = Field(default=None, alias="stageId")
+    workflow_id: uuid.UUID | None = Field(default=None, alias="workflowId")
 
 
 class DemandOut(BaseModel):
@@ -61,6 +63,8 @@ class DemandOut(BaseModel):
     stage_code: str | None = Field(alias="stageCode")
     stage_color: str | None = Field(alias="stageColor")
     stage_position: int | None = Field(alias="stagePosition")
+    workflow_id: uuid.UUID | None = Field(alias="workflowId")
+    workflow_name: str | None = Field(alias="workflowName")
     status: str
     priority: str
     deadline_at: datetime | None = Field(alias="deadlineAt")
@@ -83,6 +87,7 @@ class DemandEdit(BaseModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     assignee_id: uuid.UUID | None = Field(default=None, alias="assigneeId")
     stage_id: uuid.UUID | None = Field(default=None, alias="stageId")
+    workflow_id: uuid.UUID | None = Field(default=None, alias="workflowId")
 
 
 class DemandStageUpdate(BaseModel):
@@ -140,8 +145,28 @@ def create_demand_record(
     deadline_at: datetime | None = None,
     assignee_id: uuid.UUID | None = None,
     stage_id: uuid.UUID | None = None,
+    workflow_id: uuid.UUID | None = None,
     source: str = "interface",
 ) -> Demand:
+    if workflow_id is None:
+        workflow_id = db.scalar(
+            select(Workflow.id).where(
+                Workflow.organization_id == principal.membership.organization_id,
+                Workflow.is_default.is_(True),
+                Workflow.active.is_(True),
+            )
+        )
+    if stage_id is None and workflow_id:
+        stage_id = db.scalar(
+            select(WorkflowStage.id)
+            .where(
+                WorkflowStage.organization_id == principal.membership.organization_id,
+                WorkflowStage.workflow_id == workflow_id,
+                WorkflowStage.active.is_(True),
+            )
+            .order_by(WorkflowStage.position)
+            .limit(1)
+        )
     demand = Demand(
         organization_id=principal.membership.organization_id,
         public_id=next_public_id(db),
@@ -153,6 +178,7 @@ def create_demand_record(
         deadline_at=deadline_at,
         current_assignee_id=assignee_id,
         current_stage_id=stage_id,
+        workflow_id=workflow_id,
         source=source,
         created_by=principal.profile.id,
     )
@@ -168,6 +194,7 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
     creator = db.get(UserProfile, demand.created_by)
     assert creator is not None
     stage = db.get(WorkflowStage, demand.current_stage_id) if demand.current_stage_id else None
+    workflow = db.get(Workflow, demand.workflow_id) if demand.workflow_id else None
     return DemandOut(
         id=demand.id,
         publicId=demand.public_id,
@@ -193,6 +220,8 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
         stageCode=stage.code if stage else None,
         stageColor=stage.color if stage else None,
         stagePosition=stage.position if stage else None,
+        workflowId=demand.workflow_id,
+        workflowName=workflow.name if workflow else None,
         status=demand.status,
         priority=demand.priority,
         deadlineAt=demand.deadline_at,
@@ -211,7 +240,8 @@ def validate_references(
     category_id: uuid.UUID | None,
     assignee_id: uuid.UUID | None,
     stage_id: uuid.UUID | None,
-) -> uuid.UUID | None:
+    workflow_id: uuid.UUID | None,
+) -> tuple[uuid.UUID, uuid.UUID | None]:
     if company_id and not db.scalar(
         select(Company.id).where(
             Company.id == company_id, Company.organization_id == organization_id, Company.active
@@ -234,23 +264,59 @@ def validate_references(
         )
     ):
         raise ApiError(422, "assignee_invalid", "O responsável selecionado não está disponível.")
-    resolved_stage_id = stage_id
-    if resolved_stage_id and not db.scalar(
-        select(WorkflowStage.id).where(
-            WorkflowStage.id == resolved_stage_id,
-            WorkflowStage.organization_id == organization_id,
-            WorkflowStage.active,
+    resolved_workflow_id = workflow_id
+    stage: WorkflowStage | None = None
+    if stage_id:
+        stage = db.scalar(
+            select(WorkflowStage).where(
+                WorkflowStage.id == stage_id,
+                WorkflowStage.organization_id == organization_id,
+                WorkflowStage.active.is_(True),
+            )
+        )
+        if not stage:
+            raise ApiError(422, "stage_invalid", "A etapa selecionada não está disponível.")
+        if resolved_workflow_id and stage.workflow_id != resolved_workflow_id:
+            raise ApiError(422, "stage_workflow_mismatch", "A etapa não pertence ao workflow selecionado.")
+        resolved_workflow_id = stage.workflow_id
+    if resolved_workflow_id and not db.scalar(
+        select(Workflow.id).where(
+            Workflow.id == resolved_workflow_id,
+            Workflow.organization_id == organization_id,
+            Workflow.active.is_(True),
         )
     ):
-        raise ApiError(422, "stage_invalid", "A etapa selecionada não está disponível.")
+        raise ApiError(422, "workflow_invalid", "O workflow selecionado não está disponível.")
+    if not resolved_workflow_id and category_id:
+        resolved_workflow_id = db.scalar(
+            select(DemandCategory.default_workflow_id).where(
+                DemandCategory.id == category_id,
+                DemandCategory.organization_id == organization_id,
+            )
+        )
+    if not resolved_workflow_id:
+        resolved_workflow_id = db.scalar(
+            select(Workflow.id).where(
+                Workflow.organization_id == organization_id,
+                Workflow.is_default.is_(True),
+                Workflow.active.is_(True),
+            )
+        )
+    if not resolved_workflow_id:
+        raise ApiError(422, "workflow_required", "Nenhum workflow ativo está disponível.")
+    resolved_stage_id = stage.id if stage else None
     if not resolved_stage_id:
         resolved_stage_id = db.scalar(
             select(WorkflowStage.id)
-            .where(WorkflowStage.organization_id == organization_id, WorkflowStage.active)
+            .where(
+                WorkflowStage.organization_id == organization_id,
+                WorkflowStage.workflow_id == resolved_workflow_id,
+                WorkflowStage.active.is_(True),
+            )
             .order_by(WorkflowStage.position)
             .limit(1)
         )
-    return resolved_stage_id
+    return resolved_workflow_id, resolved_stage_id
 
 
 @router.get("", response_model=list[DemandOut])
@@ -286,13 +352,14 @@ def create_demand(
     db: Session = Depends(get_db),
 ) -> DemandOut:
     require_any_permission(principal, "demands:write", "demands:work")
-    stage_id = validate_references(
+    workflow_id, stage_id = validate_references(
         db,
         principal.membership.organization_id,
         company_id=payload.company_id,
         category_id=payload.category_id,
         assignee_id=payload.assignee_id,
         stage_id=payload.stage_id,
+        workflow_id=payload.workflow_id,
     )
     stage = db.get(WorkflowStage, stage_id) if stage_id else None
     resolved_assignee_id = payload.assignee_id or (stage.default_assignee_id if stage else None)
@@ -307,6 +374,7 @@ def create_demand(
         deadline_at=payload.deadline_at,
         assignee_id=resolved_assignee_id,
         stage_id=stage_id,
+        workflow_id=workflow_id,
     )
     if stage:
         apply_stage_defaults(demand, stage, apply_assignee=payload.assignee_id is None)
@@ -376,13 +444,14 @@ def update_demand(
         raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
     if demand.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
-    stage_id = validate_references(
+    workflow_id, stage_id = validate_references(
         db,
         principal.membership.organization_id,
         company_id=payload.company_id,
         category_id=payload.category_id,
         assignee_id=payload.assignee_id,
         stage_id=payload.stage_id,
+        workflow_id=payload.workflow_id,
     )
     before = {
         "title": demand.title,
@@ -401,6 +470,7 @@ def update_demand(
     target_stage = db.get(WorkflowStage, stage_id) if stage_id else None
     demand.current_assignee_id = payload.assignee_id
     demand.current_stage_id = stage_id
+    demand.workflow_id = workflow_id
     if target_stage and previous_stage_id != stage_id:
         apply_stage_defaults(demand, target_stage, apply_assignee=payload.assignee_id is None)
     demand.revision += 1
@@ -422,6 +492,7 @@ def update_demand(
                     "status": demand.status,
                     "priority": demand.priority,
                     "stageId": str(stage_id) if stage_id else None,
+                    "workflowId": str(workflow_id),
                     "revision": demand.revision,
                 },
             },
@@ -478,6 +549,7 @@ def move_demand_stage(
         select(WorkflowStage).where(
             WorkflowStage.id == payload.stage_id,
             WorkflowStage.organization_id == principal.membership.organization_id,
+            WorkflowStage.workflow_id == demand.workflow_id,
             WorkflowStage.active,
         )
     )

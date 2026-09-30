@@ -11,6 +11,8 @@ from app.api.work_content import (
     BriefingFieldOut,
     ChecklistToggleInput,
     DemandBriefingInput,
+    DemandTodoCreate,
+    create_demand_todo_item,
     toggle_demand_checklist_item,
     update_demand_briefing,
 )
@@ -22,6 +24,7 @@ from app.models import (
     Company,
     Demand,
     DemandChecklistItem,
+    DemandTodoItem,
     DemandUpdate,
     Membership,
     MembershipStatus,
@@ -190,4 +193,34 @@ def test_checklist_toggle_updates_card_revision_and_history() -> None:
     assert any(isinstance(value, DemandChecklistItem) and value.completed for value in added)
     assert any(isinstance(value, DemandUpdate) for value in added)
     assert any(isinstance(value, AuditEvent) for value in added)
+    db.commit.assert_called_once()
+
+
+def test_card_accepts_a_free_checklist_item_alongside_stage_templates() -> None:
+    principal = _principal()
+    demand = _demand(principal)
+    db = MagicMock(spec=Session)
+    db.scalar.return_value = demand
+    db.scalars.return_value = iter([])
+    db.get.side_effect = lambda model, _identifier: (
+        principal.profile if model is UserProfile else None
+    )
+
+    result = create_demand_todo_item(
+        demand.id,
+        DemandTodoCreate(title="  Validar legenda final  ", expectedRevision=2),
+        principal,
+        db,
+    )
+
+    assert result.revision == 3
+    added = [call.args[0] for call in db.add.call_args_list]
+    assert any(
+        isinstance(value, DemandTodoItem) and value.title == "Validar legenda final"
+        for value in added
+    )
+    assert any(
+        isinstance(value, DemandUpdate) and value.kind == "CHECKLIST_ITEM_CREATED"
+        for value in added
+    )
     db.commit.assert_called_once()

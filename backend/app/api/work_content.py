@@ -22,6 +22,7 @@ from app.models import (
     DemandBriefingAnswer,
     DemandCategory,
     DemandChecklistItem,
+    DemandTodoItem,
     DemandUpdate,
     UserProfile,
     WorkflowStage,
@@ -138,6 +139,20 @@ class ChecklistToggleInput(BaseModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
+class DemandTodoCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=240)
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        return " ".join(value.split())
+
+
+class DemandTodoDelete(BaseModel):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
 class DemandChecklistItemOut(BaseModel):
     id: uuid.UUID
     title: str
@@ -147,6 +162,7 @@ class DemandChecklistItemOut(BaseModel):
     completed: bool
     completed_by_name: str | None = Field(alias="completedByName")
     completed_at: datetime | None = Field(alias="completedAt")
+    source: str
 
 
 class DemandChecklistOut(BaseModel):
@@ -538,18 +554,20 @@ def get_demand_checklist(
 ) -> DemandChecklistOut:
     require_permission(principal, "demands:read")
     demand = _demand(db, principal, demand_id)
-    if not demand.current_stage_id:
-        return DemandChecklistOut(stageId=None, stageName=None, completed=0, total=0, items=[])
-    stage = _stage(db, principal, demand.current_stage_id)
-    templates = list(
-        db.scalars(
-            select(ChecklistTemplateItem)
-            .where(
-                ChecklistTemplateItem.workflow_stage_id == stage.id,
-                ChecklistTemplateItem.active.is_(True),
+    stage = _stage(db, principal, demand.current_stage_id) if demand.current_stage_id else None
+    templates = (
+        list(
+            db.scalars(
+                select(ChecklistTemplateItem)
+                .where(
+                    ChecklistTemplateItem.workflow_stage_id == stage.id,
+                    ChecklistTemplateItem.active.is_(True),
+                )
+                .order_by(ChecklistTemplateItem.position, ChecklistTemplateItem.title)
             )
-            .order_by(ChecklistTemplateItem.position, ChecklistTemplateItem.title)
         )
+        if stage
+        else []
     )
     records = {
         record.template_item_id: record
@@ -571,11 +589,35 @@ def get_demand_checklist(
                 completed=record.completed if record else False,
                 completedByName=completed_by.full_name if completed_by else None,
                 completedAt=record.completed_at if record else None,
+                source="template",
             )
         )
+    todos = list(
+        db.scalars(
+            select(DemandTodoItem)
+            .where(DemandTodoItem.demand_id == demand.id, DemandTodoItem.deleted_at.is_(None))
+            .order_by(DemandTodoItem.position, DemandTodoItem.created_at)
+        )
+    )
+    for todo in todos:
+        completed_by = db.get(UserProfile, todo.completed_by) if todo.completed_by else None
+        items.append(
+            DemandChecklistItemOut(
+                id=todo.id,
+                title=todo.title,
+                description=None,
+                position=todo.position,
+                required=False,
+                completed=todo.completed,
+                completedByName=completed_by.full_name if completed_by else None,
+                completedAt=todo.completed_at,
+                source="custom",
+            )
+        )
+    items.sort(key=lambda item: (item.position, item.title.casefold()))
     return DemandChecklistOut(
-        stageId=stage.id,
-        stageName=stage.name,
+        stageId=stage.id if stage else None,
+        stageName=stage.name if stage else None,
         completed=sum(item.completed for item in items),
         total=len(items),
         items=items,
@@ -645,6 +687,155 @@ def toggle_demand_checklist_item(
         )
     )
     _audit(db, principal, "DEMAND_CHECKLIST_UPDATED", {"demandId": str(demand.id), "templateItemId": str(template.id), "completed": payload.completed})
+    db.commit()
+    db.refresh(demand)
+    return demand_out(db, demand)
+
+
+@demand_router.post(
+    "/{demand_id}/checklist-items",
+    response_model=DemandOut,
+    dependencies=[Depends(require_csrf)],
+)
+def create_demand_todo_item(
+    demand_id: uuid.UUID,
+    payload: DemandTodoCreate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = _demand(db, principal, demand_id, lock=True)
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    positions = list(
+        db.scalars(
+            select(DemandTodoItem.position).where(
+                DemandTodoItem.demand_id == demand.id,
+                DemandTodoItem.deleted_at.is_(None),
+            )
+        )
+    )
+    todo = DemandTodoItem(
+        organization_id=demand.organization_id,
+        demand_id=demand.id,
+        title=payload.title,
+        position=max(positions, default=0) + 1,
+        created_by=principal.profile.id,
+    )
+    now = utc_now()
+    demand.revision += 1
+    demand.updated_at = now
+    db.add(todo)
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="CHECKLIST_ITEM_CREATED",
+            summary=f"Checklist: {todo.title} adicionado.",
+            payload={"checklistItemId": str(todo.id)},
+        )
+    )
+    _audit(db, principal, "DEMAND_CHECKLIST_ITEM_CREATED", {"demandId": str(demand.id)})
+    db.commit()
+    db.refresh(demand)
+    return demand_out(db, demand)
+
+
+@demand_router.patch(
+    "/{demand_id}/checklist-items/{item_id}",
+    response_model=DemandOut,
+    dependencies=[Depends(require_csrf)],
+)
+def toggle_demand_todo_item(
+    demand_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: ChecklistToggleInput,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = _demand(db, principal, demand_id, lock=True)
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    todo = db.scalar(
+        select(DemandTodoItem)
+        .where(
+            DemandTodoItem.id == item_id,
+            DemandTodoItem.organization_id == demand.organization_id,
+            DemandTodoItem.demand_id == demand.id,
+            DemandTodoItem.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not todo:
+        raise ApiError(404, "checklist_item_not_found", "Item do checklist não encontrado.")
+    now = utc_now()
+    todo.completed = payload.completed
+    todo.completed_by = principal.profile.id if payload.completed else None
+    todo.completed_at = now if payload.completed else None
+    todo.revision += 1
+    todo.updated_at = now
+    demand.revision += 1
+    demand.updated_at = now
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="CHECKLIST_UPDATED",
+            summary=f"Checklist: {todo.title}.",
+            payload={"checklistItemId": str(todo.id), "completed": payload.completed},
+        )
+    )
+    _audit(db, principal, "DEMAND_CHECKLIST_UPDATED", {"demandId": str(demand.id), "checklistItemId": str(todo.id), "completed": payload.completed})
+    db.commit()
+    db.refresh(demand)
+    return demand_out(db, demand)
+
+
+@demand_router.delete(
+    "/{demand_id}/checklist-items/{item_id}",
+    response_model=DemandOut,
+    dependencies=[Depends(require_csrf)],
+)
+def delete_demand_todo_item(
+    demand_id: uuid.UUID,
+    item_id: uuid.UUID,
+    payload: DemandTodoDelete,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = _demand(db, principal, demand_id, lock=True)
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    todo = db.scalar(
+        select(DemandTodoItem)
+        .where(
+            DemandTodoItem.id == item_id,
+            DemandTodoItem.organization_id == demand.organization_id,
+            DemandTodoItem.demand_id == demand.id,
+            DemandTodoItem.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not todo:
+        raise ApiError(404, "checklist_item_not_found", "Item do checklist não encontrado.")
+    now = utc_now()
+    todo.deleted_at = now
+    todo.updated_at = now
+    todo.revision += 1
+    demand.revision += 1
+    demand.updated_at = now
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="CHECKLIST_ITEM_REMOVED",
+            summary=f"Checklist: {todo.title} removido.",
+            payload={"checklistItemId": str(todo.id)},
+        )
+    )
+    _audit(db, principal, "DEMAND_CHECKLIST_ITEM_REMOVED", {"demandId": str(demand.id), "checklistItemId": str(todo.id)})
     db.commit()
     db.refresh(demand)
     return demand_out(db, demand)

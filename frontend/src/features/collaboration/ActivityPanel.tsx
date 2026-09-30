@@ -54,16 +54,21 @@ function activityDate(value: string): string {
   }).format(new Date(value));
 }
 
-export function ActivityPanel({ demandId, canComment }: { demandId: string; canComment: boolean }) {
+export function ActivityPanel({ demandId, canComment, compact = false }: { demandId: string; canComment: boolean; compact?: boolean }) {
   const [activity, setActivity] = useState<ActivityPage | null>(null);
   const [watchers, setWatchers] = useState<Watcher[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<ActivityItem | null>(null);
+  const [mode, setMode] = useState<"comments" | "history">(compact ? "comments" : "history");
 
   const following = useMemo(
     () => watchers?.some((watcher) => watcher.isCurrentUser) ?? false,
     [watchers],
+  );
+  const visibleItems = useMemo(
+    () => activity?.items.filter((item) => mode === "comments" ? item.itemType === "comment" : item.itemType === "event") ?? [],
+    [activity?.items, mode],
   );
 
   async function load() {
@@ -195,7 +200,7 @@ export function ActivityPanel({ demandId, canComment }: { demandId: string; canC
 
   if (!activity || !watchers) {
     return (
-      <section className="panel activity-panel activity-loading">
+      <section className={`${compact ? "overview-block compact-activity" : "panel"} activity-panel activity-loading`}>
         {error ? (
           <div className="feature-preview">
             <span>!</span>
@@ -213,12 +218,12 @@ export function ActivityPanel({ demandId, canComment }: { demandId: string; canC
   }
 
   return (
-    <section className="panel activity-panel">
+    <section className={`${compact ? "overview-block compact-activity" : "panel"} activity-panel`}>
       <header className="activity-head">
         <div>
           <span className="eyebrow dark">Colaboração</span>
-          <h3>Atividade da demanda</h3>
-          <p>Comentários e alterações importantes permanecem no mesmo histórico.</p>
+          <h3>{compact ? "Conversa e histórico" : "Atividade da demanda"}</h3>
+          {!compact && <p>Comentários e alterações importantes permanecem no mesmo histórico.</p>}
         </div>
         <div className="watcher-control">
           <div className="watcher-stack" aria-label={`${watchers.length} acompanhantes`}>
@@ -237,7 +242,12 @@ export function ActivityPanel({ demandId, canComment }: { demandId: string; canC
         </div>
       </header>
 
-      {canComment && (
+      <div className="activity-mode" role="tablist" aria-label="Conteúdo da colaboração">
+        <button className={mode === "comments" ? "active" : ""} onClick={() => setMode("comments")}>Comentários <b>{activity.items.filter((item) => item.itemType === "comment").length}</b></button>
+        <button className={mode === "history" ? "active" : ""} onClick={() => setMode("history")}>Histórico <b>{activity.items.filter((item) => item.itemType === "event").length}</b></button>
+      </div>
+
+      {canComment && mode === "comments" && (
         <form className="comment-composer" onSubmit={submitComment}>
           <textarea
             name="content"
@@ -259,14 +269,14 @@ export function ActivityPanel({ demandId, canComment }: { demandId: string; canC
       {error && <div className="activity-error">{error}</div>}
 
       <div className="activity-feed">
-        {!activity.items.length ? (
+        {!visibleItems.length ? (
           <div className="activity-empty">
             <span>◌</span>
             <strong>Nenhuma atividade registrada</strong>
-            <p>O primeiro comentário ou movimento da demanda aparecerá aqui.</p>
+            <p>{mode === "comments" ? "O primeiro comentário da demanda aparecerá aqui." : "A próxima alteração importante aparecerá aqui."}</p>
           </div>
         ) : (
-          activity.items.map((item) => (
+          visibleItems.map((item) => (
             <article
               className={item.itemType === "comment" ? "activity-item comment-item" : "activity-item event-item"}
               key={`${item.itemType}:${item.id}`}
