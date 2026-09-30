@@ -635,6 +635,10 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .workflow-stage-list button > b { color: #087f76; font-size: .62rem; text-transform: uppercase; }
 .demand-timeline { overflow: hidden; }
 .demand-timeline:not(.compact-timeline) > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 25px; border-bottom: 1px solid #e5ecee; }
+.demand-timeline:not(.compact-timeline) > header > div { display: flex; align-items: center; gap: 11px; }
+.demand-timeline:not(.compact-timeline) > header strong, .demand-timeline:not(.compact-timeline) > header small { display: block; }
+.demand-timeline:not(.compact-timeline) > header strong { color: #29444f; font-size: .82rem; }
+.demand-timeline:not(.compact-timeline) > header small { margin-top: 4px; color: #87989f; font-size: .64rem; }
 .demand-timeline-list { padding: 10px 20px 18px; }
 .demand-timeline-list > button { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%; min-height: 66px; padding: 9px 10px; border: 0; color: #506872; background: transparent; text-align: left; }
 .demand-timeline-list > button:not(:last-child)::after { position: absolute; z-index: 0; top: 45px; bottom: -22px; left: 23px; width: 2px; content: ""; background: #dfe8ea; }
