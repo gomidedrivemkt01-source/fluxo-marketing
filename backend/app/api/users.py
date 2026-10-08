@@ -96,6 +96,34 @@ class PersonalColumnUpdate(BaseModel):
         return " ".join(value.split())
 
 
+class InterfaceThemeColorsUpdate(BaseModel):
+    sidebar: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    background: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    surface: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    text: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    primary: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    accent: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    highlight: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class InterfaceThemeUpdate(BaseModel):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9-]+$")
+    name: str = Field(min_length=2, max_length=40)
+    colors: InterfaceThemeColorsUpdate
+
+    @field_validator("id")
+    @classmethod
+    def prevent_default_override(cls, value: str) -> str:
+        if value == "platform-default":
+            raise ValueError("O tema padrão da plataforma é reservado.")
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return " ".join(value.split())
+
+
 class PreferencesUpdate(BaseModel):
     demand_view: Literal["kanban", "list"] = Field(alias="demandView")
     show_empty_stages: bool = Field(alias="showEmptyStages")
@@ -120,6 +148,16 @@ class PreferencesUpdate(BaseModel):
     )
     personal_placements: dict[str, str] = Field(
         default_factory=dict, alias="personalPlacements", max_length=500
+    )
+    active_theme_id: str = Field(
+        default="platform-default",
+        alias="activeThemeId",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9-]+$",
+    )
+    theme_profiles: list[InterfaceThemeUpdate] = Field(
+        default_factory=list, alias="themeProfiles", max_length=8
     )
 
 
@@ -162,6 +200,8 @@ def profile_out(principal: Principal) -> ProfileOut:
             {"id": "done", "name": "Concluído", "color": "#15803D"},
         ],
         "personalPlacements": {},
+        "activeThemeId": "platform-default",
+        "themeProfiles": [],
     }
     preferences.update(principal.profile.workspace_preferences or {})
     return ProfileOut(
@@ -234,6 +274,14 @@ def update_my_preferences(
     db: Session = Depends(get_db),
 ) -> ProfileOut:
     require_active(principal)
+    theme_ids = [theme.id for theme in payload.theme_profiles]
+    if len(theme_ids) != len(set(theme_ids)):
+        raise ApiError(422, "theme_ids_duplicated", "Há perfis de cores duplicados.")
+    if (
+        payload.active_theme_id != "platform-default"
+        and payload.active_theme_id not in theme_ids
+    ):
+        raise ApiError(422, "active_theme_invalid", "O perfil de cores selecionado é inválido.")
     if payload.stage_order:
         valid_ids = set(
             db.scalars(
@@ -273,6 +321,23 @@ def update_my_preferences(
             for demand_id, column_id in payload.personal_placements.items()
             if column_id in {column.id for column in payload.personal_columns}
         },
+        "activeThemeId": payload.active_theme_id,
+        "themeProfiles": [
+            {
+                "id": theme.id,
+                "name": theme.name,
+                "colors": {
+                    "sidebar": theme.colors.sidebar.upper(),
+                    "background": theme.colors.background.upper(),
+                    "surface": theme.colors.surface.upper(),
+                    "text": theme.colors.text.upper(),
+                    "primary": theme.colors.primary.upper(),
+                    "accent": theme.colors.accent.upper(),
+                    "highlight": theme.colors.highlight.upper(),
+                },
+            }
+            for theme in payload.theme_profiles
+        ],
     }
     profile.updated_at = utc_now()
     db.commit()

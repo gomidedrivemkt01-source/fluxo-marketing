@@ -48,11 +48,53 @@ def test_preferences_accept_focus_views() -> None:
             {"id": "fazendo", "name": "Fazendo", "color": "#2563EB"},
         ],
         personalPlacements={"demand-id": "fazendo"},
+        activeThemeId="tema-azul",
+        themeProfiles=[
+            {
+                "id": "tema-azul",
+                "name": "  Azul executivo  ",
+                "colors": {
+                    "sidebar": "#102A43",
+                    "background": "#F0F4F8",
+                    "surface": "#FFFFFF",
+                    "text": "#102A43",
+                    "primary": "#186FAF",
+                    "accent": "#62B0E8",
+                    "highlight": "#F59E0B",
+                },
+            }
+        ],
     )
     assert preferences.focus_view == "today"
     assert preferences.saved_views[0].name == "Urgentes hoje"
     assert preferences.personal_columns[0].name == "Minha fila"
     assert preferences.personal_placements["demand-id"] == "fazendo"
+    assert preferences.active_theme_id == "tema-azul"
+    assert preferences.theme_profiles[0].name == "Azul executivo"
+
+
+def test_preferences_protect_platform_theme() -> None:
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(
+            demandView="kanban",
+            showEmptyStages=True,
+            activeThemeId="platform-default",
+            themeProfiles=[
+                {
+                    "id": "platform-default",
+                    "name": "Tentativa de alteração",
+                    "colors": {
+                        "sidebar": "#102A43",
+                        "background": "#F0F4F8",
+                        "surface": "#FFFFFF",
+                        "text": "#102A43",
+                        "primary": "#186FAF",
+                        "accent": "#62B0E8",
+                        "highlight": "#F59E0B",
+                    },
+                }
+            ],
+        )
 
 
 def test_preferences_require_at_least_one_personal_column() -> None:
