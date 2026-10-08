@@ -349,6 +349,10 @@ def test_stage_deadlines_are_weighted_and_finish_at_demand_deadline() -> None:
     assert instances[2].deadline_at == deadline
     assert [item.forecast_at for item in instances] == [item.deadline_at for item in instances]
 
+    overdue_deadline = start - timedelta(days=1)
+    rebalance_stage_deadlines(instances, version, overdue_deadline, now=start)
+    assert all(item.deadline_at == overdue_deadline for item in instances)
+
 
 def test_timeline_backfills_missing_deadlines_for_existing_card() -> None:
     principal = _principal()

@@ -459,7 +459,7 @@ def rebalance_stage_deadlines(
         elapsed_weight += weight
         stage_deadline = (
             demand_deadline
-            if index == len(remaining) - 1
+            if available_seconds <= 0 or index == len(remaining) - 1
             else reference + timedelta(seconds=available_seconds * elapsed_weight / total_weight)
         )
         if instance.deadline_at != stage_deadline or instance.forecast_at != stage_deadline:
@@ -1343,7 +1343,7 @@ def get_demand_timeline(
         stage_instances
         and demand.deadline_at
         and any(
-            item.deadline_at is None
+            item.deadline_at is None or item.deadline_at > demand.deadline_at
             for item in stage_instances
             if item.state in {"current", "upcoming"}
         )
