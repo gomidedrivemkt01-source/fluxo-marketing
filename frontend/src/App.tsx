@@ -138,22 +138,35 @@ const roleNames: Record<string, string> = {
   viewer: "Visualizador",
 };
 
-const platformTheme: InterfaceTheme = {
-  id: "platform-default",
-  name: "Padrão Fluxo",
-  colors: {
-    sidebar: "#0A1F2F",
-    background: "#EDF2F4",
-    surface: "#FFFFFF",
-    text: "#0A1F2F",
-    primary: "#087F76",
-    accent: "#37C8B7",
-    highlight: "#EE9B4B",
-  },
-};
+const builtInThemes: InterfaceTheme[] = [
+  { id: "platform-default", name: "Padrão Fluxo", colors: { sidebar: "#0A1F2F", background: "#EDF2F4", surface: "#FFFFFF", text: "#0A1F2F", primary: "#087F76", accent: "#37C8B7", highlight: "#EE9B4B" } },
+  { id: "builtin-ocean", name: "Oceano Executivo", colors: { sidebar: "#071D38", background: "#EAF2F8", surface: "#FFFFFF", text: "#102A43", primary: "#2563EB", accent: "#38BDF8", highlight: "#F59E0B" } },
+  { id: "builtin-forest", name: "Floresta Serena", colors: { sidebar: "#102A23", background: "#EEF5F1", surface: "#FBFEFC", text: "#16352C", primary: "#217A5B", accent: "#62C6A0", highlight: "#D89A3D" } },
+  { id: "builtin-terracotta", name: "Terracota Editorial", colors: { sidebar: "#3A211F", background: "#F8EFEA", surface: "#FFFDFC", text: "#3D2926", primary: "#B9563F", accent: "#E88A6F", highlight: "#D6A33C" } },
+  { id: "builtin-violet", name: "Violeta Noturno", colors: { sidebar: "#12101E", background: "#1B1925", surface: "#272433", text: "#F4F0FA", primary: "#9B7ED9", accent: "#C7A7FF", highlight: "#F0A45D" } },
+  { id: "builtin-graphite", name: "Grafite Minimalista", colors: { sidebar: "#121416", background: "#1C2023", surface: "#272C30", text: "#EEF2F3", primary: "#68C0B3", accent: "#9DD9D0", highlight: "#E6A35C" } },
+];
+const platformTheme = builtInThemes[0]!;
+
+function contrastColor(hex: string): string {
+  const value = hex.replace("#", "");
+  const channels = [0, 2, 4].map((index) => {
+    const channel = Number.parseInt(value.slice(index, index + 2), 16) / 255;
+    return channel <= .03928 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+  });
+  const luminance = channels[0]! * .2126 + channels[1]! * .7152 + channels[2]! * .0722;
+  const darkLuminance = .012;
+  return 1.05 / (luminance + .05) >= (luminance + .05) / (darkLuminance + .05) ? "#FFFFFF" : "#10202A";
+}
+
+function selectedTheme(preferences: ViewPreferences | undefined): InterfaceTheme {
+  return builtInThemes.find((theme) => theme.id === preferences?.activeThemeId)
+    ?? preferences?.themeProfiles.find((theme) => theme.id === preferences.activeThemeId)
+    ?? platformTheme;
+}
 
 function themeStyle(preferences: ViewPreferences | undefined): CSSProperties {
-  const selected = preferences?.themeProfiles.find((theme) => theme.id === preferences.activeThemeId) ?? platformTheme;
+  const selected = selectedTheme(preferences);
   return {
     "--sidebar": selected.colors.sidebar,
     "--app-bg": selected.colors.background,
@@ -163,6 +176,17 @@ function themeStyle(preferences: ViewPreferences | undefined): CSSProperties {
     "--teal-dark": selected.colors.primary,
     "--teal": selected.colors.accent,
     "--orange": selected.colors.highlight,
+    "--line": `color-mix(in srgb, ${selected.colors.text} 15%, ${selected.colors.surface})`,
+    "--line-strong": `color-mix(in srgb, ${selected.colors.text} 25%, ${selected.colors.surface})`,
+    "--muted": `color-mix(in srgb, ${selected.colors.text} 62%, ${selected.colors.surface})`,
+    "--subtle": `color-mix(in srgb, ${selected.colors.text} 44%, ${selected.colors.surface})`,
+    "--surface-soft": `color-mix(in srgb, ${selected.colors.surface} 88%, ${selected.colors.background})`,
+    "--surface-muted": `color-mix(in srgb, ${selected.colors.surface} 72%, ${selected.colors.background})`,
+    "--surface-hover": `color-mix(in srgb, ${selected.colors.accent} 10%, ${selected.colors.surface})`,
+    "--on-primary": contrastColor(selected.colors.primary),
+    "--on-sidebar": contrastColor(selected.colors.sidebar),
+    "--sidebar-muted": `color-mix(in srgb, ${contrastColor(selected.colors.sidebar)} 62%, ${selected.colors.sidebar})`,
+    "--shadow-color": `color-mix(in srgb, ${selected.colors.text} 18%, transparent)`,
   } as CSSProperties;
 }
 
@@ -581,10 +605,10 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   function startTimer(demandId: string) { window.dispatchEvent(new CustomEvent("fluxo:timer-start-request", { detail: { demandId } })); }
   const flatList = <div className="flat-demand-list">{visible.map((demand) => <button key={demand.id} onClick={() => onOpen(demand)}><span className="demand-id">{demand.publicId}</span><strong>{demand.title}</strong><span>{demand.assigneeName ?? "Sem responsável"}</span><span>{demand.stageName ?? "Sem etapa"}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span></button>)}</div>;
   return <section className="work-control">
-    {mine && <div className="focus-dashboard"><div className="focus-tabs" role="group" aria-label="Foco do meu trabalho">{focusOptions.map((item) => <button key={item.id} className={preferences.focusView === item.id ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, focusView: item.id })}><span><img src={item.icon} alt="" aria-hidden="true" /></span><strong>{item.label}</strong><b>{counts?.[item.id] ?? 0}</b></button>)}</div>{canEdit && <form className="quick-add" onSubmit={quickCreate}><div><span>Captura rápida</span><strong>Adicionar ao meu trabalho</strong></div><input name="title" minLength={2} maxLength={300} placeholder="Digite o título da nova demanda" required /><select name="schedule"><option value="none">Sem prazo</option><option value="today">Hoje · 17h</option><option value="tomorrow">Amanhã · 17h</option></select><button disabled={quickBusy}>{quickBusy ? "Criando…" : "+ Adicionar"}</button></form>}{quickError && <div className="quick-error"><Notice>{quickError}</Notice></div>}</div>}
+    {mine && <div className="focus-dashboard"><div className="focus-tabs" role="group" aria-label="Foco do meu trabalho">{focusOptions.map((item) => <button key={item.id} className={preferences.focusView === item.id ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, focusView: item.id })}><span><ThemeIcon src={item.icon} className="focus-icon" /></span><strong>{item.label}</strong><b>{counts?.[item.id] ?? 0}</b></button>)}</div>{canEdit && <form className="quick-add" onSubmit={quickCreate}><div><span>Captura rápida</span><strong>Adicionar ao meu trabalho</strong></div><input name="title" minLength={2} maxLength={300} placeholder="Digite o título da nova demanda" required /><select name="schedule"><option value="none">Sem prazo</option><option value="today">Hoje · 17h</option><option value="tomorrow">Amanhã · 17h</option></select><button disabled={quickBusy}>{quickBusy ? "Criando…" : "+ Adicionar"}</button></form>}{quickError && <div className="quick-error"><Notice>{quickError}</Notice></div>}</div>}
     <div className="work-filterbar"><label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar demanda, código, empresa ou pessoa" /></label><label><span>Empresa</span><select value={company} onChange={(event) => setCompany(event.target.value)}><option value="ALL">Todas</option>{companies.map((item) => <option value={item.id} key={item.id}>{item.shortName}</option>)}</select></label>{!mine && <details className="assignee-filter"><summary><span>Responsáveis</span><strong>{assignees.length ? `${assignees.length} selecionado(s)` : "Todos"}</strong></summary><div><button onClick={() => setAssignees([])}>Limpar seleção</button>{people.map((person) => <label key={person.id}><input type="checkbox" checked={assignees.includes(person.id)} onChange={() => toggleAssignee(person.id)} /><span>{person.name}</span></label>)}</div></details>}<label><span>Situação</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">Todas</option>{Object.entries(statusNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Prioridade</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">Todas</option>{Object.entries(priorityNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>
     {mine && <div className="saved-views"><div><strong>Visões salvas</strong><small>Filtros pessoais sincronizados</small></div><div className="saved-view-list">{preferences.savedViews.map((view) => <span className={`saved-view-chip ${activeSavedId === view.id ? "active" : ""}`} key={view.id}><button onClick={() => applySavedView(view)}>{view.name}</button><button onClick={() => removeSavedView(view.id)}>×</button></span>)}</div><div className="saved-view-actions"><button onClick={clearFilters}>Limpar</button><button onClick={() => setShowSaveView(true)}>+ Salvar filtros</button></div></div>}
-    <div className="work-viewbar"><div><strong>{personalMode ? `Área de trabalho · ${boardOwner?.name ?? "carregando"}` : "Controle de demandas"}</strong><span>{visible.length} {visible.length === 1 ? "demanda" : "demandas"}</span></div><div className="view-switch" role="group" aria-label="Formato de visualização"><button className={preferences.demandView === "list" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "list" })}><img src={listViewIcon} alt="" aria-hidden="true" />Lista</button><button className={preferences.demandView === "kanban" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "kanban" })}><img src={kanbanViewIcon} alt="" aria-hidden="true" />Kanban</button><button onClick={onCalendar}><img src={calendarIcon} alt="" aria-hidden="true" />Calendário</button></div>{mine ? <button className="personal-columns-button" onClick={() => setShowColumns(true)}>⚙ Minhas colunas</button> : assignees.length > 1 ? <span className="multi-user-note">Lista conjunta sem colunas pessoais</span> : <label className="empty-toggle"><input type="checkbox" checked={preferences.showEmptyStages} onChange={(event) => onPreferenceChange({ ...preferences, showEmptyStages: event.target.checked })} /> Exibir vazias</label>}</div>
+    <div className="work-viewbar"><div><strong>{personalMode ? `Área de trabalho · ${boardOwner?.name ?? "carregando"}` : "Controle de demandas"}</strong><span>{visible.length} {visible.length === 1 ? "demanda" : "demandas"}</span></div><div className="view-switch" role="group" aria-label="Formato de visualização"><button className={preferences.demandView === "list" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "list" })}><ThemeIcon src={listViewIcon} className="view-icon" />Lista</button><button className={preferences.demandView === "kanban" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "kanban" })}><ThemeIcon src={kanbanViewIcon} className="view-icon" />Kanban</button><button onClick={onCalendar}><ThemeIcon src={calendarIcon} className="view-icon" />Calendário</button></div>{mine ? <button className="personal-columns-button" onClick={() => setShowColumns(true)}>⚙ Minhas colunas</button> : assignees.length > 1 ? <span className="multi-user-note">Lista conjunta sem colunas pessoais</span> : <label className="empty-toggle"><input type="checkbox" checked={preferences.showEmptyStages} onChange={(event) => onPreferenceChange({ ...preferences, showEmptyStages: event.target.checked })} /> Exibir vazias</label>}</div>
     {personalMode ? <div className="scope-note"><strong>Organização pessoal</strong><span>{mine ? "Mova os cards entre suas colunas sem alterar o workflow compartilhado." : "Você está vendo as colunas configuradas pelo responsável selecionado."}</span></div> : assignees.length > 1 ? <div className="scope-note"><strong>Visão combinada</strong><span>Ao selecionar mais de uma pessoa, as demandas aparecem em uma lista única para não misturar organizações pessoais.</span></div> : <div className="stage-strip">{orderedStages.map((stage) => <span key={stage.id}><i style={{ background: stage.color }} />{stage.name}<b>{countFor(stage.id)}</b></span>)}</div>}
     {!visible.length ? <div className="empty-state"><span>⌕</span><h3>Nenhuma demanda encontrada</h3><p>Ajuste os filtros ou atribua uma demanda a este usuário.</p></div> : assignees.length > 1 ? flatList : personalMode ? preferences.demandView === "kanban" ? <div className="kanban-board personal-kanban">{personalColumns.map((column) => { const items = visible.filter((demand) => (placements[demand.id] ?? personalColumns[0]?.id) === column.id); const animated = `${dragTargetId === column.id ? " drag-over" : ""}${droppedColumnId === column.id ? " drop-complete" : ""}`; return <section className={`kanban-column${animated}`} key={column.id} onDragEnter={() => { if (mine && draggedDemandId) setDragTargetId(column.id); }} onDragOver={(event) => { if (mine) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => dropPersonal(event, column.id)}><header><span><i style={{ background: column.color }} />{column.name}</span><b>{items.length}</b></header><div>{items.map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={mine} canTrack={canEdit} dragging={draggedDemandId === demand.id} onDragStart={(event) => beginDrag(event, demand.id)} onDragEnd={finishDrag} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}{!items.length && <p className="column-empty">{mine ? "Solte uma demanda aqui" : "Coluna vazia"}</p>}</div></section>; })}</div> : <div className="grouped-list personal-list">{personalColumns.map((column) => { const items = visible.filter((demand) => (placements[demand.id] ?? personalColumns[0]?.id) === column.id); return <section key={column.id}><header><span><i style={{ background: column.color }} />{column.name}</span><b>{items.length}</b></header>{items.map((demand) => <button key={demand.id} onClick={() => onOpen(demand)}><span className="demand-id">{demand.publicId}</span><strong>{demand.title}</strong><span>{demand.companyName ?? "Sem empresa"}</span><span>{demand.stageName ?? "Sem etapa"}</span><span>{dateLabel(demand.deadlineAt)}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span></button>)}</section>; })}</div> : preferences.demandView === "kanban" ? <div className="kanban-board">{shownStages.map((stage) => { const items = visible.filter((demand) => demand.stageId === stage.id); const animated = `${dragTargetId === stage.id ? " drag-over" : ""}${droppedColumnId === stage.id ? " drop-complete" : ""}`; return <section className={`kanban-column${animated}`} key={stage.id} onDragEnter={() => { if (canEdit && draggedDemandId) setDragTargetId(stage.id); }} onDragOver={(event) => { if (canEdit) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => canEdit && dropStage(event, stage.id)}><header><span><i style={{ background: stage.color }} />{stage.name}</span><b>{items.length}</b></header><div>{items.map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={canEdit} canTrack={canEdit} dragging={draggedDemandId === demand.id} onDragStart={(event) => beginDrag(event, demand.id)} onDragEnd={finishDrag} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}</div></section>; })}</div> : flatList}
     {showSaveView && <SaveViewModal filters={currentFilters} onClose={() => setShowSaveView(false)} onSave={saveCurrentView} />}{showColumns && <PersonalColumnsModal preferences={preferences} onClose={() => setShowColumns(false)} onSave={onPreferenceChange} />}
@@ -597,8 +621,12 @@ function toInputDate(value: string | null): string {
   return local.toISOString().slice(0, 16);
 }
 
+function ThemeIcon({ src, className }: { src: string; className: string }) {
+  return <span className={className} style={{ "--icon-source": `url("${src}")` } as CSSProperties} aria-hidden="true" />;
+}
+
 function NavIcon({ src }: { src: string }) {
-  return <img className="nav-icon" src={src} alt="" aria-hidden="true" />;
+  return <ThemeIcon src={src} className="nav-icon" />;
 }
 
 function SaveViewModal({ filters, onClose, onSave }: { filters: SavedViewFilters; onClose: () => void; onSave: (name: string) => void }) {
@@ -784,30 +812,62 @@ const interfaceColorFields: { key: keyof InterfaceColors; label: string; descrip
 ];
 
 function InterfaceThemeModal({ preferences, onClose, onSave }: { preferences: ViewPreferences; onClose: () => void; onSave: (preferences: ViewPreferences) => Promise<void> }) {
-  const selected = preferences.themeProfiles.find((theme) => theme.id === preferences.activeThemeId) ?? platformTheme;
-  const [creating, setCreating] = useState(false);
+  const selected = selectedTheme(preferences);
+  const [editing, setEditing] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [colors, setColors] = useState<InterfaceColors>({ ...selected.colors });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const themes = [platformTheme, ...preferences.themeProfiles];
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const themes = [...builtInThemes, ...preferences.themeProfiles];
+  function openEditor(theme: InterfaceTheme, editExisting = false) {
+    if (!editExisting && preferences.themeProfiles.length >= 8) { setError("Você pode manter até 8 perfis de cores personalizados."); return; }
+    setEditingId(editExisting ? theme.id : null);
+    setName(editExisting ? theme.name : `${theme.name} personalizado`);
+    setColors({ ...theme.colors });
+    setError(""); setEditing(true);
+  }
   async function activate(themeId: string) {
     setBusy(true); setError("");
     try { await onSave({ ...preferences, activeThemeId: themeId }); onClose(); }
     catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
-  async function create(event: FormEvent<HTMLFormElement>) {
+  async function saveEditor(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError("");
     const cleanName = name.trim();
-    if (cleanName.length < 2) { setError("Informe um nome para o novo perfil."); return; }
-    if (preferences.themeProfiles.length >= 8) { setError("Você pode manter até 8 perfis de cores personalizados."); return; }
-    if (themes.some((theme) => theme.name.toLocaleLowerCase("pt-BR") === cleanName.toLocaleLowerCase("pt-BR"))) { setError("Já existe um perfil com esse nome."); return; }
-    const theme: InterfaceTheme = { id: crypto.randomUUID(), name: cleanName, colors };
+    if (cleanName.length < 2) { setError("Informe um nome para o perfil."); return; }
+    if (!editingId && preferences.themeProfiles.length >= 8) { setError("Você pode manter até 8 perfis de cores personalizados."); return; }
+    if (themes.some((theme) => theme.id !== editingId && theme.name.toLocaleLowerCase("pt-BR") === cleanName.toLocaleLowerCase("pt-BR"))) { setError("Já existe um perfil com esse nome."); return; }
+    const theme: InterfaceTheme = { id: editingId ?? crypto.randomUUID(), name: cleanName, colors };
+    const themeProfiles = editingId
+      ? preferences.themeProfiles.map((item) => item.id === editingId ? theme : item)
+      : [...preferences.themeProfiles, theme];
     setBusy(true);
-    try { await onSave({ ...preferences, activeThemeId: theme.id, themeProfiles: [...preferences.themeProfiles, theme] }); onClose(); }
+    try { await onSave({ ...preferences, activeThemeId: theme.id, themeProfiles }); onClose(); }
     catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
-  return <div className="modal-backdrop theme-backdrop" role="presentation"><section className="form-modal theme-modal" role="dialog" aria-modal="true" aria-labelledby="theme-modal-title"><header className="modal-head"><div><span className="eyebrow dark">Preferência individual</span><h2 id="theme-modal-title">Editar interface</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header>{error && <div className="theme-error"><Notice>{error}</Notice></div>}{creating ? <form className="theme-create" onSubmit={create}><div className="theme-create-head"><div><strong>Novo perfil de cores</strong><span>Escolha o destino e a cor de cada elemento.</span></div><button type="button" className="link-button" onClick={() => setCreating(false)}>Voltar aos perfis</button></div><label className="field"><span>Nome do perfil</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={40} placeholder="Ex.: Azul executivo" autoFocus required /></label><div className="theme-color-grid">{interfaceColorFields.map((field) => <label className="theme-color-field" key={field.key}><input type="color" value={colors[field.key]} onChange={(event) => setColors((current) => ({ ...current, [field.key]: event.target.value.toUpperCase() }))} aria-label={field.label} /><span><strong>{field.label}</strong><small>{field.description}</small></span><code>{colors[field.key].toUpperCase()}</code></label>)}</div><footer className="form-actions"><button className="secondary compact" type="button" onClick={onClose}>Cancelar</button><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar e aplicar perfil"}</button></footer></form> : <div className="theme-library"><div className="theme-library-intro"><div><strong>Perfis de interface</strong><span>O padrão da plataforma permanece sempre disponível e não pode ser alterado.</span></div><button className="small-button" onClick={() => { setColors({ ...selected.colors }); setCreating(true); }}>+ Novo perfil</button></div><div className="theme-profile-list">{themes.map((theme) => { const active = theme.id === preferences.activeThemeId || (theme.id === platformTheme.id && !themes.some((item) => item.id === preferences.activeThemeId)); return <article className={active ? "active" : ""} key={theme.id}><div className="theme-swatches" aria-hidden="true">{Object.values(theme.colors).slice(0, 6).map((color, index) => <i key={`${color}-${index}`} style={{ background: color }} />)}</div><div><strong>{theme.name}</strong><span>{theme.id === platformTheme.id ? "Padrão fixo da plataforma" : "Perfil personalizado salvo"}</span></div>{active ? <b>Em uso</b> : <button disabled={busy} onClick={() => void activate(theme.id)}>Usar</button>}</article>; })}</div></div>}</section></div>;
+  async function remove(themeId: string) {
+    setBusy(true); setError("");
+    try {
+      await onSave({ ...preferences, activeThemeId: platformTheme.id, themeProfiles: preferences.themeProfiles.filter((theme) => theme.id !== themeId) });
+      setConfirmDeleteId(null);
+    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  function themeRow(theme: InterfaceTheme, fixed: boolean) {
+    const active = selected.id === theme.id;
+    return <article className={active ? "active" : ""} key={theme.id}>
+      <div className="theme-swatches" aria-hidden="true">{Object.values(theme.colors).map((color, index) => <i key={`${color}-${index}`} style={{ background: color }} />)}</div>
+      <div><strong>{theme.name}</strong><span>{fixed ? "Paleta fixa da plataforma" : "Modelo personalizado editável"}</span></div>
+      <div className="theme-profile-actions">
+        {active ? <b>Em uso</b> : <button disabled={busy} onClick={() => void activate(theme.id)}>Usar</button>}
+        <button disabled={busy} onClick={() => openEditor(theme)}>Duplicar</button>
+        {!fixed && <button disabled={busy} onClick={() => openEditor(theme, true)}>Editar</button>}
+        {!fixed && <button className="theme-delete" disabled={busy} onClick={() => confirmDeleteId === theme.id ? void remove(theme.id) : setConfirmDeleteId(theme.id)}>{confirmDeleteId === theme.id ? "Confirmar exclusão" : "Excluir"}</button>}
+      </div>
+    </article>;
+  }
+  return <div className="modal-backdrop theme-backdrop" role="presentation"><section className="form-modal theme-modal" role="dialog" aria-modal="true" aria-labelledby="theme-modal-title"><header className="modal-head"><div><span className="eyebrow dark">Preferência individual</span><h2 id="theme-modal-title">Editar interface</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header>{error && <div className="theme-error"><Notice>{error}</Notice></div>}{editing ? <form className="theme-create" onSubmit={saveEditor}><div className="theme-create-head"><div><strong>{editingId ? "Editar perfil personalizado" : "Novo perfil personalizado"}</strong><span>A paleta gera automaticamente superfícies, campos, bordas e contrastes da interface.</span></div><button type="button" className="link-button" onClick={() => { setEditing(false); setEditingId(null); setError(""); }}>Voltar aos perfis</button></div><label className="field"><span>Nome do perfil</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={40} placeholder="Ex.: Azul executivo" autoFocus required /></label><div className="theme-color-grid">{interfaceColorFields.map((field) => <label className="theme-color-field" key={field.key}><input type="color" value={colors[field.key]} onChange={(event) => setColors((current) => ({ ...current, [field.key]: event.target.value.toUpperCase() }))} aria-label={field.label} /><span><strong>{field.label}</strong><small>{field.description}</small></span><code>{colors[field.key].toUpperCase()}</code></label>)}</div><footer className="form-actions"><button className="secondary compact" type="button" onClick={() => setEditing(false)}>Cancelar</button><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : editingId ? "Salvar alterações" : "Salvar e aplicar perfil"}</button></footer></form> : <div className="theme-library"><div className="theme-library-intro"><div><strong>Paletas da plataforma</strong><span>Seis estilos prontos e protegidos. Use diretamente ou duplique para personalizar.</span></div><button className="small-button" onClick={() => openEditor(selected)}>+ Novo perfil</button></div><section className="theme-library-section"><header><strong>Estilos prontos</strong><span>{builtInThemes.length}</span></header><div className="theme-profile-list">{builtInThemes.map((theme) => themeRow(theme, true))}</div></section><section className="theme-library-section custom"><header><div><strong>Meus perfis</strong><small>Até 8 modelos personalizados</small></div><span>{preferences.themeProfiles.length}</span></header>{preferences.themeProfiles.length ? <div className="theme-profile-list">{preferences.themeProfiles.map((theme) => themeRow(theme, false))}</div> : <div className="theme-library-empty"><strong>Nenhum perfil personalizado</strong><span>Duplique uma paleta pronta ou crie um perfil baseado no tema atual.</span></div>}</section></div>}</section></div>;
 }
 
 function ProfilePage({ profile, session, onUpdated }: { profile: Profile | null; session: Session; onUpdated: (profile: Profile) => void }) {
