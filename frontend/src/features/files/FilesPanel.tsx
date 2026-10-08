@@ -62,8 +62,9 @@ function fileIcon(contentType: string): string {
   return "DOC";
 }
 
-export function FilesPanel({ demandId, canManage }: { demandId: string; canManage: boolean }) {
+export function FilesPanel({ demandId, canManage, compact = false }: { demandId: string; canManage: boolean; compact?: boolean }) {
   const [files, setFiles] = useState<DemandFile[] | null>(null);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
   const [selectedName, setSelectedName] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -72,7 +73,16 @@ export function FilesPanel({ demandId, canManage }: { demandId: string; canManag
   async function load() {
     setError("");
     try {
-      setFiles(await api<DemandFile[]>(`/demands/${demandId}/files`));
+      const loaded = await api<DemandFile[]>(`/demands/${demandId}/files`);
+      setFiles(loaded);
+      const imageFiles = loaded.filter((item) => item.contentType.startsWith("image/")).slice(0, 8);
+      const signed = await Promise.all(imageFiles.map(async (item) => {
+        try {
+          const result = await api<SignedFile>(`/demands/${demandId}/files/${item.id}/download`, { method: "POST" });
+          return [item.id, result.url] as const;
+        } catch { return null; }
+      }));
+      setPreviews(Object.fromEntries(signed.filter((item): item is readonly [string, string] => item !== null)));
     } catch (caught) {
       setError(messageFrom(caught));
     }
@@ -102,6 +112,10 @@ export function FilesPanel({ demandId, canManage }: { demandId: string; canManag
         body,
       });
       setFiles((current) => [created, ...(current ?? [])]);
+      if (created.contentType.startsWith("image/")) {
+        const signed = await api<SignedFile>(`/demands/${demandId}/files/${created.id}/download`, { method: "POST" });
+        setPreviews((current) => ({ ...current, [created.id]: signed.url }));
+      }
       form.reset();
       setSelectedName("");
     } catch (caught) {
@@ -142,6 +156,7 @@ export function FilesPanel({ demandId, canManage }: { demandId: string; canManag
         body: JSON.stringify({ expectedRevision: item.revision }),
       });
       setFiles((current) => current?.filter((file) => file.id !== item.id) ?? []);
+      setPreviews((current) => { const next = { ...current }; delete next[item.id]; return next; });
     } catch (caught) {
       setError(messageFrom(caught));
       await load();
@@ -165,6 +180,16 @@ export function FilesPanel({ demandId, canManage }: { demandId: string; canManag
         ) : (
           <span className="loader" aria-label="Carregando arquivos" />
         )}
+      </section>
+    );
+  }
+
+  if (compact) {
+    return (
+      <section className="inline-files">
+        <header><div><strong>Arquivos e mídias</strong><span>{files.length ? `${files.length} anexado${files.length === 1 ? "" : "s"}` : "Nenhum anexo"}</span></div>{canManage && <form onSubmit={upload}><label className="inline-file-add"><input ref={inputRef} type="file" accept={acceptedTypes} disabled={busy === "upload"} onChange={chooseFile} required /><span>＋</span>{selectedName || "Anexar"}</label>{selectedName && <button disabled={busy === "upload"}>{busy === "upload" ? "Enviando…" : "Enviar"}</button>}</form>}</header>
+        {error && <div className="activity-error">{error}</div>}
+        {files.length > 0 && <div className="inline-file-grid">{files.slice(0, 8).map((item) => <button type="button" key={item.id} onClick={() => void download(item)} title={`Baixar ${item.name}`}><span>{previews[item.id] ? <img src={previews[item.id]} alt="" /> : fileIcon(item.contentType)}</span><small>{item.name}</small></button>)}</div>}
       </section>
     );
   }

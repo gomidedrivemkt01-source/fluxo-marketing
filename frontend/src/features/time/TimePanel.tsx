@@ -78,7 +78,6 @@ export function TimePanel({
 }: TimePanelProps) {
   const [summary, setSummary] = useState<TimeSummary | null>(null);
   const [estimate, setEstimate] = useState("");
-  const [timerNote, setTimerNote] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -102,6 +101,12 @@ export function TimePanel({
     setSummary(null);
     setEditingId("");
     void load();
+  }, [demandId]);
+
+  useEffect(() => {
+    const listener = () => void load();
+    window.addEventListener("fluxo:timer-changed", listener);
+    return () => window.removeEventListener("fluxo:timer-changed", listener);
   }, [demandId]);
 
   useEffect(() => {
@@ -132,64 +137,6 @@ export function TimePanel({
       });
       onEstimateSaved(updated.expectedEffortMinutes, updated.demandRevision);
       setSuccess("Esforço previsto atualizado.");
-      await load();
-    } catch (caught) {
-      setError(messageFrom(caught));
-      await load();
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function startTimer() {
-    setBusy("timer");
-    setError("");
-    setSuccess("");
-    try {
-      await api(`/demands/${demandId}/time/timer/start`, {
-        method: "POST",
-        body: JSON.stringify({ note: timerNote.trim() || null }),
-      });
-      setTimerNote("");
-      setNow(Date.now());
-      await load();
-    } catch (caught) {
-      setError(messageFrom(caught));
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function stopTimer() {
-    if (!summary?.activeTimer) return;
-    setBusy("timer");
-    setError("");
-    setSuccess("");
-    try {
-      await api(`/demands/${demandId}/time/timer/stop`, {
-        method: "POST",
-        body: JSON.stringify({ expectedRevision: summary.activeTimer.revision }),
-      });
-      setSuccess("Timer encerrado e tempo registrado.");
-      await load();
-    } catch (caught) {
-      setError(messageFrom(caught));
-      await load();
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function changeTimer(action: "pause" | "resume") {
-    if (!summary?.activeTimer) return;
-    setBusy("timer"); setError(""); setSuccess("");
-    try {
-      await api(`/demands/${demandId}/time/timer/${action}`, {
-        method: "POST",
-        body: JSON.stringify({ expectedRevision: summary.activeTimer.revision }),
-      });
-      setSuccess(action === "pause" ? "Timer pausado." : "Timer retomado.");
-      setNow(Date.now());
       await load();
     } catch (caught) {
       setError(messageFrom(caught));
@@ -342,39 +289,14 @@ export function TimePanel({
       )}
 
       <div className="time-controls">
-        <section className="timer-card">
+        <section className="timer-card timer-global-note">
           <div>
-            <span className="eyebrow dark">Cronômetro</span>
-            <h4>{summary.activeTimer ? (summary.activeTimer.state === "PAUSED" ? "Timer pausado" : "Timer em andamento") : "Iniciar trabalho"}</h4>
+            <span className="eyebrow dark">Cronômetro global</span>
+            <h4>Controle sempre acessível</h4>
           </div>
-          {summary.activeTimer ? (
-            <>
-              <strong className="timer-clock">{summary.activeTimer.state === "PAUSED" ? durationLabel(summary.activeTimer.durationMinutes) : runningLabel(summary.activeTimer.startedAt, now, summary.activeTimer.durationMinutes ?? 0)}</strong>
-              <p>{summary.activeTimer.note || "Sem observação"}</p>
-              <div className="timer-action-row"><button className="timer-pause" disabled={busy === "timer"} onClick={() => void changeTimer(summary.activeTimer?.state === "PAUSED" ? "resume" : "pause")}>{summary.activeTimer.state === "PAUSED" ? "▶ Continuar" : "Ⅱ Pausar"}</button><button className="timer-stop" disabled={busy === "timer"} onClick={() => void stopTimer()}>✓ {busy === "timer" ? "Salvando…" : "Concluir"}</button></div>
-            </>
-          ) : (
-            <>
-              <label className="field">
-                <span>Observação opcional</span>
-                <input
-                  value={timerNote}
-                  maxLength={1000}
-                  placeholder="Ex.: criação do roteiro"
-                  disabled={!canTrack || busy === "timer"}
-                  onChange={(event) => setTimerNote(event.target.value)}
-                />
-              </label>
-              <button
-                className="timer-start"
-                disabled={!canTrack || busy === "timer"}
-                onClick={() => void startTimer()}
-              >
-                ▶ {busy === "timer" ? "Iniciando…" : "Iniciar timer"}
-              </button>
-              <small>Você pode manter apenas um timer ativo em toda a plataforma.</small>
-            </>
-          )}
+          <span className="timer-global-illustration">◷</span>
+          <p>Use o balão fixo no canto inferior direito para iniciar, pausar, continuar ou concluir o tempo. Ele permanece visível ao trocar de página.</p>
+          {summary.activeTimer && <strong className="timer-clock">{summary.activeTimer.state === "PAUSED" ? durationLabel(summary.activeTimer.durationMinutes) : runningLabel(summary.activeTimer.startedAt, now, summary.activeTimer.durationMinutes ?? 0)}</strong>}
         </section>
 
         <form className="manual-time-form" onSubmit={createManual}>

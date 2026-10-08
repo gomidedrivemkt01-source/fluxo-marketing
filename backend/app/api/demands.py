@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models import (
     AuditEvent,
     ChecklistTemplateItem,
+    Comment,
     Company,
     Demand,
     DemandCategory,
@@ -105,6 +106,7 @@ class DemandStageUpdate(BaseModel):
 class DemandWorkflowAction(BaseModel):
     action: str = Field(pattern=r"^(advance|return|skip)$")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
+    comment: str | None = Field(default=None, min_length=3, max_length=2000)
 
 
 class DemandStageScheduleUpdate(BaseModel):
@@ -137,6 +139,7 @@ class DemandTimelineStageOut(BaseModel):
     expected_duration_hours: int | None = Field(alias="expectedDurationHours")
     assignee_id: uuid.UUID | None = Field(alias="assigneeId")
     assignee_name: str | None = Field(alias="assigneeName")
+    assignee_avatar_url: str | None = Field(alias="assigneeAvatarUrl")
 
 
 class DemandTimelineOut(BaseModel):
@@ -342,7 +345,8 @@ def create_demand_record(
         )
     db.add(demand)
     db.flush()
-    ensure_demand_stage_instances(db, demand, workflow_version)
+    instances = ensure_demand_stage_instances(db, demand, workflow_version)
+    rebalance_stage_deadlines(instances, workflow_version, demand.deadline_at, now=demand.created_at)
     return demand
 
 
@@ -426,6 +430,43 @@ def ensure_demand_stage_instances(
         created.append(instance)
     db.flush()
     return created
+
+
+def rebalance_stage_deadlines(
+    instances: list[DemandStageInstance],
+    version: WorkflowVersion,
+    demand_deadline: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Distribui o tempo restante proporcionalmente ao esforço padrão das etapas abertas."""
+    if demand_deadline is None:
+        return
+    reference = now or utc_now()
+    remaining = [item for item in instances if item.state in {"current", "upcoming"}]
+    if not remaining:
+        return
+    snapshots = {str(item.get("id")): item for item in sorted_version_stages(version)}
+    weights = [
+        max(1, int(snapshots.get(str(item.workflow_stage_id), {}).get("expectedDurationHours") or 1))
+        for item in remaining
+    ]
+    total_weight = sum(weights)
+    available_seconds = max(0.0, (demand_deadline - reference).total_seconds())
+    elapsed_weight = 0
+    changed_at = utc_now()
+    for index, (instance, weight) in enumerate(zip(remaining, weights, strict=True)):
+        elapsed_weight += weight
+        stage_deadline = (
+            demand_deadline
+            if index == len(remaining) - 1
+            else reference + timedelta(seconds=available_seconds * elapsed_weight / total_weight)
+        )
+        if instance.deadline_at != stage_deadline or instance.forecast_at != stage_deadline:
+            instance.deadline_at = stage_deadline
+            instance.forecast_at = stage_deadline
+            instance.revision += 1
+            instance.updated_at = changed_at
 
 
 def stage_risk(instance: DemandStageInstance, now: datetime | None = None) -> str:
@@ -850,6 +891,7 @@ def update_demand(
             )
             target_instance.assignee_id = demand.current_assignee_id
             target_instance.forecast_at = demand.forecast_at
+        rebalance_stage_deadlines(stage_instances, target_version, demand.deadline_at)
     demand.revision += 1
     demand.updated_at = utc_now()
     db.add(
@@ -1095,6 +1137,13 @@ def apply_workflow_action(
     )
     if current_index < 0:
         raise ApiError(409, "current_stage_missing", "A etapa atual não está no plano da demanda.")
+    return_comment = (payload.comment or "").strip()
+    if payload.action == "return" and len(return_comment) < 3:
+        raise ApiError(
+            422,
+            "return_comment_required",
+            "Explique o motivo do retorno para orientar a pessoa responsável pela etapa anterior.",
+        )
     validate_stage_handoff(
         db,
         demand,
@@ -1137,6 +1186,15 @@ def apply_workflow_action(
         target_name = str(target_snapshot.get("name", "nova etapa")) if target_snapshot else "nova etapa"
         event_kind = f"WORKFLOW_{payload.action.upper()}"
         summary = f"Demanda {action_labels[payload.action]} para {target_name}."
+        if payload.action == "return":
+            db.add(
+                Comment(
+                    demand_id=demand.id,
+                    author_id=principal.profile.id,
+                    content=f"↩ Retorno para {target_name}: {return_comment}",
+                )
+            )
+    rebalance_stage_deadlines(instances, version, demand.deadline_at, now=now)
     demand.revision += 1
     demand.updated_at = now
     event_payload: dict[str, object] = {
@@ -1144,6 +1202,7 @@ def apply_workflow_action(
         "fromStageId": str(current.workflow_stage_id),
         "toStageId": str(target.workflow_stage_id) if target else None,
         "workflowVersion": version.version,
+        "comment": return_comment if payload.action == "return" else None,
     }
     db.add(
         DemandUpdate(
@@ -1307,6 +1366,11 @@ def get_demand_timeline(
                     ),
                     assigneeId=instance.assignee_id,
                     assigneeName=assignee.full_name if assignee else None,
+                    assigneeAvatarUrl=(
+                        f"/api/v1/users/{assignee.id}/avatar?v={assignee.revision}"
+                        if assignee and assignee.avatar_path
+                        else None
+                    ),
                 )
             )
         return DemandTimelineOut(
@@ -1421,6 +1485,11 @@ def get_demand_timeline(
                 ),
                 assigneeId=assignee_id,
                 assigneeName=assignee.full_name if assignee else None,
+                assigneeAvatarUrl=(
+                    f"/api/v1/users/{assignee.id}/avatar?v={assignee.revision}"
+                    if assignee and assignee.avatar_path
+                    else None
+                ),
             )
         )
     return DemandTimelineOut(

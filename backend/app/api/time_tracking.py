@@ -18,6 +18,7 @@ from app.database import get_db
 from app.models import AuditEvent, Demand, DemandUpdate, TimeEntry, UserProfile, utc_now
 
 router = APIRouter(prefix="/demands", tags=["Tempo e esforço"])
+active_router = APIRouter(prefix="/time", tags=["Tempo e esforço"])
 
 
 def _clean_note(value: str | None) -> str | None:
@@ -95,6 +96,48 @@ class TimeEstimateOut(BaseModel):
 
     expected_effort_minutes: int | None = Field(alias="expectedEffortMinutes")
     demand_revision: int = Field(alias="demandRevision")
+
+
+class ActiveTimerOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    demand_id: uuid.UUID = Field(alias="demandId")
+    demand_public_id: str = Field(alias="demandPublicId")
+    demand_title: str = Field(alias="demandTitle")
+    timer: TimeEntryOut
+
+
+@active_router.get("/active", response_model=ActiveTimerOut | None)
+def get_active_timer(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> ActiveTimerOut | None:
+    require_permission(principal, "demands:read")
+    entry = db.scalar(
+        select(TimeEntry).where(
+            TimeEntry.organization_id == principal.membership.organization_id,
+            TimeEntry.user_profile_id == principal.profile.id,
+            TimeEntry.state.in_(["RUNNING", "PAUSED"]),
+            TimeEntry.deleted_at.is_(None),
+        )
+    )
+    if not entry:
+        return None
+    demand = db.scalar(
+        select(Demand).where(
+            Demand.id == entry.demand_id,
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+        )
+    )
+    if not demand:
+        return None
+    return ActiveTimerOut(
+        demand_id=demand.id,
+        demand_public_id=demand.public_id,
+        demand_title=demand.title,
+        timer=_entry_out(entry, principal.profile, principal),
+    )
 
 
 def _get_demand(

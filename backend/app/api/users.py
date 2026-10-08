@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.access import require_active, require_permission
@@ -13,6 +13,7 @@ from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
 from app.models import (
+    AppSession,
     AuditEvent,
     Membership,
     MembershipStatus,
@@ -38,6 +39,12 @@ class UserOut(BaseModel):
 
 class ApproveUserRequest(BaseModel):
     role: str = Field(pattern=r"^(admin|coordinator|collaborator|viewer)$")
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class MembershipUpdateRequest(BaseModel):
+    role: str = Field(pattern=r"^(admin|coordinator|collaborator|viewer)$")
+    state: Literal["active", "suspended"]
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
@@ -519,6 +526,93 @@ def approve_user(
             organization_id=membership.organization_id,
             actor_user_id=principal.profile.id,
             event_type="MEMBERSHIP_APPROVED",
+            metadata_json={
+                "membershipId": str(membership.id),
+                "before": before,
+                "after": {"state": membership.status.value, "role": role.code},
+            },
+        )
+    )
+    db.commit()
+    profile = db.get(UserProfile, membership.user_profile_id)
+    assert profile is not None
+    return UserOut(
+        id=membership.id,
+        profileId=profile.id,
+        name=profile.full_name,
+        email=profile.email,
+        state=membership.status.value,
+        role=role.code,
+        revision=membership.revision,
+        avatarUrl=(
+            f"/api/v1/users/{profile.id}/avatar?v={profile.revision}"
+            if profile.avatar_path
+            else None
+        ),
+    )
+
+
+@router.put(
+    "/{membership_id}",
+    response_model=UserOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_user_access(
+    membership_id: uuid.UUID,
+    payload: MembershipUpdateRequest,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    require_permission(principal, "users:manage")
+    if not principal.role or principal.role.code != "admin":
+        raise ApiError(403, "admin_required", "Somente administradores podem alterar acessos.")
+    membership = db.scalar(
+        select(Membership)
+        .where(
+            Membership.id == membership_id,
+            Membership.organization_id == principal.membership.organization_id,
+        )
+        .with_for_update()
+    )
+    if not membership:
+        raise ApiError(404, "user_not_found", "Usuário não encontrado.")
+    if membership.id == principal.membership.id:
+        raise ApiError(409, "self_access_change", "Seu próprio acesso deve ser alterado por outro administrador.")
+    if membership.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "O cadastro foi alterado. Atualize a tela.")
+    role = db.scalar(
+        select(PermissionRole).where(
+            PermissionRole.organization_id == membership.organization_id,
+            PermissionRole.code == payload.role,
+        )
+    )
+    if not role:
+        raise ApiError(422, "role_not_found", "Perfil de permissão inválido.")
+    before_role = db.get(PermissionRole, membership.permission_role_id)
+    before = {
+        "state": membership.status.value,
+        "role": before_role.code if before_role else None,
+    }
+    membership.permission_role_id = role.id
+    membership.status = (
+        MembershipStatus.ACTIVE if payload.state == "active" else MembershipStatus.SUSPENDED
+    )
+    membership.suspended_at = utc_now() if membership.status == MembershipStatus.SUSPENDED else None
+    membership.revision += 1
+    if membership.status == MembershipStatus.SUSPENDED:
+        db.execute(
+            update(AppSession)
+            .where(
+                AppSession.user_profile_id == membership.user_profile_id,
+                AppSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=utc_now())
+        )
+    db.add(
+        AuditEvent(
+            organization_id=membership.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="MEMBERSHIP_ACCESS_UPDATED",
             metadata_json={
                 "membershipId": str(membership.id),
                 "before": before,

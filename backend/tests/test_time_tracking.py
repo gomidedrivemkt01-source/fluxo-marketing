@@ -13,6 +13,7 @@ from app.api.time_tracking import (
     TimerStop,
     can_change_time_entry,
     create_manual_time_entry,
+    get_active_timer,
     pause_timer,
     resume_timer,
     start_timer,
@@ -168,6 +169,21 @@ def test_start_timer_rejects_another_active_timer_for_user() -> None:
     assert caught.value.status_code == 409
     assert caught.value.code == "timer_already_running"
     db.add.assert_not_called()
+
+
+def test_global_active_timer_identifies_its_demand() -> None:
+    principal = _principal()
+    demand = _demand(principal)
+    active = _entry(principal, demand, state="RUNNING")
+    db = MagicMock(spec=Session)
+    db.scalar.side_effect = [active, demand]
+
+    result = get_active_timer(principal, db)
+
+    assert result is not None
+    assert result.demand_id == demand.id
+    assert result.demand_public_id == demand.public_id
+    assert result.timer.id == active.id
 
 
 def test_start_and_stop_timer_use_minimum_one_minute_and_register_events() -> None:
