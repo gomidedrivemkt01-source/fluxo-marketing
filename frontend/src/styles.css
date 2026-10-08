@@ -541,6 +541,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .focus-tabs button { display: grid; grid-template-columns: 24px 1fr auto; gap: 6px; align-items: center; min-height: 45px; padding: 0 10px; border: 1px solid #d6e3e4; border-radius: 7px; color: #617780; background: rgba(255,255,255,.78); text-align: left; }
 .focus-tabs button:hover, .focus-tabs button.active { border-color: #70b9b0; color: #086f68; background: #fff; box-shadow: 0 3px 10px rgba(21,94,89,.09); }
 .focus-tabs button > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 6px; color: #087f76; background: #e1f4f1; font-size: .7rem; font-weight: 900; }
+.focus-tabs button > span img { display: block; width: 12px; height: 12px; object-fit: contain; }
 .focus-tabs button > strong { font-size: .66rem; }
 .focus-tabs button > b { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; color: #72858d; background: #eef3f4; font-size: .58rem; }
 .focus-tabs button.active > b { color: #fff; background: #087f76; }

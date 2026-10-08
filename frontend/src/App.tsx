@@ -12,6 +12,13 @@ import reportsIcon from "./assets/navigation/reports.svg";
 import settingsIcon from "./assets/navigation/settings.svg";
 import teamIcon from "./assets/navigation/team.svg";
 import workflowIcon from "./assets/navigation/workflow.svg";
+import allFocusIcon from "./assets/focus/all.svg";
+import inboxFocusIcon from "./assets/focus/inbox.svg";
+import todayFocusIcon from "./assets/focus/today.svg";
+import upcomingFocusIcon from "./assets/focus/upcoming.svg";
+import overdueFocusIcon from "./assets/focus/overdue.svg";
+import waitingFocusIcon from "./assets/focus/waiting.svg";
+import delegatedFocusIcon from "./assets/focus/delegated.svg";
 import { ActivityPanel } from "./features/collaboration/ActivityPanel";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { focusCounts, matchesFocus, type FocusView } from "./features/focus/focus";
@@ -128,13 +135,13 @@ const roleNames: Record<string, string> = {
 };
 
 const focusOptions: { id: FocusView; label: string; icon: string }[] = [
-  { id: "all", label: "Todos", icon: "◎" },
-  { id: "inbox", label: "Inbox", icon: "⌑" },
-  { id: "today", label: "Hoje", icon: "●" },
-  { id: "upcoming", label: "Próximos", icon: "→" },
-  { id: "overdue", label: "Atrasadas", icon: "!" },
-  { id: "waiting", label: "Aguardando", icon: "◷" },
-  { id: "delegated", label: "Delegadas", icon: "↗" },
+  { id: "all", label: "Todos", icon: allFocusIcon },
+  { id: "inbox", label: "Inbox", icon: inboxFocusIcon },
+  { id: "today", label: "Hoje", icon: todayFocusIcon },
+  { id: "upcoming", label: "Próximos", icon: upcomingFocusIcon },
+  { id: "overdue", label: "Atrasadas", icon: overdueFocusIcon },
+  { id: "waiting", label: "Aguardando", icon: waitingFocusIcon },
+  { id: "delegated", label: "Delegadas", icon: delegatedFocusIcon },
 ];
 
 function quickDeadline(schedule: string): string | null {
@@ -536,7 +543,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   function toggleAssignee(id: string) { setAssignees((items) => items.includes(id) ? items.filter((value) => value !== id) : [...items, id]); }
   const flatList = <div className="flat-demand-list">{visible.map((demand) => <button key={demand.id} onClick={() => onOpen(demand)}><span className="demand-id">{demand.publicId}</span><strong>{demand.title}</strong><span>{demand.assigneeName ?? "Sem responsável"}</span><span>{demand.stageName ?? "Sem etapa"}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span></button>)}</div>;
   return <section className="work-control">
-    {mine && <div className="focus-dashboard"><div className="focus-tabs" role="group" aria-label="Foco do meu trabalho">{focusOptions.map((item) => <button key={item.id} className={preferences.focusView === item.id ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, focusView: item.id })}><span>{item.icon}</span><strong>{item.label}</strong><b>{counts?.[item.id] ?? 0}</b></button>)}</div>{canEdit && <form className="quick-add" onSubmit={quickCreate}><div><span>Captura rápida</span><strong>Adicionar ao meu trabalho</strong></div><input name="title" minLength={2} maxLength={300} placeholder="Digite o título da nova demanda" required /><select name="schedule"><option value="none">Sem prazo</option><option value="today">Hoje · 17h</option><option value="tomorrow">Amanhã · 17h</option></select><button disabled={quickBusy}>{quickBusy ? "Criando…" : "+ Adicionar"}</button></form>}{quickError && <div className="quick-error"><Notice>{quickError}</Notice></div>}</div>}
+    {mine && <div className="focus-dashboard"><div className="focus-tabs" role="group" aria-label="Foco do meu trabalho">{focusOptions.map((item) => <button key={item.id} className={preferences.focusView === item.id ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, focusView: item.id })}><span><img src={item.icon} alt="" aria-hidden="true" /></span><strong>{item.label}</strong><b>{counts?.[item.id] ?? 0}</b></button>)}</div>{canEdit && <form className="quick-add" onSubmit={quickCreate}><div><span>Captura rápida</span><strong>Adicionar ao meu trabalho</strong></div><input name="title" minLength={2} maxLength={300} placeholder="Digite o título da nova demanda" required /><select name="schedule"><option value="none">Sem prazo</option><option value="today">Hoje · 17h</option><option value="tomorrow">Amanhã · 17h</option></select><button disabled={quickBusy}>{quickBusy ? "Criando…" : "+ Adicionar"}</button></form>}{quickError && <div className="quick-error"><Notice>{quickError}</Notice></div>}</div>}
     <div className="work-filterbar"><label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar demanda, código, empresa ou pessoa" /></label><label><span>Empresa</span><select value={company} onChange={(event) => setCompany(event.target.value)}><option value="ALL">Todas</option>{companies.map((item) => <option value={item.id} key={item.id}>{item.shortName}</option>)}</select></label>{!mine && <details className="assignee-filter"><summary><span>Responsáveis</span><strong>{assignees.length ? `${assignees.length} selecionado(s)` : "Todos"}</strong></summary><div><button onClick={() => setAssignees([])}>Limpar seleção</button>{people.map((person) => <label key={person.id}><input type="checkbox" checked={assignees.includes(person.id)} onChange={() => toggleAssignee(person.id)} /><span>{person.name}</span></label>)}</div></details>}<label><span>Situação</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">Todas</option>{Object.entries(statusNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Prioridade</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">Todas</option>{Object.entries(priorityNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>
     {mine && <div className="saved-views"><div><strong>Visões salvas</strong><small>Filtros pessoais sincronizados</small></div><div className="saved-view-list">{preferences.savedViews.map((view) => <span className={`saved-view-chip ${activeSavedId === view.id ? "active" : ""}`} key={view.id}><button onClick={() => applySavedView(view)}>{view.name}</button><button onClick={() => removeSavedView(view.id)}>×</button></span>)}</div><div className="saved-view-actions"><button onClick={clearFilters}>Limpar</button><button onClick={() => setShowSaveView(true)}>+ Salvar filtros</button></div></div>}
     <div className="work-viewbar"><div><strong>{personalMode ? `Área de trabalho · ${boardOwner?.name ?? "carregando"}` : "Controle de demandas"}</strong><span>{visible.length} {visible.length === 1 ? "demanda" : "demandas"}</span></div><div className="view-switch" role="group"><button className={preferences.demandView === "list" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "list" })}>☷ Lista</button><button className={preferences.demandView === "kanban" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "kanban" })}>▥ Kanban</button><button onClick={onCalendar}>□ Calendário</button></div>{mine ? <button className="personal-columns-button" onClick={() => setShowColumns(true)}>⚙ Minhas colunas</button> : assignees.length > 1 ? <span className="multi-user-note">Lista conjunta sem colunas pessoais</span> : <label className="empty-toggle"><input type="checkbox" checked={preferences.showEmptyStages} onChange={(event) => onPreferenceChange({ ...preferences, showEmptyStages: event.target.checked })} /> Exibir vazias</label>}</div>
