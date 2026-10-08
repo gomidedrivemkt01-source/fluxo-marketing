@@ -1339,6 +1339,17 @@ def get_demand_timeline(
             .order_by(DemandStageInstance.position)
         ).scalars()
     )
+    if (
+        stage_instances
+        and demand.deadline_at
+        and any(
+            item.deadline_at is None
+            for item in stage_instances
+            if item.state in {"current", "upcoming"}
+        )
+    ):
+        rebalance_stage_deadlines(stage_instances, version, demand.deadline_at)
+        db.commit()
     if stage_instances:
         snapshots = {str(item.get("id")): item for item in stages}
         persisted_timeline: list[DemandTimelineStageOut] = []

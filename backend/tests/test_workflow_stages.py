@@ -349,6 +349,68 @@ def test_stage_deadlines_are_weighted_and_finish_at_demand_deadline() -> None:
     assert instances[2].deadline_at == deadline
     assert [item.forecast_at for item in instances] == [item.deadline_at for item in instances]
 
+
+def test_timeline_backfills_missing_deadlines_for_existing_card() -> None:
+    principal = _principal()
+    workflow_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    stage_ids = [uuid.uuid4(), uuid.uuid4()]
+    now = datetime.now(UTC)
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000099",
+        title="Card anterior ao agendamento automático",
+        workflow_id=workflow_id,
+        workflow_version_id=version_id,
+        current_stage_id=stage_ids[0],
+        deadline_at=now + timedelta(days=3),
+        status="IN_PROGRESS",
+        priority="NORMAL",
+        source="interface",
+        revision=2,
+        created_by=principal.profile.id,
+        created_at=now - timedelta(days=1),
+    )
+    version = WorkflowVersion(
+        id=version_id,
+        organization_id=demand.organization_id,
+        workflow_id=workflow_id,
+        version=1,
+        definition={"stages": [
+            {"id": str(stage_ids[0]), "name": "Produção", "code": "PRODUCAO", "color": "#2563EB", "position": 1, "expectedDurationHours": 3},
+            {"id": str(stage_ids[1]), "name": "Aprovação", "code": "APROVACAO", "color": "#7C3AED", "position": 2, "expectedDurationHours": 1},
+        ]},
+    )
+    workflow = Workflow(
+        id=workflow_id,
+        organization_id=demand.organization_id,
+        name="Campanha",
+        code="CAMPANHA",
+        is_default=False,
+        active=True,
+    )
+    instances = [
+        DemandStageInstance(
+            id=uuid.uuid4(), organization_id=demand.organization_id, demand_id=demand.id,
+            workflow_version_id=version_id, workflow_stage_id=stage_id, position=index,
+            state="current" if index == 1 else "upcoming", revision=1,
+        )
+        for index, stage_id in enumerate(stage_ids, start=1)
+    ]
+    db = MagicMock(spec=Session)
+    db.scalar.return_value = demand
+    db.execute.return_value.scalars.return_value = iter(instances)
+    db.get.side_effect = lambda model, identifier: (
+        version if model is WorkflowVersion else workflow if model is Workflow else None
+    )
+
+    result = get_demand_timeline(demand.id, principal, db)
+
+    assert all(stage.deadline_at is not None for stage in result.stages)
+    assert result.stages[-1].deadline_at == demand.deadline_at
+    db.commit.assert_called_once()
+
 def test_stage_risk_prioritizes_overdue_and_forecast_overrun() -> None:
     now = datetime(2026, 9, 30, 14, tzinfo=UTC)
     instance = DemandStageInstance(
