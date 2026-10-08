@@ -36,11 +36,13 @@ export function GlobalTimer({
   currentDemand,
   canTrack,
   hasStageDock,
+  hasDrawerFooter,
   onOpenDemand,
 }: {
   currentDemand: CurrentDemand;
   canTrack: boolean;
   hasStageDock: boolean;
+  hasDrawerFooter: boolean;
   onOpenDemand: (demandId: string) => void;
 }) {
   const [active, setActive] = useState<ActiveTimer | null>(null);
@@ -68,6 +70,15 @@ export function GlobalTimer({
   }, []);
 
   useEffect(() => {
+    const listener = (event: Event) => {
+      const demandId = (event as CustomEvent<{ demandId?: string }>).detail?.demandId;
+      if (demandId) void start(demandId);
+    };
+    window.addEventListener("fluxo:timer-start-request", listener);
+    return () => window.removeEventListener("fluxo:timer-start-request", listener);
+  }, []);
+
+  useEffect(() => {
     if (active?.timer.state !== "RUNNING") return;
     setNow(Date.now());
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
@@ -81,11 +92,12 @@ export function GlobalTimer({
     [active, currentDemand],
   );
 
-  async function start() {
-    if (!currentDemand) return;
+  async function start(requestedDemandId?: string) {
+    const demandId = requestedDemandId ?? currentDemand?.id;
+    if (!demandId) return;
     setBusy(true); setError("");
     try {
-      await api(`/demands/${currentDemand.id}/time/timer/start`, {
+      await api(`/demands/${demandId}/time/timer/start`, {
         method: "POST",
         body: JSON.stringify({ note: null }),
       });
@@ -112,7 +124,7 @@ export function GlobalTimer({
   if (!loaded || (!active && (!currentDemand || !canTrack))) return null;
   const outsideActiveCard = Boolean(active && currentDemand?.id !== active.demandId);
   return (
-    <aside className={`global-timer${active ? " active" : ""}${hasStageDock ? " with-stage-dock" : ""}`} aria-live="polite">
+    <aside className={`global-timer${active ? " active" : ""}${hasStageDock ? " with-stage-dock" : ""}${hasDrawerFooter ? " with-drawer-footer" : ""}`} aria-live="polite">
       {error && <span className="global-timer-error" title={error}>!</span>}
       <button
         className={`timer-orb ${active?.timer.state === "RUNNING" ? "running" : ""}`}
