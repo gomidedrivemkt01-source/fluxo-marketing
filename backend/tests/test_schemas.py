@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from app.api.users import PreferencesUpdate
+from app.api.errors import ApiError
+from app.api.users import (
+    PROTECTED_INTERFACE_THEME_IDS,
+    PreferencesUpdate,
+    validate_theme_selection,
+)
 from app.auth.schemas import RegisterRequest, VerifyRequest
 
 
@@ -73,15 +78,16 @@ def test_preferences_accept_focus_views() -> None:
     assert preferences.theme_profiles[0].name == "Azul executivo"
 
 
-def test_preferences_protect_platform_theme() -> None:
+@pytest.mark.parametrize("theme_id", sorted(PROTECTED_INTERFACE_THEME_IDS))
+def test_preferences_protect_platform_themes(theme_id: str) -> None:
     with pytest.raises(ValidationError):
         PreferencesUpdate(
             demandView="kanban",
             showEmptyStages=True,
-            activeThemeId="platform-default",
+            activeThemeId=theme_id,
             themeProfiles=[
                 {
-                    "id": "platform-default",
+                    "id": theme_id,
                     "name": "Tentativa de alteração",
                     "colors": {
                         "sidebar": "#102A43",
@@ -95,6 +101,30 @@ def test_preferences_protect_platform_theme() -> None:
                 }
             ],
         )
+
+
+@pytest.mark.parametrize("theme_id", sorted(PROTECTED_INTERFACE_THEME_IDS))
+def test_preferences_accept_protected_interface_themes(theme_id: str) -> None:
+    preferences = PreferencesUpdate(
+        demandView="kanban",
+        showEmptyStages=True,
+        activeThemeId=theme_id,
+        themeProfiles=[],
+    )
+
+    validate_theme_selection(preferences)
+
+
+def test_preferences_reject_unregistered_interface_theme() -> None:
+    preferences = PreferencesUpdate(
+        demandView="kanban",
+        showEmptyStages=True,
+        activeThemeId="tema-inexistente",
+        themeProfiles=[],
+    )
+
+    with pytest.raises(ApiError):
+        validate_theme_selection(preferences)
 
 
 def test_preferences_require_at_least_one_personal_column() -> None:

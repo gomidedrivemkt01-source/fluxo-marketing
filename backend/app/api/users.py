@@ -25,6 +25,17 @@ from app.models import (
 
 router = APIRouter(prefix="/users", tags=["Usuários"])
 
+PROTECTED_INTERFACE_THEME_IDS = frozenset(
+    {
+        "platform-default",
+        "builtin-ocean",
+        "builtin-forest",
+        "builtin-terracotta",
+        "builtin-violet",
+        "builtin-graphite",
+    }
+)
+
 
 class UserOut(BaseModel):
     id: uuid.UUID
@@ -114,8 +125,8 @@ class InterfaceThemeUpdate(BaseModel):
     @field_validator("id")
     @classmethod
     def prevent_default_override(cls, value: str) -> str:
-        if value == "platform-default":
-            raise ValueError("O tema padrão da plataforma é reservado.")
+        if value in PROTECTED_INTERFACE_THEME_IDS:
+            raise ValueError("Os temas da plataforma são reservados.")
         return value
 
     @field_validator("name")
@@ -159,6 +170,17 @@ class PreferencesUpdate(BaseModel):
     theme_profiles: list[InterfaceThemeUpdate] = Field(
         default_factory=list, alias="themeProfiles", max_length=8
     )
+
+
+def validate_theme_selection(payload: PreferencesUpdate) -> None:
+    theme_ids = [theme.id for theme in payload.theme_profiles]
+    if len(theme_ids) != len(set(theme_ids)):
+        raise ApiError(422, "theme_ids_duplicated", "Há perfis de cores duplicados.")
+    if (
+        payload.active_theme_id not in PROTECTED_INTERFACE_THEME_IDS
+        and payload.active_theme_id not in theme_ids
+    ):
+        raise ApiError(422, "active_theme_invalid", "O perfil de cores selecionado é inválido.")
 
 
 class BoardViewOut(BaseModel):
@@ -274,14 +296,7 @@ def update_my_preferences(
     db: Session = Depends(get_db),
 ) -> ProfileOut:
     require_active(principal)
-    theme_ids = [theme.id for theme in payload.theme_profiles]
-    if len(theme_ids) != len(set(theme_ids)):
-        raise ApiError(422, "theme_ids_duplicated", "Há perfis de cores duplicados.")
-    if (
-        payload.active_theme_id != "platform-default"
-        and payload.active_theme_id not in theme_ids
-    ):
-        raise ApiError(422, "active_theme_invalid", "O perfil de cores selecionado é inválido.")
+    validate_theme_selection(payload)
     if payload.stage_order:
         valid_ids = set(
             db.scalars(
