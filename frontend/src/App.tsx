@@ -1105,7 +1105,8 @@ function CalendarWorkspace({ demands, onOpen }: { demands: Demand[]; onOpen: (de
   const gridDays = Array.from({ length: cellCount }, (_, index) => { const date = new Date(gridStart); date.setDate(gridStart.getDate() + index); return date; });
   const monthDays = Array.from({ length: lastDay.getDate() }, (_, index) => new Date(year, month, index + 1));
   const todayKey = calendarDateKey(new Date());
-  const title = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(cursor);
+  const rawTitle = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(cursor);
+  const title = `${rawTitle.charAt(0).toLocaleUpperCase("pt-BR")}${rawTitle.slice(1)}`;
   useEffect(() => { window.localStorage.setItem("fluxo.calendar-mode", mode); }, [mode]);
   function moveMonth(amount: number) { setCursor((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1)); }
   const time = (demand: Demand) => demand.deadlineAt ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(demand.deadlineAt)) : "—";
