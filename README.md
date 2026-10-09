@@ -19,7 +19,7 @@ O upload de uma Daily é um recurso complementar na área de Inteligência e nun
 - **Marco 1 — Fundação e acesso:** autenticação, aprovação, perfis, cadastros, auditoria e infraestrutura online concluídos.
 - **Marco 2 — Card operacional:** criação manual, briefing, checklist, comentários, histórico, arquivos privados e timer concluídos.
 - **Marco 3 — Fluxo e foco pessoal:** agenda Todoist, Kanban pessoal, biblioteca de workflows, versões imutáveis, agenda por etapa, handoffs validados e alertas de risco concluídos nesta base.
-- **Marco 4 — Relatórios operacionais:** primeira visão executiva concluída com indicadores de prazo, volume, tempo apontado, esforço previsto e gargalos por empresa, categoria, responsável e etapa.
+- **Marco 4 — Relatórios operacionais:** primeira visão executiva concluída com períodos rápidos ou personalizados, indicadores de prazo, volume, tempo apontado, esforço previsto e gargalos por empresa, categoria, responsável e etapa.
 - **Próximo incremento — Histórico e distribuição:** evolução dos relatórios com tendência temporal, SLA por etapa, capacidade planejada versus realizada, filtros persistentes e exportação.
 
 ## Execução local

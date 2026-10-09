@@ -2,8 +2,9 @@
 
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import Callable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.access import require_permission
+from app.api.errors import ApiError
 from app.auth.dependencies import get_principal
 from app.auth.service import Principal
 from app.database import get_db
@@ -65,6 +67,7 @@ class OperationalReportOut(BaseModel):
 
     period_days: int = Field(alias="periodDays")
     period_started_at: datetime = Field(alias="periodStartedAt")
+    period_ended_at: datetime = Field(alias="periodEndedAt")
     generated_at: datetime = Field(alias="generatedAt")
     summary: ReportSummaryOut
     by_status: list[ReportBreakdownOut] = Field(alias="byStatus")
@@ -147,8 +150,11 @@ def build_operational_report(
     stages: dict[uuid.UUID, WorkflowStage],
     days: int,
     now: datetime,
+    period_started_at: datetime | None = None,
+    period_ended_at: datetime | None = None,
 ) -> OperationalReportOut:
-    period_started_at = now - timedelta(days=days)
+    period_started_at = period_started_at or now - timedelta(days=days)
+    period_ended_at = period_ended_at or now
     active = [demand for demand in demands if demand.status != "COMPLETED"]
     time_by_demand: dict[uuid.UUID, int] = defaultdict(int)
     for entry in entries:
@@ -218,10 +224,13 @@ def build_operational_report(
     return OperationalReportOut(
         period_days=days,
         period_started_at=period_started_at,
+        period_ended_at=period_ended_at,
         generated_at=now,
         summary=ReportSummaryOut(
             total_demands=len(demands),
-            created_in_period=sum(demand.created_at >= period_started_at for demand in demands),
+            created_in_period=sum(
+                period_started_at <= demand.created_at <= period_ended_at for demand in demands
+            ),
             completed_demands=sum(demand.status == "COMPLETED" for demand in demands),
             overdue=sum(_is_overdue(demand, now) for demand in demands),
             due_soon=sum(
@@ -278,15 +287,62 @@ def build_operational_report(
     )
 
 
+def resolve_report_period(
+    *,
+    days: int,
+    start_date: date | None,
+    end_date: date | None,
+    timezone_name: str,
+    now: datetime,
+) -> tuple[int, datetime, datetime]:
+    if bool(start_date) != bool(end_date):
+        raise ApiError(
+            422,
+            "report_period_incomplete",
+            "Informe as datas inicial e final do período personalizado.",
+        )
+    if not start_date or not end_date:
+        return days, now - timedelta(days=days), now
+    if end_date < start_date:
+        raise ApiError(
+            422,
+            "report_period_invalid",
+            "A data final deve ser igual ou posterior à data inicial.",
+        )
+    period_days = (end_date - start_date).days + 1
+    if period_days > 1096:
+        raise ApiError(
+            422,
+            "report_period_too_long",
+            "O período personalizado pode abranger no máximo três anos.",
+        )
+    try:
+        user_timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        user_timezone = timezone(timedelta(hours=-3), name="America/Sao_Paulo")
+    started_at = datetime.combine(start_date, time.min, tzinfo=user_timezone).astimezone(UTC)
+    ended_at = datetime.combine(end_date, time.max, tzinfo=user_timezone).astimezone(UTC)
+    return period_days, started_at, ended_at
+
+
 @router.get("/operational", response_model=OperationalReportOut)
 def operational_report(
     days: int = Query(default=30, ge=7, le=365),
+    start_date: date | None = Query(default=None, alias="startDate"),
+    end_date: date | None = Query(default=None, alias="endDate"),
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
 ) -> OperationalReportOut:
     require_permission(principal, "demands:read")
     organization_id = principal.membership.organization_id
     now = utc_now()
+    period_days, period_started_at, period_ended_at = resolve_report_period(
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+        timezone_name=principal.profile.timezone,
+        now=now,
+    )
     demands = list(
         db.scalars(
             select(Demand).where(
@@ -304,7 +360,8 @@ def operational_report(
                     TimeEntry.organization_id == organization_id,
                     TimeEntry.demand_id.in_(demand_ids),
                     TimeEntry.deleted_at.is_(None),
-                    TimeEntry.started_at >= now - timedelta(days=days),
+                    TimeEntry.started_at >= period_started_at,
+                    TimeEntry.started_at <= period_ended_at,
                     TimeEntry.duration_minutes.is_not(None),
                 )
             )
@@ -344,6 +401,8 @@ def operational_report(
         categories=categories,
         profiles=profiles,
         stages=stages,
-        days=days,
+        days=period_days,
         now=now,
+        period_started_at=period_started_at,
+        period_ended_at=period_ended_at,
     )

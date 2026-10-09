@@ -1,7 +1,10 @@
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
-from app.api.reports import build_operational_report
+import pytest
+
+from app.api.errors import ApiError
+from app.api.reports import build_operational_report, resolve_report_period
 from app.models import Company, Demand, DemandCategory, TimeEntry, UserProfile, WorkflowStage
 
 
@@ -154,9 +157,37 @@ def test_operational_report_consolidates_portfolio_and_time() -> None:
     assert report.summary.urgent == 1
     assert report.summary.tracked_minutes == 120
     assert report.summary.expected_minutes == 180
+    assert report.period_ended_at == now
     assert report.by_stage[0].label == "Produção"
     assert report.by_stage[0].count == 1
     assert report.by_assignee[0].label == "Pessoa Teste"
     assert report.by_assignee[0].total_minutes == 90
     assert report.attention[0].public_id == "DMD-1"
     assert report.attention[0].reasons == ["Prazo vencido", "Bloqueada", "Urgente", "Sem responsável"]
+
+
+def test_custom_report_period_is_inclusive_in_profile_timezone() -> None:
+    now = datetime(2026, 10, 9, 15, tzinfo=UTC)
+
+    days, started_at, ended_at = resolve_report_period(
+        days=30,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 10, 9),
+        timezone_name="America/Sao_Paulo",
+        now=now,
+    )
+
+    assert days == 9
+    assert started_at == datetime(2026, 10, 1, 3, tzinfo=UTC)
+    assert ended_at == datetime(2026, 10, 10, 2, 59, 59, 999999, tzinfo=UTC)
+
+
+def test_custom_report_period_rejects_reversed_dates() -> None:
+    with pytest.raises(ApiError):
+        resolve_report_period(
+            days=30,
+            start_date=date(2026, 10, 9),
+            end_date=date(2026, 10, 1),
+            timezone_name="America/Sao_Paulo",
+            now=datetime(2026, 10, 9, 15, tzinfo=UTC),
+        )
