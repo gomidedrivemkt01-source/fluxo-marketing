@@ -110,6 +110,19 @@ type DailyImport = {
   reviewedItems: number;
   items: DailyItem[];
 };
+type ReportBreakdown = { id: string; label: string; color: string | null; count: number; overdue: number; totalMinutes: number };
+type OperationalReport = {
+  periodDays: number;
+  periodStartedAt: string;
+  generatedAt: string;
+  summary: { totalDemands: number; createdInPeriod: number; completedDemands: number; overdue: number; dueSoon: number; blocked: number; unassigned: number; urgent: number; trackedMinutes: number; expectedMinutes: number };
+  byStatus: ReportBreakdown[];
+  byCompany: ReportBreakdown[];
+  byCategory: ReportBreakdown[];
+  byAssignee: ReportBreakdown[];
+  byStage: ReportBreakdown[];
+  attention: { id: string; publicId: string; title: string; companyName: string | null; assigneeName: string | null; stageName: string | null; status: string; priority: string; deadlineAt: string | null; reasons: string[] }[];
+};
 type MappingChoice = "map" | "create" | "ignore";
 
 const statusNames: Record<string, string> = {
@@ -1058,6 +1071,53 @@ function ComingSection({ icon, title, text, items }: { icon: string; title: stri
   return <section className="panel coming-section"><span>{icon}</span><div><h3>{title}</h3><p>{text}</p><ul>{items.map((item) => <li key={item}>✓ {item}</li>)}</ul></div></section>;
 }
 
+function reportDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes}min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}h ${rest}min` : `${hours}h`;
+}
+
+function ReportBreakdownList({ title, eyebrow, items, showTime = false }: { title: string; eyebrow: string; items: ReportBreakdown[]; showTime?: boolean }) {
+  const visible = items.slice(0, 7);
+  const largest = Math.max(1, ...visible.map((item) => item.count));
+  return <section className="panel report-breakdown"><header><div><span className="eyebrow dark">{eyebrow}</span><h3>{title}</h3></div><span>{items.reduce((total, item) => total + item.count, 0)} cards</span></header>{visible.length ? <div className="report-bars">{visible.map((item) => <article key={item.id}><div className="report-bar-copy"><span><i style={{ background: item.color ?? "var(--teal-dark)" }} /><strong>{item.label}</strong></span><span><b>{item.count}</b>{showTime && <small>{reportDuration(item.totalMinutes)}</small>}{item.overdue > 0 && <em>{item.overdue} atrasada{item.overdue === 1 ? "" : "s"}</em>}</span></div><div className="report-bar-track"><i style={{ width: `${Math.max(4, Math.round((item.count / largest) * 100))}%`, background: item.color ?? "var(--teal-dark)" }} /></div></article>)}</div> : <div className="report-empty">Ainda não há dados para esta distribuição.</div>}</section>;
+}
+
+function OperationalReports({ onOpen }: { onOpen: (demandId: string) => void }) {
+  const [days, setDays] = useState(30);
+  const [attempt, setAttempt] = useState(0);
+  const [report, setReport] = useState<OperationalReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError("");
+    api<OperationalReport>(`/reports/operational?days=${days}`).then((value) => { if (active) setReport(value); }).catch((caught) => { if (active) setError(messageFrom(caught)); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [days, attempt]);
+  if (loading && !report) return <section className="panel feature-loading"><span className="loader" /><p>Consolidando a operação…</p></section>;
+  if (error && !report) return <section className="panel report-error"><Notice>{error}</Notice><button className="secondary compact" onClick={() => setAttempt((value) => value + 1)}>Tentar novamente</button></section>;
+  if (!report) return null;
+  const summary = report.summary;
+  const completionRate = summary.totalDemands ? Math.round((summary.completedDemands / summary.totalDemands) * 100) : 0;
+  return <div className="reports-workspace">
+    <section className="report-hero"><div><span className="eyebrow">Saúde da operação</span><h2>Visão executiva do fluxo</h2><p>Carteira atual, prazos e gargalos de toda a organização. O período controla novas entradas e horas apontadas.</p></div><label><span>Período analisado</span><select value={days} onChange={(event) => setDays(Number(event.target.value))} disabled={loading}><option value={30}>Últimos 30 dias</option><option value={90}>Últimos 90 dias</option><option value={180}>Últimos 180 dias</option><option value={365}>Últimos 12 meses</option></select></label></section>
+    {error && <Notice>{error}</Notice>}
+    <section className="report-kpis">
+      <article><span>Carteira atual</span><strong>{summary.totalDemands}</strong><small>{summary.createdInPeriod} criada{summary.createdInPeriod === 1 ? "" : "s"} no período</small><i className="teal" /></article>
+      <article className={summary.overdue ? "warning" : ""}><span>Prazos vencidos</span><strong>{summary.overdue}</strong><small>{summary.dueSoon} vence{summary.dueSoon === 1 ? "" : "m"} em até 7 dias</small><i className="danger" /></article>
+      <article><span>Concluídas na carteira</span><strong>{summary.completedDemands}</strong><small>{completionRate}% do total atual</small><i className="success" /></article>
+      <article><span>Tempo apontado</span><strong>{reportDuration(summary.trackedMinutes)}</strong><small>nos últimos {report.periodDays} dias</small><i className="violet" /></article>
+      <article className={summary.blocked || summary.unassigned ? "warning" : ""}><span>Pontos de atenção</span><strong>{summary.blocked + summary.unassigned}</strong><small>{summary.blocked} bloqueada{summary.blocked === 1 ? "" : "s"} · {summary.unassigned} sem responsável</small><i className="orange" /></article>
+    </section>
+    <section className="report-signal-row"><div><span className="report-signal danger">{summary.overdue}</span><p><strong>Demandas atrasadas</strong><small>Precisam de replanejamento ou conclusão.</small></p></div><div><span className="report-signal orange">{summary.urgent}</span><p><strong>Prioridade urgente</strong><small>Cards abertos marcados como urgentes.</small></p></div><div><span className="report-signal teal">{reportDuration(summary.expectedMinutes)}</span><p><strong>Esforço previsto aberto</strong><small>Soma das estimativas ainda em carteira.</small></p></div></section>
+    <div className="report-grid"><ReportBreakdownList eyebrow="Fluxo" title="Onde estão as demandas" items={report.byStage} /><ReportBreakdownList eyebrow={`Capacidade · ${report.periodDays} dias`} title="Carga por responsável" items={report.byAssignee} showTime /><ReportBreakdownList eyebrow="Carteira" title="Distribuição por empresa" items={report.byCompany} /><ReportBreakdownList eyebrow="Tipos de entrega" title="Distribuição por categoria" items={report.byCategory} /></div>
+    <section className="panel report-status"><header><div><span className="eyebrow dark">Situação atual</span><h3>Distribuição por status</h3></div><small>Atualizado {new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(report.generatedAt))}</small></header><div>{report.byStatus.map((item) => <article key={item.id}><span><i style={{ background: item.color ?? "var(--teal-dark)" }} />{item.label}</span><strong>{item.count}</strong><small>{item.overdue ? `${item.overdue} atrasada${item.overdue === 1 ? "" : "s"}` : "Dentro do fluxo"}</small></article>)}</div></section>
+    <section className="panel report-attention"><header><div><span className="eyebrow dark">Prioridade de gestão</span><h3>Demandas que pedem atenção</h3><p>Ordenadas primeiro por atraso e bloqueio.</p></div><span className="count">{report.attention.length}</span></header>{report.attention.length ? <div className="report-attention-list">{report.attention.map((item) => <button key={item.id} onClick={() => onOpen(item.id)}><span className="report-attention-title"><strong>{item.title}</strong><small>{item.publicId} · {item.companyName ?? "Sem empresa"}</small></span><span>{item.assigneeName ?? "Sem responsável"}</span><span>{item.stageName ?? "Sem etapa"}</span><span className="attention-reasons">{item.reasons.map((reason) => <em key={reason}>{reason}</em>)}</span><time>{item.deadlineAt ? dateLabel(item.deadlineAt) : "Sem prazo"}</time><b>›</b></button>)}</div> : <div className="report-empty report-empty-good"><span>✓</span><strong>Nenhuma demanda crítica agora</strong><p>Não há cards atrasados, bloqueados, urgentes ou sem responsável.</p></div>}</section>
+  </div>;
+}
+
 function PersonalAgenda({ demands, profile, canCreate, onOpen, onCreate }: { demands: Demand[]; profile: Profile | null; canCreate: boolean; onOpen: (demand: Demand) => void; onCreate: () => void }) {
   if (!profile) return <section className="panel agenda-loading"><span className="loader" /></section>;
   const mine = demands.filter((demand) => demand.assigneeId === profile.profileId && demand.status !== "COMPLETED");
@@ -1128,6 +1188,13 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem("fluxo.sidebar-collapsed") === "true");
   function go(next: WorkspacePage) { setPage(next); setSelectedDemand(null); setSelectedDemandTab("overview"); setDrawerDemand(null); window.location.hash = next; window.scrollTo({ top: 0 }); }
   function openDemand(demand: Demand, tab: DemandDetailTab = "overview") { setSelectedDemandTab(tab); setSelectedDemand(demand); }
+  async function openReportDemand(demandId: string) {
+    const local = demands.find((item) => item.id === demandId);
+    if (local) { openDemand(local); return; }
+    setError("");
+    try { openDemand(await api<Demand>(`/demands/${demandId}`)); }
+    catch (caught) { setError(messageFrom(caught)); }
+  }
   function loadData() {
     setError("");
     return Promise.all([api<Company[]>("/catalogs/companies"), api<Category[]>("/catalogs/categories"), api<Workflow[]>("/catalogs/workflows"), api<WorkflowStage[]>("/catalogs/workflow-stages?allWorkflows=true"), canManage ? api<WorkflowStage[]>("/catalogs/workflow-stages?includeInactive=true&allWorkflows=true") : Promise.resolve([] as WorkflowStage[]), api<Person[]>("/users/options"), api<Demand[]>("/demands"), api<Profile>("/users/me"), canManage ? api<User[]>("/users") : Promise.resolve([]), canManage ? api<DailyImport[]>("/imports/dailys") : Promise.resolve([])]).then(([c, k, wf, s, w, o, d, p, u, i]) => { setCompanies(c); setCategories(k); setWorkflows(wf); setStages(s); setWorkflowStages(w); setPeople(o); setDemands(d); setProfile(p); setUsers(u); setImports(i); }).catch((caught) => setError(messageFrom(caught)));
@@ -1179,7 +1246,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   else if (page === "calendar") content = <CalendarWorkspace demands={demands} onOpen={(demand) => openDemand(demand)} />;
   else if (page === "companies") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Cadastros ativos</span><h3>Empresas atendidas</h3></div>{canManage && <button className="small-button" onClick={() => setCatalogModal({ kind: "company" })}>+ Nova empresa</button>}</div>{companies.length ? <div className="entity-cards">{companies.map((company) => <article key={company.id}><i style={{ background: company.color }} /><div><strong>{company.name}</strong><span>{company.shortName} · {company.code}</span><p>{company.description || "Sem descrição cadastrada."}</p></div>{canManage && <button className="table-action" onClick={() => setCatalogModal({ kind: "company", item: company })}>Editar</button>}</article>)}</div> : <div className="empty-state"><span>▦</span><h3>Nenhuma empresa cadastrada</h3></div>}</section>;
   else if (page === "team") content = <><ComingSection icon="○" title="Diretório da equipe" text="A estrutura visual está preparada para cargos, capacidade e distribuição de trabalho." items={["Perfil e foto individual", "Cargo e papel de acesso", "Capacidade por período"]} />{canManage && users.length > 0 && <section className="panel full"><div className="panel-head"><div><span className="eyebrow dark">Pessoas cadastradas</span><h3>Equipe atual</h3></div><span className="count">{users.length}</span></div><div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{user.role ? roleNames[user.role] : "A definir"}</td></tr>)}</tbody></table></div></section>}</>;
-  else if (page === "reports") content = <><section className="stats"><article><span>Total de demandas</span><strong>{demands.length}</strong><small>registradas</small></article><article><span>Concluídas</span><strong>{demands.filter((item) => item.status === "COMPLETED").length}</strong><small>no período</small></article><article><span>Bloqueadas</span><strong>{demands.filter((item) => item.status === "BLOCKED").length}</strong><small>pedem atenção</small></article><article><span>Urgentes</span><strong>{demands.filter((item) => item.priority === "URGENT").length}</strong><small>prioridade máxima</small></article></section><ComingSection icon="↗" title="Relatórios operacionais" text="Os indicadores iniciais já usam os dados reais das demandas." items={["Volume por empresa e categoria", "Cumprimento de prazos", "Capacidade e tempo apontado"]} /></>;
+  else if (page === "reports") content = <OperationalReports onOpen={(demandId) => void openReportDemand(demandId)} />;
   else if (page === "intelligence") content = <section className="panel page-panel"><div className="intelligence-hero"><div><span className="beta-chip">Beta</span><h3>Importação assistida de Dailys</h3><p>Envie um JSON analisado e escolha, item por item, qual card receberá a informação. Nenhuma alteração é aplicada sem sua revisão.</p></div>{canManage && <button className="primary action-primary" onClick={() => { setResumeImport(null); setShowImport(true); }}>Importar JSON</button>}</div>{imports.length ? <div className="table-wrap"><table><thead><tr><th>Relatório</th><th>Progresso</th><th>Situação</th><th>Ação</th></tr></thead><tbody>{imports.map((item) => <tr key={item.id}><td><strong>{item.sourceLabel}</strong><small className="table-subtitle">{item.filename}</small></td><td>{item.reviewedItems} de {item.totalItems}</td><td><span className={`import-state ${item.state}`}>{item.state === "applied" ? "Aplicada" : "Em revisão"}</span></td><td>{item.state === "reviewing" ? <button className="table-action" onClick={() => { setResumeImport(item); setShowImport(true); }}>Continuar revisão</button> : "Concluída"}</td></tr>)}</tbody></table></div> : <div className="empty-state"><span>◇</span><h3>Nenhuma importação realizada</h3><p>Este recurso complementa o trabalho manual quando houver um relatório estruturado.</p></div>}</section>;
   else if (page === "categories") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Estrutura de entrada</span><h3>Categorias, briefings e workflows</h3></div><button className="small-button" onClick={() => setCatalogModal({ kind: "category" })}>+ Nova categoria</button></div><div className="category-table">{categories.map((category) => <article key={category.id}><i style={{ background: category.color }} /><span><strong>{category.name}</strong><small>{category.code} · {workflows.find((workflow) => workflow.id === category.defaultWorkflowId)?.name ?? "Sem workflow padrão"}</small></span><div><button onClick={() => setBriefingCategory(category)}>Briefing</button><button onClick={() => setCatalogModal({ kind: "category", item: category })}>Editar</button></div></article>)}</div><div className="scope-note"><strong>Entrada padronizada</strong><span>Cada categoria combina seu briefing e workflow padrão. Um card ainda pode usar outro workflow quando necessário.</span></div></section>;
   else if (page === "users") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Controle de acesso</span><h3>Usuários</h3><p className="panel-help">Administradores podem alterar o perfil ou suspender o acesso. A suspensão encerra as sessões abertas.</p></div><span className="count">{users.length}</span></div>{users.length ? <div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th><th>Ação</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><span className="user-cell"><AvatarView name={user.name} url={user.avatarUrl} /><strong>{user.name}</strong></span></td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{session.role === "admin" ? <select className="role-select" value={user.state === "pending_approval" ? approvalRoles[user.id] ?? "collaborator" : accessRoles[user.id] ?? user.role ?? "collaborator"} onChange={(event) => user.state === "pending_approval" ? setApprovalRoles((values) => ({ ...values, [user.id]: event.target.value })) : setAccessRoles((values) => ({ ...values, [user.id]: event.target.value }))}><option value="collaborator">Colaborador</option><option value="coordinator">Coordenador</option><option value="viewer">Visualizador</option><option value="admin">Administrador</option></select> : user.role ? roleNames[user.role] : "Definir"}</td><td>{user.state === "pending_approval" && session.role === "admin" ? <button className="table-action" disabled={approvingUser === user.id} onClick={() => void approveUser(user)}>{approvingUser === user.id ? "Liberando…" : "Liberar acesso"}</button> : session.role === "admin" ? <div className="access-actions"><button className="table-action" disabled={savingUser === user.id} onClick={() => void updateUserAccess(user, user.state === "suspended" ? "suspended" : "active")}>{savingUser === user.id ? "Salvando…" : "Salvar perfil"}</button><button className={user.state === "suspended" ? "access-restore" : "access-remove"} disabled={savingUser === user.id} onClick={() => void updateUserAccess(user, user.state === "suspended" ? "active" : "suspended")}>{user.state === "suspended" ? "Reativar" : "Remover acesso"}</button></div> : "—"}</td></tr>)}</tbody></table></div> : <div className="empty-state"><p>Nenhum usuário cadastrado.</p></div>}</section>;

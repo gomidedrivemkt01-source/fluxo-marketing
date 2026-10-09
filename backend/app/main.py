@@ -15,6 +15,7 @@ from app.api.daily_imports import router as daily_imports_router
 from app.api.demands import router as demands_router
 from app.api.errors import ApiError, api_error_handler
 from app.api.files import router as files_router
+from app.api.reports import router as reports_router
 from app.api.time_tracking import active_router as active_time_tracking_router
 from app.api.time_tracking import router as time_tracking_router
 from app.api.users import router as users_router
@@ -81,6 +82,7 @@ app.include_router(collaboration_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(time_tracking_router, prefix="/api/v1")
 app.include_router(active_time_tracking_router, prefix="/api/v1")
+app.include_router(reports_router, prefix="/api/v1")
 
 
 @app.get("/health", include_in_schema=False)

@@ -2,7 +2,7 @@
 
 Fundação da plataforma interna de gestão e inteligência operacional do Marketing.
 
-O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, responsáveis, workflows reutilizáveis, visões pessoais em Kanban e lista, empresas, categorias, briefings configuráveis, checklists por etapa e por card, comentários, histórico, timer, arquivos privados, perfil com foto, auditoria e importação assistida de Dailys.
+O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, responsáveis, workflows reutilizáveis, visões pessoais em Kanban e lista, empresas, categorias, briefings configuráveis, checklists por etapa e por card, comentários, histórico, timer, arquivos privados, perfil com foto, auditoria, relatórios operacionais e importação assistida de Dailys.
 
 A criação manual é a entrada principal da operação. **Início** funciona como agenda pessoal e separa as entregas em atrasadas, hoje, amanhã e datas futuras. **Meu trabalho** permite criar, ordenar e colorir colunas pessoais em Kanban ou lista sem alterar o workflow compartilhado. Ao filtrar um responsável, a equipe vê a organização escolhida por essa pessoa; ao combinar responsáveis, a plataforma usa uma lista única.
 
@@ -19,7 +19,8 @@ O upload de uma Daily é um recurso complementar na área de Inteligência e nun
 - **Marco 1 — Fundação e acesso:** autenticação, aprovação, perfis, cadastros, auditoria e infraestrutura online concluídos.
 - **Marco 2 — Card operacional:** criação manual, briefing, checklist, comentários, histórico, arquivos privados e timer concluídos.
 - **Marco 3 — Fluxo e foco pessoal:** agenda Todoist, Kanban pessoal, biblioteca de workflows, versões imutáveis, agenda por etapa, handoffs validados e alertas de risco concluídos nesta base.
-- **Próximo marco — Relatórios operacionais:** indicadores de prazo, volume, tempo investido e gargalos por empresa, categoria, responsável e etapa, usando o histórico operacional já persistido.
+- **Marco 4 — Relatórios operacionais:** primeira visão executiva concluída com indicadores de prazo, volume, tempo apontado, esforço previsto e gargalos por empresa, categoria, responsável e etapa.
+- **Próximo incremento — Histórico e distribuição:** evolução dos relatórios com tendência temporal, SLA por etapa, capacidade planejada versus realizada, filtros persistentes e exportação.
 
 ## Execução local
 
