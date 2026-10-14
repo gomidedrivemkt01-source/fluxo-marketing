@@ -1188,8 +1188,17 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .reports-workspace { display: grid; gap: 18px; }
 .report-hero { display: flex; align-items: center; justify-content: space-between; gap: 28px; min-height: 178px; padding: 30px 34px; border-radius: 13px; color: var(--on-sidebar); background: linear-gradient(115deg, var(--sidebar), color-mix(in srgb, var(--teal-dark) 55%, var(--sidebar))); box-shadow: 0 18px 50px var(--shadow-color); }
 .report-hero.custom { align-items: stretch; flex-direction: column; }
+.report-hero-copy { flex: 1 1 420px; min-width: 0; }
 .report-hero h2 { margin: 7px 0 8px; color: inherit; font: 600 clamp(1.55rem, 2.5vw, 2.2rem)/1.08 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -.04em; }
 .report-hero p { max-width: 660px; margin: 0; color: var(--sidebar-muted); font-size: .78rem; line-height: 1.65; }
+.report-controls { display: flex; flex: 0 1 470px; align-items: flex-end; justify-content: flex-end; gap: 12px; min-width: 0; }
+.report-controls.custom { flex-basis: auto; justify-content: flex-start; width: 100%; }
+.report-scope-picker { display: grid; flex: 1 1 225px; gap: 7px; min-width: 190px; max-width: 250px; }
+.report-scope-picker > span, .report-private-scope > span { color: var(--sidebar-muted); font-size: .58rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.report-scope-picker > small { color: var(--sidebar-muted); font-size: .56rem; line-height: 1.4; }
+.report-private-scope { display: grid; flex: 1 1 225px; gap: 4px; min-width: 190px; max-width: 250px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 24%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--surface) 9%, transparent); }
+.report-private-scope strong { color: var(--on-sidebar); font-size: .72rem; }
+.report-private-scope small { color: var(--sidebar-muted); font-size: .56rem; line-height: 1.35; }
 .report-period-picker { display: grid; flex: 0 0 220px; gap: 7px; width: min(100%, 220px); }
 .report-period-picker.custom { width: min(100%, 620px); }
 .report-period-picker label { display: grid; gap: 7px; }
@@ -1289,6 +1298,9 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .agenda-row-open { grid-template-columns: 18px minmax(0, 1fr) 15px; }
   .agenda-row .priority, .agenda-row time { display: none; }
   .report-hero { align-items: stretch; flex-direction: column; padding: 25px; }
+  .report-hero-copy { flex-basis: auto; }
+  .report-controls, .report-controls.custom { align-items: stretch; flex-basis: auto; flex-direction: column; width: 100%; }
+  .report-scope-picker, .report-private-scope { flex-basis: auto; min-width: 0; max-width: none; width: 100%; }
   .report-period-picker { flex-basis: auto; width: 100%; }
   .report-custom-range { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-custom-range button { grid-column: 1 / -1; }

@@ -16,7 +16,17 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal
 from app.auth.service import Principal
 from app.database import get_db
-from app.models import Company, Demand, DemandCategory, TimeEntry, UserProfile, WorkflowStage, utc_now
+from app.models import (
+    Company,
+    Demand,
+    DemandCategory,
+    Membership,
+    MembershipStatus,
+    TimeEntry,
+    UserProfile,
+    WorkflowStage,
+    utc_now,
+)
 
 router = APIRouter(prefix="/reports", tags=["Relatórios"])
 
@@ -69,6 +79,10 @@ class OperationalReportOut(BaseModel):
     period_started_at: datetime = Field(alias="periodStartedAt")
     period_ended_at: datetime = Field(alias="periodEndedAt")
     generated_at: datetime = Field(alias="generatedAt")
+    scope: str
+    scope_profile_id: uuid.UUID | None = Field(alias="scopeProfileId")
+    scope_profile_name: str | None = Field(alias="scopeProfileName")
+    can_view_team: bool = Field(alias="canViewTeam")
     summary: ReportSummaryOut
     by_status: list[ReportBreakdownOut] = Field(alias="byStatus")
     by_company: list[ReportBreakdownOut] = Field(alias="byCompany")
@@ -152,6 +166,10 @@ def build_operational_report(
     now: datetime,
     period_started_at: datetime | None = None,
     period_ended_at: datetime | None = None,
+    scope: str = "team",
+    scope_profile_id: uuid.UUID | None = None,
+    scope_profile_name: str | None = None,
+    can_view_team: bool = True,
 ) -> OperationalReportOut:
     period_started_at = period_started_at or now - timedelta(days=days)
     period_ended_at = period_ended_at or now
@@ -226,6 +244,10 @@ def build_operational_report(
         period_started_at=period_started_at,
         period_ended_at=period_ended_at,
         generated_at=now,
+        scope=scope,
+        scope_profile_id=scope_profile_id,
+        scope_profile_name=scope_profile_name,
+        can_view_team=can_view_team,
         summary=ReportSummaryOut(
             total_demands=len(demands),
             created_in_period=sum(
@@ -325,16 +347,60 @@ def resolve_report_period(
     return period_days, started_at, ended_at
 
 
+def resolve_report_scope(
+    *,
+    role_code: str | None,
+    own_profile_id: uuid.UUID,
+    requested_profile_id: uuid.UUID | None,
+) -> tuple[bool, uuid.UUID | None]:
+    """Resolve o escopo sem confiar no filtro enviado pelo navegador."""
+    can_view_team = role_code in {"admin", "coordinator"}
+    if can_view_team:
+        return True, requested_profile_id
+    if requested_profile_id and requested_profile_id != own_profile_id:
+        raise ApiError(
+            403,
+            "report_scope_forbidden",
+            "Você pode consultar apenas o próprio relatório.",
+        )
+    return False, own_profile_id
+
+
 @router.get("/operational", response_model=OperationalReportOut)
 def operational_report(
     days: int = Query(default=30, ge=7, le=365),
     start_date: date | None = Query(default=None, alias="startDate"),
     end_date: date | None = Query(default=None, alias="endDate"),
+    assignee_id: uuid.UUID | None = Query(default=None, alias="assigneeId"),
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
 ) -> OperationalReportOut:
     require_permission(principal, "demands:read")
     organization_id = principal.membership.organization_id
+    can_view_team, scope_profile_id = resolve_report_scope(
+        role_code=principal.role.code if principal.role else None,
+        own_profile_id=principal.profile.id,
+        requested_profile_id=assignee_id,
+    )
+    scope_profile: UserProfile | None = None
+    if scope_profile_id == principal.profile.id:
+        scope_profile = principal.profile
+    elif scope_profile_id:
+        scope_profile = db.scalar(
+            select(UserProfile)
+            .join(Membership, Membership.user_profile_id == UserProfile.id)
+            .where(
+                UserProfile.id == scope_profile_id,
+                Membership.organization_id == organization_id,
+                Membership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        if not scope_profile:
+            raise ApiError(
+                404,
+                "report_profile_not_found",
+                "A pessoa selecionada não pertence à equipe ativa.",
+            )
     now = utc_now()
     period_days, period_started_at, period_ended_at = resolve_report_period(
         days=days,
@@ -343,32 +409,32 @@ def operational_report(
         timezone_name=principal.profile.timezone,
         now=now,
     )
-    demands = list(
-        db.scalars(
-            select(Demand).where(
-                Demand.organization_id == organization_id,
-                Demand.deleted_at.is_(None),
-                Demand.archived_at.is_(None),
-            )
+    demand_statement = select(Demand).where(
+        Demand.organization_id == organization_id,
+        Demand.deleted_at.is_(None),
+        Demand.archived_at.is_(None),
+    )
+    if scope_profile_id:
+        demand_statement = demand_statement.where(Demand.current_assignee_id == scope_profile_id)
+    demands = list(db.scalars(demand_statement))
+
+    time_statement = (
+        select(TimeEntry)
+        .join(Demand, Demand.id == TimeEntry.demand_id)
+        .where(
+            TimeEntry.organization_id == organization_id,
+            TimeEntry.deleted_at.is_(None),
+            TimeEntry.started_at >= period_started_at,
+            TimeEntry.started_at <= period_ended_at,
+            TimeEntry.duration_minutes.is_not(None),
+            Demand.organization_id == organization_id,
+            Demand.deleted_at.is_(None),
+            Demand.archived_at.is_(None),
         )
     )
-    demand_ids = {demand.id for demand in demands}
-    entries = (
-        list(
-            db.scalars(
-                select(TimeEntry).where(
-                    TimeEntry.organization_id == organization_id,
-                    TimeEntry.demand_id.in_(demand_ids),
-                    TimeEntry.deleted_at.is_(None),
-                    TimeEntry.started_at >= period_started_at,
-                    TimeEntry.started_at <= period_ended_at,
-                    TimeEntry.duration_minutes.is_not(None),
-                )
-            )
-        )
-        if demand_ids
-        else []
-    )
+    if scope_profile_id:
+        time_statement = time_statement.where(TimeEntry.user_profile_id == scope_profile_id)
+    entries = list(db.scalars(time_statement))
     companies = {
         item.id: item
         for item in db.scalars(select(Company).where(Company.organization_id == organization_id))
@@ -394,6 +460,8 @@ def operational_report(
         if assignee_ids
         else {}
     )
+    if scope_profile:
+        profiles[scope_profile.id] = scope_profile
     return build_operational_report(
         demands=demands,
         entries=entries,
@@ -405,4 +473,8 @@ def operational_report(
         now=now,
         period_started_at=period_started_at,
         period_ended_at=period_ended_at,
+        scope="person" if scope_profile_id else "team",
+        scope_profile_id=scope_profile_id,
+        scope_profile_name=scope_profile.full_name if scope_profile else None,
+        can_view_team=can_view_team,
     )

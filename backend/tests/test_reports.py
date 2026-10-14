@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from app.api.errors import ApiError
-from app.api.reports import build_operational_report, resolve_report_period
+from app.api.reports import build_operational_report, resolve_report_period, resolve_report_scope
 from app.models import Company, Demand, DemandCategory, TimeEntry, UserProfile, WorkflowStage
 
 
@@ -191,3 +191,48 @@ def test_custom_report_period_rejects_reversed_dates() -> None:
             timezone_name="America/Sao_Paulo",
             now=datetime(2026, 10, 9, 15, tzinfo=UTC),
         )
+
+
+def test_collaborator_report_is_forced_to_own_profile() -> None:
+    own_profile_id = uuid.uuid4()
+
+    can_view_team, scope_profile_id = resolve_report_scope(
+        role_code="collaborator",
+        own_profile_id=own_profile_id,
+        requested_profile_id=None,
+    )
+
+    assert can_view_team is False
+    assert scope_profile_id == own_profile_id
+
+
+def test_collaborator_cannot_request_another_person_report() -> None:
+    with pytest.raises(ApiError) as caught:
+        resolve_report_scope(
+            role_code="collaborator",
+            own_profile_id=uuid.uuid4(),
+            requested_profile_id=uuid.uuid4(),
+        )
+
+    assert caught.value.status_code == 403
+
+
+def test_coordinator_can_switch_between_team_and_individual_reports() -> None:
+    own_profile_id = uuid.uuid4()
+    other_profile_id = uuid.uuid4()
+
+    team_access, team_scope = resolve_report_scope(
+        role_code="coordinator",
+        own_profile_id=own_profile_id,
+        requested_profile_id=None,
+    )
+    person_access, person_scope = resolve_report_scope(
+        role_code="coordinator",
+        own_profile_id=own_profile_id,
+        requested_profile_id=other_profile_id,
+    )
+
+    assert team_access is True
+    assert team_scope is None
+    assert person_access is True
+    assert person_scope == other_profile_id
