@@ -711,6 +711,98 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class TrelloImportBatch(Base):
+    __tablename__ = "trello_import_batches"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "document_hash", name="uq_trello_import_org_hash"),
+        Index("ix_trello_import_org_created", "organization_id", "created_at"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    board_id: Mapped[str] = mapped_column(String(100))
+    board_name: Mapped[str] = mapped_column(String(200))
+    document_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(20), default="applied")
+    total_cards: Mapped[int] = mapped_column(Integer)
+    created_cards: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    updated_cards: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    unchanged_cards: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    archived_cards: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    summary_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    changes_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reverted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TrelloCardLink(Base):
+    __tablename__ = "trello_card_links"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "board_id", "card_id", name="uq_trello_card_org_board_card"),
+        Index("ix_trello_card_link_demand", "demand_id"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    board_id: Mapped[str] = mapped_column(String(100))
+    card_id: Mapped[str] = mapped_column(String(100))
+    demand_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demands.id", ondelete="RESTRICT"), index=True
+    )
+    last_import_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.trello_import_batches.id", ondelete="RESTRICT")
+    )
+    source_hash: Mapped[str] = mapped_column(String(64))
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DemandRevision(Base):
+    __tablename__ = "demand_revisions"
+    __table_args__ = (
+        Index("ix_demand_revision_org_created", "organization_id", "created_at"),
+        Index("ix_demand_revision_demand_created", "demand_id", "created_at"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    demand_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    operation: Mapped[str] = mapped_column(String(20))
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DataRetentionPolicy(Base):
+    __tablename__ = "data_retention_policies"
+    __table_args__ = {"schema": "app"}
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.organizations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    automatic_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    interval_days: Mapped[int] = mapped_column(Integer, default=60, server_default="60")
+    completed_after_days: Mapped[int] = mapped_column(Integer, default=60, server_default="60")
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class PrivacyNoticeVersion(Base):
     __tablename__ = "privacy_notice_versions"
     __table_args__ = {"schema": "app"}

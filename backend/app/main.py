@@ -1,4 +1,7 @@
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -15,6 +18,7 @@ from app.api.daily_imports import router as daily_imports_router
 from app.api.demands import router as demands_router
 from app.api.errors import ApiError, api_error_handler
 from app.api.files import router as files_router
+from app.api.governance import router as governance_router
 from app.api.reports import router as reports_router
 from app.api.time_tracking import active_router as active_time_tracking_router
 from app.api.time_tracking import router as time_tracking_router
@@ -23,14 +27,27 @@ from app.api.work_content import catalog_router as work_catalog_router
 from app.api.work_content import demand_router as work_demand_router
 from app.auth.router import router as auth_router
 from app.core.config import get_settings
+from app.retention import retention_loop
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    retention_task = asyncio.create_task(retention_loop())
+    yield
+    retention_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await retention_task
+
+
 app = FastAPI(
     title=f"{settings.name} API",
     version="0.1.0",
     docs_url="/api/docs" if settings.env != "production" else None,
     redoc_url=None,
     openapi_url="/api/openapi.json" if settings.env != "production" else None,
+    lifespan=lifespan,
 )
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_middleware(
@@ -83,6 +100,7 @@ app.include_router(files_router, prefix="/api/v1")
 app.include_router(time_tracking_router, prefix="/api/v1")
 app.include_router(active_time_tracking_router, prefix="/api/v1")
 app.include_router(reports_router, prefix="/api/v1")
+app.include_router(governance_router, prefix="/api/v1")
 
 
 @app.get("/health", include_in_schema=False)

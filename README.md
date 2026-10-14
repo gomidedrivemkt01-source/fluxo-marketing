@@ -2,7 +2,7 @@
 
 Fundação da plataforma interna de gestão e inteligência operacional do Marketing.
 
-O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, responsáveis, workflows reutilizáveis, visões pessoais em Kanban e lista, empresas, categorias, briefings configuráveis, checklists por etapa e por card, comentários, histórico, timer, arquivos privados, perfil com foto, auditoria, relatórios operacionais e importação assistida de Dailys.
+O MVP entrega autenticação por e-mail e senha com código, recuperação de senha, aprovação administrativa, perfis de acesso, criação e edição manual de demandas, responsáveis, workflows reutilizáveis, visões pessoais em Kanban e lista, empresas, categorias, briefings configuráveis, checklists por etapa e por card, comentários, histórico, timer, arquivos privados, perfil com foto, auditoria, relatórios operacionais, importação assistida de Dailys e migração controlada de quadros do Trello.
 
 A criação manual é a entrada principal da operação. **Início** funciona como agenda pessoal e separa as entregas em atrasadas, hoje, amanhã e datas futuras. **Meu trabalho** permite criar, ordenar e colorir colunas pessoais em Kanban ou lista sem alterar o workflow compartilhado. Ao filtrar um responsável, a equipe vê a organização escolhida por essa pessoa; ao combinar responsáveis, a plataforma usa uma lista única.
 
@@ -20,7 +20,16 @@ O upload de uma Daily é um recurso complementar na área de Inteligência e nun
 - **Marco 2 — Card operacional:** criação manual, briefing, checklist, comentários, histórico, arquivos privados e timer concluídos.
 - **Marco 3 — Fluxo e foco pessoal:** agenda Todoist, Kanban pessoal, biblioteca de workflows, versões imutáveis, agenda por etapa, handoffs validados e alertas de risco concluídos nesta base.
 - **Marco 4 — Relatórios operacionais:** primeira visão executiva concluída com períodos rápidos ou personalizados, indicadores de prazo, volume, tempo apontado, esforço previsto e gargalos por empresa, categoria, responsável e etapa. Administradores e coordenadores alternam entre o overview da equipe e relatórios individuais; colaboradores e visualizadores recebem somente o próprio relatório, com a restrição aplicada também na API.
-- **Próximo incremento — Histórico e distribuição:** evolução dos relatórios com tendência temporal, SLA por etapa, capacidade planejada versus realizada, filtros persistentes e exportação.
+- **Marco 5 — Governança de dados:** área administrativa para validar, importar e exportar JSON compatível com Trello; vínculo estável por cartão para impedir duplicações; histórico de lotes com reversão; versões automáticas das demandas; restauração de itens arquivados; e retenção bimestral reversível de demandas concluídas, preservando tempos e indicadores.
+- **Próximo incremento — Histórico e distribuição:** evolução dos relatórios com tendência temporal, SLA por etapa, capacidade planejada versus realizada e filtros persistentes.
+
+## Importação e retenção
+
+Em **Configurações**, somente administradores podem validar um export JSON completo do Trello. A prévia mostra cartões novos, alterados e já vinculados, o destino de cada lista no workflow padrão e a correspondência dos membros antes da aplicação. Por padrão, a importação cria apenas cartões ainda desconhecidos; a atualização de demandas existentes precisa ser habilitada explicitamente. O arquivo pode ter até 25 MB.
+
+Cada lote guarda as alterações necessárias para reversão. Demandas criadas por um lote revertido são arquivadas, e demandas atualizadas voltam ao estado anterior. Além disso, um trigger do PostgreSQL salva a versão anterior de toda demanda alterada ou excluída.
+
+A política inicial verifica a cada 60 dias as demandas concluídas sem alteração há pelo menos 60 dias. A ação apenas preenche `archived_at`: não remove demandas, tempos, comentários ou dados de performance. O administrador pode revisar a quantidade elegível, executar o arquivamento manualmente e restaurar itens depois.
 
 ## Execução local
 

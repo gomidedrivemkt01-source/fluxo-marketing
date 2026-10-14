@@ -2,8 +2,8 @@
 
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta, timezone
-from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Query
@@ -150,7 +150,7 @@ def _breakdown(
             )
             for key, values in buckets.items()
         ],
-        key=lambda item: (-item.count, -item.overdue, item.label.casefold()),
+        key=lambda item: (-item.count, -item.total_minutes, -item.overdue, item.label.casefold()),
     )
 
 
@@ -339,7 +339,7 @@ def resolve_report_period(
             "O período personalizado pode abranger no máximo três anos.",
         )
     try:
-        user_timezone = ZoneInfo(timezone_name)
+        user_timezone: ZoneInfo | timezone = ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError:
         user_timezone = timezone(timedelta(hours=-3), name="America/Sao_Paulo")
     started_at = datetime.combine(start_date, time.min, tzinfo=user_timezone).astimezone(UTC)
@@ -428,8 +428,6 @@ def operational_report(
             TimeEntry.started_at <= period_ended_at,
             TimeEntry.duration_minutes.is_not(None),
             Demand.organization_id == organization_id,
-            Demand.deleted_at.is_(None),
-            Demand.archived_at.is_(None),
         )
     )
     if scope_profile_id:
