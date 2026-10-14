@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.access import require_permission
@@ -411,8 +411,10 @@ def operational_report(
     )
     demand_statement = select(Demand).where(
         Demand.organization_id == organization_id,
-        Demand.deleted_at.is_(None),
-        Demand.archived_at.is_(None),
+        or_(
+            Demand.status == "COMPLETED",
+            and_(Demand.deleted_at.is_(None), Demand.archived_at.is_(None)),
+        ),
     )
     if scope_profile_id:
         demand_statement = demand_statement.where(Demand.current_assignee_id == scope_profile_id)
