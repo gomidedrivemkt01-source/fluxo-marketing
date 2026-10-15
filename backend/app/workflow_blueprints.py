@@ -736,8 +736,9 @@ def publish_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
         )
     }
     role_assignment_count = ensure_initial_role_assignments(db, organization_id, roles)
+    db.flush()
     assignments_by_role = {
-        role_id
+        str(role_id)
         for role_id in db.scalars(
             select(MemberRoleAssignment.job_role_id).where(
                 MemberRoleAssignment.organization_id == organization_id,
@@ -790,7 +791,7 @@ def publish_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
         for stage in stages:
             if (
                 stage.owner_role_id
-                and stage.owner_role_id not in assignments_by_role
+                and str(stage.owner_role_id) not in assignments_by_role
                 and not stage.default_assignee_id
                 and not stage.fallback_user_id
             ):
