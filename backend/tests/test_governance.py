@@ -98,6 +98,7 @@ def test_matches_unique_short_profile_alias() -> None:
     profiles = [
         ("marketing", "Marketing Gomide Contabilidade", "gomidedrivemkt01@gmail.com"),
         ("maria", "Maria Fernanda Tavares", "maria@example.com"),
+        ("sivas", "Sivas Junior", "sivas@gomidecontabilidade.com.br"),
     ]
     assert best_profile_match("Gomide", profiles) == "marketing"
 

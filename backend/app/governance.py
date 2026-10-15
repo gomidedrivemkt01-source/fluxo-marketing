@@ -152,6 +152,7 @@ def best_named_match(source_name: str, candidates: list[tuple[str, str]]) -> str
     source = normalized(source_name)
     if not source:
         return None
+
     exact = [identifier for identifier, name in candidates if normalized(name) == source]
     if len(exact) == 1:
         return exact[0]
@@ -170,6 +171,12 @@ def best_profile_match(source_name: str, candidates: list[tuple[str, str, str]])
     if not source:
         return None
 
+    name_match = best_named_match(
+        source_name, [(identifier, full_name) for identifier, full_name, _email in candidates]
+    )
+    if name_match:
+        return name_match
+
     aliases: dict[str, set[str]] = {}
     for identifier, full_name, email in candidates:
         values = {normalized(full_name), normalized(email)}
@@ -180,14 +187,6 @@ def best_profile_match(source_name: str, candidates: list[tuple[str, str, str]])
     exact = [identifier for identifier, values in aliases.items() if source in values]
     if len(exact) == 1:
         return exact[0]
-
-    partial = {
-        identifier
-        for identifier, values in aliases.items()
-        if any(source in value or value in source for value in values)
-    }
-    if len(partial) == 1:
-        return next(iter(partial))
 
     ignored_tokens = {"DA", "DAS", "DE", "DO", "DOS", "E"}
     source_tokens = {token for token in source.split() if token not in ignored_tokens}
