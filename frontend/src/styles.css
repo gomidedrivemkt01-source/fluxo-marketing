@@ -564,6 +564,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .entity-cards article { display: grid; grid-template-columns: 10px 1fr auto; gap: 16px; align-items: center; padding: 20px 24px; border-bottom: 1px solid #e9eef0; }
 .entity-cards article > i { width: 10px; height: 48px; border-radius: 5px; }
 .entity-cards article > div { display: grid; }
+.entity-cards article > .entity-actions { display: flex; align-items: center; gap: 8px; }
 .entity-cards strong { color: var(--ink); font-size: .87rem; }
 .entity-cards span { margin-top: 4px; color: #8799a1; font-size: .65rem; }
 .entity-cards p { margin: 7px 0 0; color: #6f838c; font-size: .74rem; }

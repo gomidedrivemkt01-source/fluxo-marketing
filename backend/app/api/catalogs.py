@@ -2,9 +2,9 @@ import re
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -428,6 +428,64 @@ def update_company(
         raise ApiError(409, "company_conflict", "Nome ou código já utilizado.") from exc
     db.refresh(company)
     return company
+
+
+@router.delete(
+    "/companies/{company_id}",
+    status_code=204,
+    dependencies=[Depends(require_csrf)],
+)
+def archive_company(
+    company_id: uuid.UUID,
+    expected_revision: int = Query(alias="expectedRevision", ge=1),
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Retira a empresa dos cadastros ativos sem apagar referências históricas."""
+    require_permission(principal, "catalog:write")
+    company = db.scalar(
+        select(Company)
+        .where(
+            Company.id == company_id,
+            Company.organization_id == principal.membership.organization_id,
+        )
+        .with_for_update()
+    )
+    if not company or not company.active:
+        raise ApiError(404, "company_not_found", "Empresa não encontrada.")
+    if company.revision != expected_revision:
+        raise ApiError(409, "revision_conflict", "A empresa foi alterada. Atualize a tela.")
+    linked_demands = db.scalar(
+        select(func.count(Demand.id)).where(
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.primary_company_id == company.id,
+        )
+    ) or 0
+    before = {
+        "name": company.name,
+        "code": company.code,
+        "revision": company.revision,
+        "active": company.active,
+    }
+    company.active = False
+    company.revision += 1
+    company.updated_at = utc_now()
+    _audit(
+        db,
+        principal,
+        "COMPANY_ARCHIVED",
+        company.id,
+        before=before,
+        after={
+            "name": company.name,
+            "code": company.code,
+            "revision": company.revision,
+            "active": False,
+            "linkedDemandsPreserved": linked_demands,
+        },
+    )
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/categories", response_model=list[CategoryOut])

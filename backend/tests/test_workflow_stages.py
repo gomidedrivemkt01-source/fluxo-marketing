@@ -9,6 +9,7 @@ from app.api.catalogs import (
     WorkflowInput,
     WorkflowStageReorder,
     WorkflowStageUpdate,
+    archive_company,
     reorder_workflow_stages,
     update_workflow_stage,
 )
@@ -27,6 +28,7 @@ from app.api.errors import ApiError
 from app.auth.service import Principal
 from app.models import (
     AuditEvent,
+    Company,
     Demand,
     DemandStageInstance,
     DemandUpdate,
@@ -63,6 +65,33 @@ def _principal() -> Principal:
         permissions=["catalog:write", "demands:read"],
     )
     return Principal(MagicMock(), profile, membership, role)
+
+
+def test_archive_company_preserves_linked_demands_and_registers_audit() -> None:
+    principal = _principal()
+    company = Company(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        name="Empresa duplicada",
+        short_name="Duplicada",
+        code="DUPLICADA",
+        color="#155E75",
+        active=True,
+        revision=2,
+    )
+    db = MagicMock(spec=Session)
+    db.scalar.side_effect = [company, 3]
+
+    response = archive_company(company.id, 2, principal, db)
+
+    assert response.status_code == 204
+    assert company.active is False
+    assert company.revision == 3
+    audit = db.add.call_args.args[0]
+    assert isinstance(audit, AuditEvent)
+    assert audit.event_type == "COMPANY_ARCHIVED"
+    assert audit.metadata_json["after"]["linkedDemandsPreserved"] == 3
+    db.commit.assert_called_once()
 
 
 def test_reorder_updates_every_active_stage_and_registers_audit() -> None:

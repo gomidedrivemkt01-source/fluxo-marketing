@@ -1,6 +1,7 @@
 """Governança administrativa: Trello, histórico, restauração e retenção."""
 
 import hashlib
+import logging
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -47,6 +48,7 @@ from app.models import (
 from app.retention import archive_completed_demands, eligible_retention_count, get_or_create_policy
 
 router = APIRouter(prefix="/governance", tags=["Governança"])
+logger = logging.getLogger(__name__)
 
 
 def require_admin(principal: Principal) -> None:
@@ -270,11 +272,17 @@ def allocate_public_ids(db: Session, count: int) -> list[str]:
     year = utc_now().year
     last = db.execute(
         text(
-            "INSERT INTO app.demand_counters (year, last_value) VALUES (:year, :count) "
-            "ON CONFLICT (year) DO UPDATE SET last_value = demand_counters.last_value + :count "
+            "WITH current_max AS ("
+            "  SELECT COALESCE(MAX(SUBSTRING(public_id FROM '^DMD-[0-9]{4}-([0-9]+)$')::int), 0) AS value "
+            "  FROM app.demands WHERE public_id LIKE :prefix"
+            ") "
+            "INSERT INTO app.demand_counters (year, last_value) "
+            "SELECT :year, current_max.value + :count FROM current_max "
+            "ON CONFLICT (year) DO UPDATE SET last_value = "
+            "GREATEST(demand_counters.last_value, EXCLUDED.last_value - :count) + :count "
             "RETURNING last_value"
         ),
-        {"year": year, "count": count},
+        {"year": year, "count": count, "prefix": f"DMD-{year}-%"},
     ).scalar_one()
     return [f"DMD-{year}-{number:06d}" for number in range(last - count + 1, last + 1)]
 
@@ -567,10 +575,31 @@ async def apply_trello(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        diagnostic = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        logger.exception(
+            "Trello import integrity conflict board=%s constraint=%s",
+            board_id,
+            diagnostic or "unknown",
+        )
+        messages = {
+            "uq_demand_org_public_id": (
+                "O contador de códigos das demandas estava desatualizado. "
+                "Valide o arquivo novamente e repita a importação."
+            ),
+            "uq_trello_import_org_hash": "Este mesmo arquivo já foi importado.",
+            "uq_trello_card_org_board_card": (
+                "Outro lote vinculou cartões deste quadro durante a importação. "
+                "Valide o arquivo novamente."
+            ),
+        }
         raise ApiError(
             409,
             "trello_import_conflict",
-            "A importação encontrou dados já vinculados. Valide o arquivo novamente.",
+            messages.get(
+                diagnostic,
+                "A importação encontrou um conflito de integridade. "
+                "Nenhum card foi criado; valide o arquivo novamente.",
+            ),
         ) from exc
     return {
         "batchId": str(batch.id),
