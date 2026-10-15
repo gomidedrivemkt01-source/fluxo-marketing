@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0016_workflow_governance_foundation"
+revision: str = "0016_workflow_governance"
 down_revision: str | None = "0015_data_governance"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
