@@ -17,6 +17,7 @@ from app.api.demands import (
     get_demand_timeline,
     move_stage_plan,
     rebalance_stage_deadlines,
+    resolve_stage_assignee,
     stage_risk,
     validate_stage_handoff,
     version_stage,
@@ -29,6 +30,7 @@ from app.models import (
     Demand,
     DemandStageInstance,
     DemandUpdate,
+    JobRole,
     Membership,
     MembershipStatus,
     PermissionRole,
@@ -166,6 +168,69 @@ def test_stage_defaults_assign_owner_and_calculate_forecast() -> None:
 
     assert demand.current_assignee_id == assignee_id
     assert demand.forecast_at == entered_at + timedelta(hours=48)
+
+
+def test_stage_role_resolves_to_the_active_primary_person() -> None:
+    principal = _principal()
+    role_id = uuid.uuid4()
+    profile_id = uuid.uuid4()
+    role = JobRole(
+        id=role_id,
+        organization_id=principal.membership.organization_id,
+        code="DESIGN_AUDIOVISUAL",
+        name="Design, edição e audiovisual",
+        active=True,
+    )
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000011",
+        title="Vídeo institucional",
+        status="WAITING_EXECUTION",
+        priority="NORMAL",
+        source="interface",
+        revision=1,
+        created_by=principal.profile.id,
+    )
+    db = MagicMock(spec=Session)
+    db.get.return_value = role
+    db.scalar.return_value = profile_id
+
+    resolved = resolve_stage_assignee(db, demand, owner_role_id=role_id)
+
+    assert resolved == profile_id
+
+
+def test_stage_role_uses_card_specialist_before_the_role_fallback() -> None:
+    principal = _principal()
+    role_id = uuid.uuid4()
+    specialist_id = uuid.uuid4()
+    role = JobRole(
+        id=role_id,
+        organization_id=principal.membership.organization_id,
+        code="TECHNICAL_SPECIALIST",
+        name="Especialista técnico",
+        active=True,
+    )
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000012",
+        title="Artigo tributário",
+        technical_specialist_id=specialist_id,
+        status="WAITING_EXECUTION",
+        priority="NORMAL",
+        source="interface",
+        revision=1,
+        created_by=principal.profile.id,
+    )
+    db = MagicMock(spec=Session)
+    db.get.return_value = role
+
+    resolved = resolve_stage_assignee(db, demand, owner_role_id=role_id)
+
+    assert resolved == specialist_id
+    db.scalar.assert_not_called()
 
 
 def test_workflow_definition_preserves_the_version_used_by_a_card() -> None:

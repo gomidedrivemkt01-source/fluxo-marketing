@@ -308,9 +308,13 @@ def restore_demand_state(demand: Demand, values: dict[str, Any]) -> None:
         "primary_company_id",
         "category_id",
         "current_assignee_id",
+        "requester_id",
+        "technical_specialist_id",
         "current_stage_id",
         "workflow_id",
         "workflow_version_id",
+        "briefing_template_version_id",
+        "category_template_binding_id",
         "created_by",
     }
     date_fields = {

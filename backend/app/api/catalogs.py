@@ -15,17 +15,21 @@ from app.auth.service import Principal
 from app.database import get_db
 from app.models import (
     AuditEvent,
+    CategoryTemplateBinding,
     Company,
     Demand,
     DemandCategory,
     JobRole,
+    MemberRoleAssignment,
     Membership,
     MembershipStatus,
+    UserProfile,
     Workflow,
     WorkflowStage,
+    WorkflowVersion,
     utc_now,
 )
-from app.workflow_blueprints import apply_blueprint, blueprint_preview
+from app.workflow_blueprints import apply_blueprint, blueprint_preview, publish_blueprint
 
 router = APIRouter(prefix="/catalogs", tags=["Cadastros"])
 
@@ -124,6 +128,23 @@ class JobRoleOut(BaseModel):
     description: str | None
     active: bool
     revision: int
+
+
+class JobRoleAssignmentOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: uuid.UUID
+    role_id: uuid.UUID = Field(alias="roleId")
+    profile_id: uuid.UUID = Field(alias="profileId")
+    profile_name: str = Field(alias="profileName")
+    priority: int
+    is_fallback: bool = Field(alias="isFallback")
+    active: bool
+
+
+class JobRoleAssignmentUpdate(BaseModel):
+    primary_profile_id: uuid.UUID | None = Field(default=None, alias="primaryProfileId")
+    fallback_profile_id: uuid.UUID | None = Field(default=None, alias="fallbackProfileId")
 
 
 class WorkflowStageInput(BaseModel):
@@ -579,6 +600,23 @@ def prepare_workflow_blueprint(
 
 
 @router.post(
+    "/workflow-blueprint/publish",
+    dependencies=[Depends(require_csrf)],
+)
+def publish_workflow_blueprint(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_permission(principal, "catalog:write")
+    _require_admin(principal)
+    try:
+        return publish_blueprint(db, principal)
+    except ValueError as exc:
+        db.rollback()
+        raise ApiError(422, "blueprint_not_ready", str(exc)) from exc
+
+
+@router.post(
     "/workflows",
     response_model=WorkflowOut,
     status_code=201,
@@ -701,6 +739,78 @@ def update_workflow(
         raise ApiError(409, "workflow_conflict", "Nome ou código de workflow já utilizado.") from exc
     db.refresh(workflow)
     return workflow
+
+
+@router.delete(
+    "/workflows/{workflow_id}",
+    dependencies=[Depends(require_csrf)],
+)
+def delete_workflow(
+    workflow_id: uuid.UUID,
+    expected_revision: int = Query(alias="expectedRevision", ge=1),
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_permission(principal, "catalog:write")
+    organization_id = principal.membership.organization_id
+    workflow = db.scalar(
+        select(Workflow)
+        .where(Workflow.id == workflow_id, Workflow.organization_id == organization_id)
+        .with_for_update()
+    )
+    if not workflow:
+        raise ApiError(404, "workflow_not_found", "Workflow não encontrado.")
+    if workflow.revision != expected_revision:
+        raise ApiError(409, "revision_conflict", "O workflow foi alterado. Atualize a tela.")
+    if workflow.is_default:
+        raise ApiError(409, "default_workflow_required", "O workflow padrão não pode ser excluído.")
+    linked_category = db.scalar(
+        select(DemandCategory.id).where(DemandCategory.default_workflow_id == workflow.id).limit(1)
+    )
+    linked_demand = db.scalar(
+        select(Demand.id).where(Demand.workflow_id == workflow.id).limit(1)
+    )
+    versions = list(
+        db.scalars(
+            select(WorkflowVersion).where(WorkflowVersion.workflow_id == workflow.id)
+        )
+    )
+    version_ids = [item.id for item in versions]
+    historical_binding = (
+        db.scalar(
+            select(CategoryTemplateBinding.id)
+            .where(CategoryTemplateBinding.workflow_version_id.in_(version_ids))
+            .limit(1)
+        )
+        if version_ids
+        else None
+    )
+    if linked_category or linked_demand or historical_binding:
+        raise ApiError(
+            409,
+            "workflow_in_use",
+            "Este workflow possui categoria, card ou histórico vinculado e deve ser preservado.",
+        )
+    snapshot = {
+        "id": str(workflow.id),
+        "name": workflow.name,
+        "code": workflow.code,
+        "lifecycleState": workflow.lifecycle_state,
+    }
+    for version in versions:
+        db.delete(version)
+    db.delete(workflow)
+    db.add(
+        AuditEvent(
+            organization_id=organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="WORKFLOW_DELETED",
+            source="interface",
+            metadata_json=snapshot,
+        )
+    )
+    db.commit()
+    return {"deleted": True, "workflow": snapshot}
 
 
 @router.get("/workflow-stages", response_model=list[WorkflowStageOut])
@@ -1022,3 +1132,181 @@ def create_job_role(
         raise ApiError(409, "job_role_conflict", "Este cargo já foi cadastrado.") from exc
     db.refresh(role)
     return role
+
+
+def _job_role_assignments(
+    db: Session,
+    organization_id: uuid.UUID,
+    *,
+    role_id: uuid.UUID | None = None,
+) -> list[JobRoleAssignmentOut]:
+    statement = (
+        select(MemberRoleAssignment, Membership, UserProfile)
+        .join(Membership, Membership.id == MemberRoleAssignment.membership_id)
+        .join(UserProfile, UserProfile.id == Membership.user_profile_id)
+        .where(
+            MemberRoleAssignment.organization_id == organization_id,
+            MemberRoleAssignment.active.is_(True),
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+    )
+    if role_id:
+        statement = statement.where(MemberRoleAssignment.job_role_id == role_id)
+    rows = db.execute(
+        statement.order_by(
+            MemberRoleAssignment.job_role_id,
+            MemberRoleAssignment.is_fallback,
+            MemberRoleAssignment.priority,
+            UserProfile.full_name,
+        )
+    ).all()
+    return [
+        JobRoleAssignmentOut(
+            id=assignment.id,
+            roleId=assignment.job_role_id,
+            profileId=membership.user_profile_id,
+            profileName=profile.full_name,
+            priority=assignment.priority,
+            isFallback=assignment.is_fallback,
+            active=assignment.active,
+        )
+        for assignment, membership, profile in rows
+    ]
+
+
+@router.get("/job-role-assignments", response_model=list[JobRoleAssignmentOut])
+def list_job_role_assignments(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> list[JobRoleAssignmentOut]:
+    require_permission(principal, "catalog:read")
+    return _job_role_assignments(db, principal.membership.organization_id)
+
+
+@router.put(
+    "/job-roles/{role_id}/assignments",
+    response_model=list[JobRoleAssignmentOut],
+    dependencies=[Depends(require_csrf)],
+)
+def update_job_role_assignments(
+    role_id: uuid.UUID,
+    payload: JobRoleAssignmentUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> list[JobRoleAssignmentOut]:
+    require_permission(principal, "catalog:write")
+    organization_id = principal.membership.organization_id
+    role = db.scalar(
+        select(JobRole)
+        .where(
+            JobRole.id == role_id,
+            JobRole.organization_id == organization_id,
+            JobRole.active.is_(True),
+        )
+        .with_for_update()
+    )
+    if role is None:
+        raise ApiError(404, "job_role_not_found", "Função operacional não encontrada.")
+    if (
+        payload.primary_profile_id
+        and payload.fallback_profile_id
+        and payload.primary_profile_id == payload.fallback_profile_id
+    ):
+        raise ApiError(
+            422,
+            "job_role_duplicate_assignee",
+            "O substituto precisa ser uma pessoa diferente do responsável principal.",
+        )
+
+    desired_profiles = {
+        profile_id
+        for profile_id in (payload.primary_profile_id, payload.fallback_profile_id)
+        if profile_id
+    }
+    memberships = {
+        item.user_profile_id: item
+        for item in db.scalars(
+            select(Membership).where(
+                Membership.organization_id == organization_id,
+                Membership.user_profile_id.in_(desired_profiles),
+                Membership.status == MembershipStatus.ACTIVE,
+            )
+        )
+    }
+    if len(memberships) != len(desired_profiles):
+        raise ApiError(
+            422,
+            "job_role_assignee_invalid",
+            "Todos os responsáveis precisam ser integrantes ativos da equipe.",
+        )
+
+    assignments = list(
+        db.scalars(
+            select(MemberRoleAssignment)
+            .where(
+                MemberRoleAssignment.organization_id == organization_id,
+                MemberRoleAssignment.job_role_id == role.id,
+            )
+            .with_for_update()
+        )
+    )
+    by_membership = {item.membership_id: item for item in assignments}
+    desired = [
+        (payload.primary_profile_id, False, 10),
+        (payload.fallback_profile_id, True, 20),
+    ]
+    desired_membership_ids = {
+        memberships[profile_id].id for profile_id, _, _ in desired if profile_id
+    }
+    before = [
+        {
+            "membershipId": str(item.membership_id),
+            "fallback": item.is_fallback,
+            "active": item.active,
+        }
+        for item in assignments
+        if item.active
+    ]
+    now = utc_now()
+    for assignment in assignments:
+        if assignment.membership_id not in desired_membership_ids and assignment.active:
+            assignment.active = False
+            assignment.revision += 1
+            assignment.updated_at = now
+    for profile_id, is_fallback, priority in desired:
+        if profile_id is None:
+            continue
+        membership = memberships[profile_id]
+        current_assignment = by_membership.get(membership.id)
+        if current_assignment is None:
+            current_assignment = MemberRoleAssignment(
+                organization_id=organization_id,
+                membership_id=membership.id,
+                job_role_id=role.id,
+            )
+            db.add(current_assignment)
+        else:
+            current_assignment.revision += 1
+        current_assignment.priority = priority
+        current_assignment.is_fallback = is_fallback
+        current_assignment.active = True
+        current_assignment.valid_from = None
+        current_assignment.valid_until = None
+        current_assignment.updated_at = now
+    role.revision += 1
+    _audit(
+        db,
+        principal,
+        "JOB_ROLE_ASSIGNMENTS_UPDATED",
+        role.id,
+        before={"assignments": before},
+        after={
+            "primaryProfileId": str(payload.primary_profile_id)
+            if payload.primary_profile_id
+            else None,
+            "fallbackProfileId": str(payload.fallback_profile_id)
+            if payload.fallback_profile_id
+            else None,
+        },
+    )
+    db.commit()
+    return _job_role_assignments(db, organization_id, role_id=role.id)

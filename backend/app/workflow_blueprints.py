@@ -13,11 +13,17 @@ from app.api.demands import ensure_workflow_version
 from app.auth.service import Principal
 from app.models import (
     AuditEvent,
+    BriefingField,
     BriefingTemplate,
     BriefingTemplateVersion,
+    CategoryTemplateBinding,
     ChecklistTemplateItem,
     DemandCategory,
     JobRole,
+    MemberRoleAssignment,
+    Membership,
+    MembershipStatus,
+    UserProfile,
     Workflow,
     WorkflowStage,
     utc_now,
@@ -36,6 +42,18 @@ ROLE_NAMES = {
     "TECHNICAL_SPECIALIST": "Especialista técnico",
     "DEFINED_OWNER": "Responsável definido no card",
     "DEFINED_REVIEWER": "Revisor definido no card",
+}
+
+# Nomes iniciais definidos pelo manual. A associação continua configurável e usa IDs;
+# estes nomes servem apenas para preparar automaticamente quem já está cadastrado.
+ROLE_PROFILE_MATCHES = {
+    "STRATEGY_APPROVAL": ("João Guimarães",),
+    "COPY_CONTENT": ("Maria",),
+    "EDITORIAL_PUBLICATION": ("Natália",),
+    "DESIGN_AUDIOVISUAL": ("Sivas Junior",),
+    "TECH_AUTOMATION": ("Junior (TI)",),
+    "COMMERCIAL_RELATIONSHIP": ("Eduarda",),
+    "LOGISTICS_SUPPLIERS": ("Danilo",),
 }
 
 GLOBAL_FIELDS = [
@@ -332,6 +350,143 @@ def briefing_definition(category_code: str, spec: dict[str, Any]) -> dict[str, A
     }
 
 
+def normalized_name(value: str) -> str:
+    return stable_code(value).replace("_", " ")
+
+
+def ensure_initial_role_assignments(
+    db: Session,
+    organization_id: Any,
+    roles: dict[str, JobRole],
+) -> int:
+    """Associa somente nomes explicitamente definidos no manual e já cadastrados."""
+    members = list(
+        db.execute(
+            select(Membership, UserProfile)
+            .join(UserProfile, UserProfile.id == Membership.user_profile_id)
+            .where(
+                Membership.organization_id == organization_id,
+                Membership.status == MembershipStatus.ACTIVE,
+            )
+        ).all()
+    )
+    created = 0
+    for role_code, expected_names in ROLE_PROFILE_MATCHES.items():
+        role = roles.get(role_code)
+        if role is None:
+            continue
+        existing = db.scalar(
+            select(MemberRoleAssignment.id).where(
+                MemberRoleAssignment.organization_id == organization_id,
+                MemberRoleAssignment.job_role_id == role.id,
+                MemberRoleAssignment.active.is_(True),
+            )
+        )
+        if existing:
+            continue
+        matches: list[Membership] = []
+        for membership, profile in members:
+            profile_name = normalized_name(profile.full_name)
+            if any(
+                profile_name == normalized_name(expected)
+                or (
+                    " " not in normalized_name(expected)
+                    and profile_name.startswith(f"{normalized_name(expected)} ")
+                )
+                for expected in expected_names
+            ):
+                matches.append(membership)
+        if len(matches) != 1:
+            continue
+        db.add(
+            MemberRoleAssignment(
+                organization_id=organization_id,
+                membership_id=matches[0].id,
+                job_role_id=role.id,
+                priority=10,
+                is_fallback=False,
+                active=True,
+            )
+        )
+        created += 1
+    return created
+
+
+def sync_operational_briefing_fields(
+    db: Session,
+    organization_id: Any,
+    category: DemandCategory,
+    definition: dict[str, Any],
+) -> int:
+    """Espelha a versão publicada na interface operacional já usada pelos cards."""
+    fields = [*definition.get("globalFields", []), *definition.get("categoryFields", [])]
+    existing = {
+        item.key: item
+        for item in db.scalars(
+            select(BriefingField).where(
+                BriefingField.organization_id == organization_id,
+                BriefingField.category_id == category.id,
+            )
+        )
+    }
+    changed = 0
+    okr_options = [str(value) for value in definition.get("okrOptions", [])]
+    kpi_options = [str(value) for value in definition.get("kpiOptions", [])]
+    for position, field in enumerate(fields, start=1):
+        key = str(field["key"])
+        label = str(field["label"])
+        field_type = str(field.get("fieldType") or "text")
+        options: list[str] = []
+        if label == "OKR vinculado" and okr_options:
+            field_type, options = "select", okr_options
+        elif label == "KPI primário" and kpi_options:
+            field_type, options = "select", kpi_options
+        item = existing.get(key)
+        if item is None:
+            item = BriefingField(
+                organization_id=organization_id,
+                category_id=category.id,
+                label=label,
+                key=key,
+                help_text=f"Campo publicado pelo {BLUEPRINT_CODE}.",
+                field_type=field_type,
+                options=options,
+                required=field.get("requirement") == "required",
+                position=position,
+                active=True,
+            )
+            db.add(item)
+            changed += 1
+            continue
+        next_values = (
+            label,
+            field_type,
+            options,
+            field.get("requirement") == "required",
+            position,
+            True,
+        )
+        current_values = (
+            item.label,
+            item.field_type,
+            item.options,
+            item.required,
+            item.position,
+            item.active,
+        )
+        if current_values != next_values:
+            item.label = label
+            item.field_type = field_type
+            item.options = options
+            item.required = field.get("requirement") == "required"
+            item.position = position
+            item.active = True
+            item.revision += 1
+            item.updated_at = utc_now()
+            changed += 1
+    return changed
+
+
 def blueprint_preview(db: Session, principal: Principal) -> dict[str, Any]:
     organization_id = principal.membership.organization_id
     categories = {
@@ -390,6 +545,7 @@ def apply_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
         elif role.code != code:
             role.code = code
         roles[code] = role
+    role_assignment_count = ensure_initial_role_assignments(db, organization_id, roles)
 
     categories = {
         item.code: item
@@ -548,6 +704,7 @@ def apply_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
                 "stagesCreated": stage_count,
                 "checklistsCreated": checklist_count,
                 "briefingVersionsCreated": briefing_count,
+                "roleAssignmentsCreated": role_assignment_count,
             },
         )
     )
@@ -558,5 +715,183 @@ def apply_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
         "stagesCreated": stage_count,
         "checklistsCreated": checklist_count,
         "briefingVersionsCreated": briefing_count,
+        "roleAssignmentsCreated": role_assignment_count,
         "appliedAt": utc_now(),
+    }
+
+
+def publish_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
+    """Publica e vincula o pacote do manual sem migrar cards existentes."""
+    preview = blueprint_preview(db, principal)
+    if not preview["safeToApply"]:
+        raise ValueError(f"Categorias ausentes: {', '.join(preview['missingCategories'])}")
+    organization_id = principal.membership.organization_id
+    roles = {
+        item.code: item
+        for item in db.scalars(
+            select(JobRole).where(
+                JobRole.organization_id == organization_id,
+                JobRole.active.is_(True),
+            )
+        )
+    }
+    role_assignment_count = ensure_initial_role_assignments(db, organization_id, roles)
+    assignments_by_role = {
+        role_id
+        for role_id in db.scalars(
+            select(MemberRoleAssignment.job_role_id).where(
+                MemberRoleAssignment.organization_id == organization_id,
+                MemberRoleAssignment.active.is_(True),
+            )
+        )
+    }
+    categories = {
+        item.code: item
+        for item in db.scalars(
+            select(DemandCategory).where(
+                DemandCategory.organization_id == organization_id,
+                DemandCategory.active.is_(True),
+            )
+        )
+    }
+    published = bindings = briefing_versions = briefing_fields = 0
+    missing_people: set[str] = set()
+    now = utc_now()
+    for category_code in BLUEPRINTS:
+        workflow = db.scalar(
+            select(Workflow).where(
+                Workflow.organization_id == organization_id,
+                Workflow.code == f"WF_{category_code}",
+                Workflow.active.is_(True),
+            )
+        )
+        if workflow is None:
+            raise ValueError(f"Workflow ausente para {category_code}.")
+        stages = list(
+            db.scalars(
+                select(WorkflowStage).where(
+                    WorkflowStage.organization_id == organization_id,
+                    WorkflowStage.workflow_id == workflow.id,
+                    WorkflowStage.active.is_(True),
+                )
+            )
+        )
+        if not stages:
+            raise ValueError(f"Workflow {workflow.name} não possui etapas ativas.")
+        uncovered = [
+            stage.name
+            for stage in stages
+            if not stage.default_assignee_id and not stage.owner_role_id and not stage.fallback_user_id
+        ]
+        if uncovered:
+            raise ValueError(
+                f"Workflow {workflow.name} possui etapas sem papel responsável: {', '.join(uncovered)}."
+            )
+        for stage in stages:
+            if (
+                stage.owner_role_id
+                and stage.owner_role_id not in assignments_by_role
+                and not stage.default_assignee_id
+                and not stage.fallback_user_id
+            ):
+                role = db.get(JobRole, stage.owner_role_id)
+                if role and role.code not in {"TECHNICAL_SPECIALIST", "DEFINED_OWNER", "DEFINED_REVIEWER"}:
+                    missing_people.add(role.name)
+
+        workflow_version = ensure_workflow_version(
+            db, organization_id, workflow.id, principal.profile.id
+        )
+        template = db.scalar(
+            select(BriefingTemplate).where(
+                BriefingTemplate.organization_id == organization_id,
+                BriefingTemplate.category_id == categories[category_code].id,
+            )
+        )
+        if template is None:
+            raise ValueError(f"Briefing ausente para {category_code}.")
+        briefing_version = db.scalar(
+            select(BriefingTemplateVersion)
+            .where(BriefingTemplateVersion.template_id == template.id)
+            .order_by(BriefingTemplateVersion.version.desc())
+            .limit(1)
+        )
+        if briefing_version is None:
+            raise ValueError(f"Versão de briefing ausente para {category_code}.")
+
+        if workflow.lifecycle_state != "PUBLISHED":
+            workflow.lifecycle_state = "PUBLISHED"
+            workflow.published_at = now
+            workflow.revision += 1
+            workflow.updated_at = now
+            published += 1
+        if briefing_version.state != "PUBLISHED":
+            briefing_version.state = "PUBLISHED"
+            briefing_version.published_at = now
+            briefing_versions += 1
+
+        category = categories[category_code]
+        current_binding = db.scalar(
+            select(CategoryTemplateBinding).where(
+                CategoryTemplateBinding.organization_id == organization_id,
+                CategoryTemplateBinding.category_id == category.id,
+                CategoryTemplateBinding.effective_until.is_(None),
+            )
+        )
+        binding_matches = bool(
+            current_binding
+            and current_binding.workflow_version_id == workflow_version.id
+            and current_binding.briefing_template_version_id == briefing_version.id
+        )
+        if current_binding and not binding_matches:
+            current_binding.effective_until = now
+            current_binding.revision += 1
+            db.flush()
+        if not binding_matches:
+            db.add(
+                CategoryTemplateBinding(
+                    organization_id=organization_id,
+                    category_id=category.id,
+                    workflow_version_id=workflow_version.id,
+                    briefing_template_version_id=briefing_version.id,
+                    effective_from=now,
+                    activated_by=principal.profile.id,
+                )
+            )
+            bindings += 1
+        if category.default_workflow_id != workflow.id:
+            category.default_workflow_id = workflow.id
+            category.revision += 1
+        briefing_fields += sync_operational_briefing_fields(
+            db, organization_id, category, briefing_version.definition
+        )
+
+    db.add(
+        AuditEvent(
+            organization_id=organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="WORKFLOW_BLUEPRINT_PUBLISHED",
+            source="interface",
+            metadata_json={
+                "blueprint": BLUEPRINT_CODE,
+                "workflowsPublished": published,
+                "bindingsCreated": bindings,
+                "briefingVersionsPublished": briefing_versions,
+                "briefingFieldsSynchronized": briefing_fields,
+                "roleAssignmentsCreated": role_assignment_count,
+                "rolesWithoutPeople": sorted(missing_people),
+                "existingCardsMigrated": 0,
+            },
+        )
+    )
+    db.commit()
+    return {
+        **preview,
+        "workflowsPublished": published,
+        "bindingsCreated": bindings,
+        "briefingVersionsPublished": briefing_versions,
+        "briefingFieldsSynchronized": briefing_fields,
+        "roleAssignmentsCreated": role_assignment_count,
+        "rolesWithoutPeople": sorted(missing_people),
+        "existingCardsMigrated": 0,
+        "publishedAt": now,
     }

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
@@ -20,9 +21,12 @@ from app.models import (
     Demand,
     DemandCategory,
     DemandChecklistItem,
+    DemandRevision,
     DemandStageInstance,
     DemandStageVisit,
     DemandUpdate,
+    JobRole,
+    MemberRoleAssignment,
     Membership,
     MembershipStatus,
     TimeEntry,
@@ -113,6 +117,10 @@ class DemandWorkflowAction(BaseModel):
 class DemandStageScheduleUpdate(BaseModel):
     deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
     forecast_at: datetime | None = Field(default=None, alias="forecastAt")
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class DemandRemovalInput(BaseModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
@@ -271,16 +279,76 @@ def version_stage(
     )
 
 
+def resolve_stage_assignee(
+    db: Session | None,
+    demand: Demand,
+    *,
+    default_assignee_id: object = None,
+    owner_role_id: object = None,
+    fallback_user_id: object = None,
+) -> uuid.UUID | None:
+    if default_assignee_id:
+        return uuid.UUID(str(default_assignee_id))
+    if owner_role_id and db is not None:
+        role_id = uuid.UUID(str(owner_role_id))
+        role = db.get(JobRole, role_id)
+        if role and role.organization_id == demand.organization_id and role.active:
+            if role.code == "TECHNICAL_SPECIALIST" and demand.technical_specialist_id:
+                return demand.technical_specialist_id
+            if role.code in {"DEFINED_OWNER", "DEFINED_REVIEWER"}:
+                return demand.current_assignee_id
+            reference = utc_now()
+            membership_profile_id = db.scalar(
+                select(Membership.user_profile_id)
+                .join(
+                    MemberRoleAssignment,
+                    MemberRoleAssignment.membership_id == Membership.id,
+                )
+                .where(
+                    MemberRoleAssignment.organization_id == demand.organization_id,
+                    MemberRoleAssignment.job_role_id == role_id,
+                    MemberRoleAssignment.active.is_(True),
+                    or_(
+                        MemberRoleAssignment.valid_from.is_(None),
+                        MemberRoleAssignment.valid_from <= reference,
+                    ),
+                    or_(
+                        MemberRoleAssignment.valid_until.is_(None),
+                        MemberRoleAssignment.valid_until >= reference,
+                    ),
+                    Membership.status == MembershipStatus.ACTIVE,
+                )
+                .order_by(
+                    MemberRoleAssignment.is_fallback,
+                    MemberRoleAssignment.priority,
+                    MemberRoleAssignment.created_at,
+                )
+                .limit(1)
+            )
+            if membership_profile_id:
+                return membership_profile_id
+    if fallback_user_id:
+        return uuid.UUID(str(fallback_user_id))
+    return None
+
+
 def apply_stage_snapshot_defaults(
     demand: Demand,
     stage: dict[str, Any],
     *,
+    db: Session | None = None,
     apply_assignee: bool = True,
     entered_at: datetime | None = None,
 ) -> None:
-    default_assignee_id = stage.get("defaultAssigneeId")
-    if apply_assignee and default_assignee_id:
-        demand.current_assignee_id = uuid.UUID(str(default_assignee_id))
+    assignee_id = resolve_stage_assignee(
+        db,
+        demand,
+        default_assignee_id=stage.get("defaultAssigneeId"),
+        owner_role_id=stage.get("ownerRoleId"),
+        fallback_user_id=stage.get("fallbackUserId"),
+    )
+    if apply_assignee and assignee_id:
+        demand.current_assignee_id = assignee_id
     expected_duration = stage.get("expectedDurationHours")
     demand.forecast_at = (
         (entered_at or utc_now()) + timedelta(hours=int(expected_duration))
@@ -293,11 +361,19 @@ def apply_stage_defaults(
     demand: Demand,
     stage: WorkflowStage,
     *,
+    db: Session | None = None,
     apply_assignee: bool = True,
     entered_at: datetime | None = None,
 ) -> None:
-    if apply_assignee and stage.default_assignee_id:
-        demand.current_assignee_id = stage.default_assignee_id
+    assignee_id = resolve_stage_assignee(
+        db,
+        demand,
+        default_assignee_id=stage.default_assignee_id,
+        owner_role_id=stage.owner_role_id,
+        fallback_user_id=stage.fallback_user_id,
+    )
+    if apply_assignee and assignee_id:
+        demand.current_assignee_id = assignee_id
     demand.forecast_at = (
         (entered_at or utc_now()) + timedelta(hours=stage.expected_duration_hours)
         if stage.expected_duration_hours
@@ -383,6 +459,7 @@ def create_demand_record(
         apply_stage_snapshot_defaults(
             demand,
             stage_snapshot,
+            db=db,
             apply_assignee=assignee_id is None,
         )
     db.add(demand)
@@ -467,7 +544,13 @@ def ensure_demand_stage_instances(
                 forecast_at = forecast_cursor
             else:
                 forecast_at = None
-        default_assignee_id = item.get("defaultAssigneeId")
+        resolved_assignee_id = resolve_stage_assignee(
+            db,
+            demand,
+            default_assignee_id=item.get("defaultAssigneeId"),
+            owner_role_id=item.get("ownerRoleId"),
+            fallback_user_id=item.get("fallbackUserId"),
+        )
         instance = DemandStageInstance(
             organization_id=demand.organization_id,
             demand_id=demand.id,
@@ -478,7 +561,7 @@ def ensure_demand_stage_instances(
             assignee_id=(
                 demand.current_assignee_id
                 if is_current and demand.current_assignee_id
-                else uuid.UUID(str(default_assignee_id)) if default_assignee_id else None
+                else resolved_assignee_id
             ),
             deadline_at=demand.deadline_at if is_current else None,
             forecast_at=forecast_at,
@@ -881,6 +964,150 @@ def create_demand(
     return demand_out(db, demand)
 
 
+def demand_revision_snapshot(demand: Demand) -> dict[str, Any]:
+    fields = (
+        "id",
+        "organization_id",
+        "public_id",
+        "title",
+        "description",
+        "primary_company_id",
+        "category_id",
+        "current_assignee_id",
+        "requester_id",
+        "technical_specialist_id",
+        "current_stage_id",
+        "workflow_id",
+        "workflow_version_id",
+        "briefing_template_version_id",
+        "category_template_binding_id",
+        "status",
+        "operational_state",
+        "approval_risk",
+        "priority",
+        "deadline_at",
+        "forecast_at",
+        "expected_effort_minutes",
+        "source",
+        "revision",
+        "archived_at",
+        "deleted_at",
+        "created_by",
+        "created_at",
+        "updated_at",
+    )
+    return {field: jsonable_encoder(getattr(demand, field)) for field in fields}
+
+
+def _remove_demand(
+    db: Session,
+    principal: Principal,
+    demand_id: uuid.UUID,
+    payload: DemandRemovalInput,
+    *,
+    operation: str,
+) -> dict[str, Any]:
+    demand = db.scalar(
+        select(Demand)
+        .where(
+            Demand.id == demand_id,
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if demand is None:
+        raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    if operation == "ARCHIVE" and demand.archived_at is not None:
+        raise ApiError(409, "demand_already_archived", "Esta demanda já está arquivada.")
+    active_timer = db.scalar(
+        select(TimeEntry.id).where(
+            TimeEntry.organization_id == demand.organization_id,
+            TimeEntry.demand_id == demand.id,
+            TimeEntry.state.in_(["RUNNING", "PAUSED"]),
+            TimeEntry.deleted_at.is_(None),
+        )
+    )
+    if active_timer:
+        raise ApiError(
+            409,
+            "demand_timer_active",
+            "Encerre o timer ativo antes de arquivar ou excluir esta demanda.",
+        )
+    previous_revision = demand.revision
+    db.add(
+        DemandRevision(
+            organization_id=demand.organization_id,
+            demand_id=demand.id,
+            revision=previous_revision,
+            operation=operation,
+            snapshot=demand_revision_snapshot(demand),
+        )
+    )
+    now = utc_now()
+    demand.archived_at = now
+    if operation == "DELETE":
+        demand.deleted_at = now
+    demand.revision += 1
+    demand.updated_at = now
+    summary = "Demanda arquivada." if operation == "ARCHIVE" else "Demanda enviada à lixeira."
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind=f"DEMAND_{operation}D",
+            summary=summary,
+            payload={"previousRevision": previous_revision},
+        )
+    )
+    db.add(
+        AuditEvent(
+            organization_id=demand.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type=f"DEMAND_{operation}D",
+            source="interface",
+            metadata_json={"demandId": str(demand.id), "publicId": demand.public_id},
+        )
+    )
+    db.commit()
+    return {
+        "id": str(demand.id),
+        "archived": True,
+        "deleted": operation == "DELETE",
+        "revision": demand.revision,
+    }
+
+
+@router.post("/{demand_id}/archive", dependencies=[Depends(require_csrf)])
+def archive_demand(
+    demand_id: uuid.UUID,
+    payload: DemandRemovalInput,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    require_any_permission(principal, "demands:write", "demands:work")
+    return _remove_demand(db, principal, demand_id, payload, operation="ARCHIVE")
+
+
+@router.delete("/{demand_id}", dependencies=[Depends(require_csrf)])
+def delete_demand(
+    demand_id: uuid.UUID,
+    expected_revision: int = Query(alias="expectedRevision", ge=1),
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    require_permission(principal, "demands:write")
+    return _remove_demand(
+        db,
+        principal,
+        demand_id,
+        DemandRemovalInput(expectedRevision=expected_revision),
+        operation="DELETE",
+    )
+
+
 @router.get("/{demand_id}", response_model=DemandOut)
 def get_demand(
     demand_id: uuid.UUID,
@@ -989,10 +1216,16 @@ def update_demand(
         apply_stage_snapshot_defaults(
             demand,
             target_stage_snapshot,
+            db=db,
             apply_assignee=payload.assignee_id is None,
         )
     elif target_stage and previous_stage_id != stage_id:
-        apply_stage_defaults(demand, target_stage, apply_assignee=payload.assignee_id is None)
+        apply_stage_defaults(
+            demand,
+            target_stage,
+            db=db,
+            apply_assignee=payload.assignee_id is None,
+        )
     if target_version:
         stage_instances = ensure_demand_stage_instances(db, demand, target_version)
         if previous_stage_id != stage_id and stage_id:
@@ -1128,7 +1361,7 @@ def move_demand_stage(
     previous_stage_id = demand.current_stage_id
     moved_at = utc_now()
     demand.current_stage_id = stage.id
-    apply_stage_snapshot_defaults(demand, stage_snapshot)
+    apply_stage_snapshot_defaults(demand, stage_snapshot, db=db)
     target_instance = move_stage_plan(
         stage_instances,
         previous_stage_id,
@@ -1605,8 +1838,13 @@ def get_demand_timeline(
                 stage_forecast = forecast_cursor
             else:
                 stage_forecast = None
-        assignee_id_value = item.get("defaultAssigneeId")
-        assignee_id = uuid.UUID(str(assignee_id_value)) if assignee_id_value else None
+        assignee_id = resolve_stage_assignee(
+            db,
+            demand,
+            default_assignee_id=item.get("defaultAssigneeId"),
+            owner_role_id=item.get("ownerRoleId"),
+            fallback_user_id=item.get("fallbackUserId"),
+        )
         if item_id == current_stage_id and demand.current_assignee_id:
             assignee_id = demand.current_assignee_id
         assignee = db.get(UserProfile, assignee_id) if assignee_id else None
