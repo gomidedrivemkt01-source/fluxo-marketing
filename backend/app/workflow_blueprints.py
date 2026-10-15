@@ -819,12 +819,22 @@ def publish_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
         if briefing_version is None:
             raise ValueError(f"Versão de briefing ausente para {category_code}.")
 
+        workflow_changed = False
         if workflow.lifecycle_state != "PUBLISHED":
             workflow.lifecycle_state = "PUBLISHED"
             workflow.published_at = now
+            published += 1
+            workflow_changed = True
+        published_description = (
+            f"Manual {BLUEPRINT_CODE}; versão técnica {workflow_version.version}. "
+            "Tempo em horas corridas reais; SLA ainda não definido."
+        )
+        if workflow.description != published_description:
+            workflow.description = published_description
+            workflow_changed = True
+        if workflow_changed:
             workflow.revision += 1
             workflow.updated_at = now
-            published += 1
         if briefing_version.state != "PUBLISHED":
             briefing_version.state = "PUBLISHED"
             briefing_version.published_at = now
