@@ -5,6 +5,7 @@ import pytest
 from app.api.errors import ApiError
 from app.governance import (
     best_named_match,
+    best_profile_match,
     canonical_hash,
     card_snapshot,
     priority_for_card,
@@ -82,3 +83,20 @@ def test_maps_trello_lists_to_operational_status(name: str, expected: str) -> No
 def test_matches_accents_and_maps_priority() -> None:
     assert best_named_match("João Guimarães", [("one", "Joao Guimaraes")]) == "one"
     assert priority_for_card({}, "URGENTE (PRIORIDADE)", []) == "URGENT"
+
+
+def test_matches_trello_members_by_name_tokens_and_email_username_typo() -> None:
+    profiles = [
+        ("natalia", "Natália De Araujo Vieira", "nataliavieira2622@gmail.com"),
+        ("maria", "Maria Fernanda Tavares", "maria@example.com"),
+    ]
+    assert best_profile_match("Natália Vieira", profiles) == "natalia"
+    assert best_profile_match("nataliavieia2622", profiles) == "natalia"
+
+
+def test_does_not_guess_ambiguous_profile_names() -> None:
+    profiles = [
+        ("first", "João Silva", "joao.silva@example.com"),
+        ("second", "João Santos", "joao.santos@example.com"),
+    ]
+    assert best_profile_match("João", profiles) is None

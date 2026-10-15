@@ -20,6 +20,7 @@ from app.auth.service import Principal
 from app.database import get_db
 from app.governance import (
     best_named_match,
+    best_profile_match,
     canonical_hash,
     card_snapshot,
     parse_source_datetime,
@@ -202,7 +203,10 @@ def import_preview(
     member_mappings = []
     for member_id, member in members.items():
         name = str(member.get("fullName") or member.get("username") or member_id)
-        matched = best_named_match(name, [(str(item.id), item.full_name) for item in profiles])
+        matched = best_profile_match(
+            name,
+            [(str(item.id), item.full_name, item.email) for item in profiles],
+        )
         member_mappings.append(
             {
                 "sourceId": member_id,
@@ -348,7 +352,10 @@ def mapped_profile(
     for member_id in card.get("idMembers", []):
         member = members.get(str(member_id), {})
         name = str(member.get("fullName") or member.get("username") or "")
-        matched = best_named_match(name, [(str(item.id), item.full_name) for item in profiles])
+        matched = best_profile_match(
+            name,
+            [(str(item.id), item.full_name, item.email) for item in profiles],
+        )
         if matched:
             return uuid.UUID(matched)
     return None

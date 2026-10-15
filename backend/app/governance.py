@@ -5,6 +5,7 @@ import json
 import re
 import unicodedata
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import Any
 
 from app.api.errors import ApiError
@@ -160,3 +161,56 @@ def best_named_match(source_name: str, candidates: list[tuple[str, str]]) -> str
         if source in normalized(name) or normalized(name) in source
     ]
     return partial[0] if len(partial) == 1 else None
+
+
+def best_profile_match(source_name: str, candidates: list[tuple[str, str, str]]) -> str | None:
+    """Match a Trello member to an active profile without guessing ambiguous names."""
+
+    source = normalized(source_name)
+    if not source:
+        return None
+
+    aliases: dict[str, set[str]] = {}
+    for identifier, full_name, email in candidates:
+        values = {normalized(full_name), normalized(email)}
+        if "@" in email:
+            values.add(normalized(email.split("@", 1)[0]))
+        aliases[identifier] = {value for value in values if value}
+
+    exact = [identifier for identifier, values in aliases.items() if source in values]
+    if len(exact) == 1:
+        return exact[0]
+
+    ignored_tokens = {"DA", "DAS", "DE", "DO", "DOS", "E"}
+    source_tokens = {token for token in source.split() if token not in ignored_tokens}
+    token_matches = []
+    if len(source_tokens) >= 2:
+        for identifier, full_name, _email in candidates:
+            candidate_tokens = {
+                token for token in normalized(full_name).split() if token not in ignored_tokens
+            }
+            if source_tokens <= candidate_tokens or candidate_tokens <= source_tokens:
+                token_matches.append(identifier)
+    if len(token_matches) == 1:
+        return token_matches[0]
+
+    compact_source = source.replace(" ", "")
+    if len(compact_source) < 8:
+        return None
+    scored = []
+    for identifier, values in aliases.items():
+        score = max(
+            (
+                SequenceMatcher(None, compact_source, value.replace(" ", "")).ratio()
+                for value in values
+            ),
+            default=0.0,
+        )
+        if score >= 0.92:
+            scored.append((score, identifier))
+    scored.sort(reverse=True)
+    if not scored:
+        return None
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.03:
+        return None
+    return scored[0][1]
