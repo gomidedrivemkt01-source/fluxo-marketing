@@ -94,6 +94,14 @@ def test_matches_trello_members_by_name_tokens_and_email_username_typo() -> None
     assert best_profile_match("nataliavieia2622", profiles) == "natalia"
 
 
+def test_matches_unique_short_profile_alias() -> None:
+    profiles = [
+        ("marketing", "Marketing Gomide Contabilidade", "gomidedrivemkt01@gmail.com"),
+        ("maria", "Maria Fernanda Tavares", "maria@example.com"),
+    ]
+    assert best_profile_match("Gomide", profiles) == "marketing"
+
+
 def test_does_not_guess_ambiguous_profile_names() -> None:
     profiles = [
         ("first", "João Silva", "joao.silva@example.com"),
