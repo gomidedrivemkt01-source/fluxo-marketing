@@ -974,6 +974,10 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 
 /* Workflow library */
 .workflow-library { display: grid; grid-template-columns: 275px minmax(0, 1fr); gap: 16px; align-items: start; }
+.blueprint-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; padding: 18px 20px; border: 1px solid color-mix(in srgb, var(--teal-dark) 24%, var(--line)); background: color-mix(in srgb, var(--surface) 94%, var(--teal)); }
+.blueprint-banner > div { display: grid; gap: 4px; }
+.blueprint-banner strong { color: var(--ink); font-size: .84rem; }
+.blueprint-banner small { color: var(--muted); font-size: .66rem; }
 .workflow-selector { overflow: hidden; }
 .workflow-selector > header { display: flex; align-items: center; justify-content: space-between; padding: 20px; border-bottom: 1px solid #e4ebed; }
 .workflow-selector h3 { margin: 5px 0 0; color: #29444f; }

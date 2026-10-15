@@ -1,5 +1,6 @@
 import re
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -24,6 +25,7 @@ from app.models import (
     WorkflowStage,
     utc_now,
 )
+from app.workflow_blueprints import apply_blueprint, blueprint_preview
 
 router = APIRouter(prefix="/catalogs", tags=["Cadastros"])
 
@@ -100,12 +102,24 @@ class CategoryOut(BaseModel):
 
 
 class JobRoleInput(BaseModel):
+    code: str = Field(min_length=2, max_length=60)
     name: str = Field(min_length=2, max_length=120)
     description: str | None = Field(default=None, max_length=1000)
 
+    @field_validator("code")
+    @classmethod
+    def clean_role_code(cls, value: str) -> str:
+        normalized = re.sub(r"[^A-Z0-9_]+", "_", value.upper()).strip("_")
+        if len(normalized) < 2:
+            raise ValueError("Código inválido")
+        return normalized
+
 
 class JobRoleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
+    code: str
     name: str
     description: str | None
     active: bool
@@ -118,9 +132,14 @@ class WorkflowStageInput(BaseModel):
     color: str = Field(default="#475569", pattern=r"^#[0-9A-Fa-f]{6}$")
     position: int = Field(ge=1, le=100)
     default_assignee_id: uuid.UUID | None = Field(default=None, alias="defaultAssigneeId")
+    owner_role_id: uuid.UUID | None = Field(default=None, alias="ownerRoleId")
+    fallback_user_id: uuid.UUID | None = Field(default=None, alias="fallbackUserId")
     expected_duration_hours: int | None = Field(
         default=None, alias="expectedDurationHours", ge=1, le=8760
     )
+    sla_hours: int | None = Field(default=None, alias="slaHours", ge=1, le=8760)
+    acceptance_rule: str | None = Field(default=None, alias="acceptanceRule", max_length=2000)
+    condition_rule: dict[str, object] = Field(default_factory=dict, alias="conditionRule")
     workflow_id: uuid.UUID | None = Field(default=None, alias="workflowId")
 
     @field_validator("name")
@@ -161,7 +180,12 @@ class WorkflowStageOut(BaseModel):
     color: str
     position: int
     default_assignee_id: uuid.UUID | None = Field(alias="defaultAssigneeId")
+    owner_role_id: uuid.UUID | None = Field(alias="ownerRoleId")
+    fallback_user_id: uuid.UUID | None = Field(alias="fallbackUserId")
     expected_duration_hours: int | None = Field(alias="expectedDurationHours")
+    sla_hours: int | None = Field(alias="slaHours")
+    acceptance_rule: str | None = Field(alias="acceptanceRule")
+    condition_rule: dict[str, object] = Field(alias="conditionRule")
     active: bool
     revision: int
 
@@ -199,6 +223,9 @@ class WorkflowOut(BaseModel):
     code: str
     description: str | None
     is_default: bool = Field(alias="isDefault")
+    lifecycle_state: str = Field(alias="lifecycleState")
+    time_basis: str = Field(alias="timeBasis")
+    published_at: datetime | None = Field(alias="publishedAt")
     active: bool
     revision: int
 
@@ -221,9 +248,31 @@ def _validate_stage_default_assignee(
             "O responsável padrão precisa ser um integrante ativo da equipe.",
         )
 
+def _validate_stage_role(
+    db: Session, organization_id: uuid.UUID, role_id: uuid.UUID | None
+) -> None:
+    if role_id is None:
+        return
+    if not db.scalar(
+        select(JobRole.id).where(
+            JobRole.id == role_id,
+            JobRole.organization_id == organization_id,
+            JobRole.active.is_(True),
+        )
+    ):
+        raise ApiError(
+            422,
+            "owner_role_invalid",
+            "O papel responsável precisa estar ativo nesta organização.",
+        )
+
 
 def _validate_workflow(
-    db: Session, organization_id: uuid.UUID, workflow_id: uuid.UUID | None
+    db: Session,
+    organization_id: uuid.UUID,
+    workflow_id: uuid.UUID | None,
+    *,
+    require_published: bool = False,
 ) -> Workflow | None:
     if workflow_id is None:
         return None
@@ -236,6 +285,12 @@ def _validate_workflow(
     )
     if not workflow:
         raise ApiError(422, "workflow_invalid", "O workflow selecionado não está disponível.")
+    if require_published and workflow.lifecycle_state != "PUBLISHED":
+        raise ApiError(
+            422,
+            "workflow_not_published",
+            "Publique o workflow antes de vinculá-lo a uma categoria.",
+        )
     return workflow
 
 
@@ -383,7 +438,12 @@ def create_category(
     db: Session = Depends(get_db),
 ) -> DemandCategory:
     require_permission(principal, "catalog:write")
-    _validate_workflow(db, principal.membership.organization_id, payload.default_workflow_id)
+    _validate_workflow(
+        db,
+        principal.membership.organization_id,
+        payload.default_workflow_id,
+        require_published=True,
+    )
     category = DemandCategory(
         organization_id=principal.membership.organization_id,
         name=payload.name,
@@ -427,7 +487,12 @@ def update_category(
         raise ApiError(404, "category_not_found", "Categoria não encontrada.")
     if category.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A categoria foi alterada. Atualize a tela.")
-    _validate_workflow(db, principal.membership.organization_id, payload.default_workflow_id)
+    _validate_workflow(
+        db,
+        principal.membership.organization_id,
+        payload.default_workflow_id,
+        require_published=True,
+    )
     before = {"name": category.name, "code": category.code, "revision": category.revision}
     category.name = payload.name
     category.code = payload.code
@@ -459,16 +524,58 @@ def update_category(
 @router.get("/workflows", response_model=list[WorkflowOut])
 def list_workflows(
     include_inactive: bool = Query(False, alias="includeInactive"),
+    include_draft: bool = Query(False, alias="includeDraft"),
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
 ) -> list[Workflow]:
     require_permission(principal, "catalog:read")
+    if include_draft:
+        require_permission(principal, "catalog:write")
     statement = select(Workflow).where(
         Workflow.organization_id == principal.membership.organization_id
     )
     if not include_inactive:
         statement = statement.where(Workflow.active.is_(True))
+    if not include_draft:
+        statement = statement.where(Workflow.lifecycle_state == "PUBLISHED")
     return list(db.scalars(statement.order_by(Workflow.is_default.desc(), Workflow.name)))
+
+
+def _require_admin(principal: Principal) -> None:
+    if principal.role is None or principal.role.code != "admin":
+        raise ApiError(
+            403,
+            "admin_required",
+            "Somente administradores podem preparar os modelos especializados.",
+        )
+
+
+@router.get("/workflow-blueprint")
+def get_workflow_blueprint(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_permission(principal, "catalog:read")
+    _require_admin(principal)
+    return blueprint_preview(db, principal)
+
+
+@router.post(
+    "/workflow-blueprint/prepare",
+    status_code=201,
+    dependencies=[Depends(require_csrf)],
+)
+def prepare_workflow_blueprint(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    require_permission(principal, "catalog:write")
+    _require_admin(principal)
+    try:
+        return apply_blueprint(db, principal)
+    except ValueError as exc:
+        db.rollback()
+        raise ApiError(422, "blueprint_categories_missing", str(exc)) from exc
 
 
 @router.post(
@@ -509,6 +616,9 @@ def create_workflow(
         code=payload.code,
         description=payload.description,
         is_default=make_default,
+        lifecycle_state="PUBLISHED",
+        time_basis="ELAPSED",
+        published_at=utc_now(),
     )
     db.add(workflow)
     try:
@@ -546,6 +656,12 @@ def update_workflow(
         raise ApiError(409, "revision_conflict", "O workflow foi alterado. Atualize a tela.")
     if workflow.is_default and (not payload.is_default or not payload.active):
         raise ApiError(409, "default_workflow_required", "Defina outro workflow padrão antes de alterar este.")
+    if workflow.lifecycle_state != "PUBLISHED" and payload.is_default:
+        raise ApiError(
+            409,
+            "draft_workflow_cannot_be_default",
+            "Publique o workflow antes de defini-lo como padrão.",
+        )
     if not payload.active:
         in_use = db.scalar(
             select(Demand.id)
@@ -590,15 +706,27 @@ def update_workflow(
 @router.get("/workflow-stages", response_model=list[WorkflowStageOut])
 def list_workflow_stages(
     include_inactive: bool = Query(False, alias="includeInactive"),
+    include_draft: bool = Query(False, alias="includeDraft"),
     workflow_id: uuid.UUID | None = Query(default=None, alias="workflowId"),
     all_workflows: bool = Query(False, alias="allWorkflows"),
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
 ) -> list[WorkflowStage]:
     require_permission(principal, "catalog:read")
+    if include_draft:
+        require_permission(principal, "catalog:write")
     statement = select(WorkflowStage).where(
         WorkflowStage.organization_id == principal.membership.organization_id
     )
+    if not include_draft:
+        statement = statement.where(
+            WorkflowStage.workflow_id.in_(
+                select(Workflow.id).where(
+                    Workflow.organization_id == principal.membership.organization_id,
+                    Workflow.lifecycle_state == "PUBLISHED",
+                )
+            )
+        )
     if workflow_id:
         statement = statement.where(WorkflowStage.workflow_id == workflow_id)
     elif not all_workflows:
@@ -630,6 +758,10 @@ def create_workflow_stage(
     _validate_stage_default_assignee(
         db, principal.membership.organization_id, payload.default_assignee_id
     )
+    _validate_stage_default_assignee(
+        db, principal.membership.organization_id, payload.fallback_user_id
+    )
+    _validate_stage_role(db, principal.membership.organization_id, payload.owner_role_id)
     workflow = _validate_workflow(
         db, principal.membership.organization_id, payload.workflow_id
     )
@@ -651,7 +783,12 @@ def create_workflow_stage(
         color=payload.color.upper(),
         position=payload.position,
         default_assignee_id=payload.default_assignee_id,
+        owner_role_id=payload.owner_role_id,
+        fallback_user_id=payload.fallback_user_id,
         expected_duration_hours=payload.expected_duration_hours,
+        sla_hours=payload.sla_hours,
+        acceptance_rule=payload.acceptance_rule,
+        condition_rule=payload.condition_rule,
     )
     db.add(stage)
     try:
@@ -692,6 +829,10 @@ def update_workflow_stage(
     _validate_stage_default_assignee(
         db, principal.membership.organization_id, payload.default_assignee_id
     )
+    _validate_stage_default_assignee(
+        db, principal.membership.organization_id, payload.fallback_user_id
+    )
+    _validate_stage_role(db, principal.membership.organization_id, payload.owner_role_id)
     if payload.workflow_id and payload.workflow_id != stage.workflow_id:
         raise ApiError(422, "stage_workflow_immutable", "A etapa não pode ser movida para outro workflow.")
     if stage.active and not payload.active:
@@ -730,7 +871,10 @@ def update_workflow_stage(
         "name": stage.name,
         "position": stage.position,
         "defaultAssigneeId": str(stage.default_assignee_id) if stage.default_assignee_id else None,
+        "ownerRoleId": str(stage.owner_role_id) if stage.owner_role_id else None,
+        "fallbackUserId": str(stage.fallback_user_id) if stage.fallback_user_id else None,
         "expectedDurationHours": stage.expected_duration_hours,
+        "slaHours": stage.sla_hours,
         "revision": stage.revision,
     }
     stage.name = payload.name
@@ -738,7 +882,12 @@ def update_workflow_stage(
     stage.color = payload.color.upper()
     stage.position = payload.position
     stage.default_assignee_id = payload.default_assignee_id
+    stage.owner_role_id = payload.owner_role_id
+    stage.fallback_user_id = payload.fallback_user_id
     stage.expected_duration_hours = payload.expected_duration_hours
+    stage.sla_hours = payload.sla_hours
+    stage.acceptance_rule = payload.acceptance_rule
+    stage.condition_rule = payload.condition_rule
     stage.active = payload.active
     stage.revision += 1
     stage.updated_at = utc_now()
@@ -754,7 +903,10 @@ def update_workflow_stage(
             "defaultAssigneeId": (
                 str(stage.default_assignee_id) if stage.default_assignee_id else None
             ),
+            "ownerRoleId": str(stage.owner_role_id) if stage.owner_role_id else None,
+            "fallbackUserId": str(stage.fallback_user_id) if stage.fallback_user_id else None,
             "expectedDurationHours": stage.expected_duration_hours,
+            "slaHours": stage.sla_hours,
             "revision": stage.revision,
         },
     )
@@ -856,6 +1008,7 @@ def create_job_role(
     require_permission(principal, "catalog:write")
     role = JobRole(
         organization_id=principal.membership.organization_id,
+        code=payload.code,
         name=" ".join(payload.name.split()),
         description=payload.description,
     )

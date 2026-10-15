@@ -110,6 +110,7 @@ class JobRole(Base):
     __tablename__ = "job_roles"
     __table_args__ = (
         UniqueConstraint("organization_id", "name", name="uq_job_role_org_name"),
+        UniqueConstraint("organization_id", "code", name="uq_job_role_org_code"),
         {"schema": "app"},
     )
 
@@ -117,6 +118,7 @@ class JobRole(Base):
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
     )
+    code: Mapped[str] = mapped_column(String(60))
     name: Mapped[str] = mapped_column(String(120))
     description: Mapped[str | None] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
@@ -133,6 +135,35 @@ class MemberJobRole(Base):
     job_role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.job_roles.id", ondelete="RESTRICT"), primary_key=True
     )
+
+
+class MemberRoleAssignment(Base):
+    __tablename__ = "member_role_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "membership_id", "job_role_id", name="uq_member_role_assignment_membership_role"
+        ),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    membership_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.memberships.id", ondelete="CASCADE"), index=True
+    )
+    job_role_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.job_roles.id", ondelete="RESTRICT"), index=True
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
+    is_fallback: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Company(Base):
@@ -204,6 +235,13 @@ class Workflow(Base):
     code: Mapped[str] = mapped_column(String(50))
     description: Mapped[str | None] = mapped_column(Text)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(20), default="PUBLISHED", server_default="PUBLISHED"
+    )
+    time_basis: Mapped[str] = mapped_column(
+        String(20), default="ELAPSED", server_default="ELAPSED"
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -253,11 +291,95 @@ class WorkflowStage(Base):
     default_assignee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
     )
+    owner_role_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.job_roles.id", ondelete="RESTRICT"), index=True
+    )
+    fallback_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
     expected_duration_hours: Mapped[int | None] = mapped_column(Integer)
+    sla_hours: Mapped[int | None] = mapped_column(Integer)
+    acceptance_rule: Mapped[str | None] = mapped_column(Text)
+    condition_rule: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class BriefingTemplate(Base):
+    __tablename__ = "briefing_templates"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_briefing_template_org_code"),
+        UniqueConstraint("category_id", name="uq_briefing_template_category"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demand_categories.id", ondelete="RESTRICT"), index=True
+    )
+    code: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(160))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class BriefingTemplateVersion(Base):
+    __tablename__ = "briefing_template_versions"
+    __table_args__ = (
+        UniqueConstraint("template_id", "version", name="uq_briefing_template_version"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.briefing_templates.id", ondelete="RESTRICT"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(20), default="DRAFT", server_default="DRAFT")
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CategoryTemplateBinding(Base):
+    __tablename__ = "category_template_bindings"
+    __table_args__ = {"schema": "app"}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demand_categories.id", ondelete="RESTRICT"), index=True
+    )
+    workflow_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflow_versions.id", ondelete="RESTRICT"), index=True
+    )
+    briefing_template_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.briefing_template_versions.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    effective_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class BriefingField(Base):
@@ -331,6 +453,12 @@ class Demand(Base):
     current_assignee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
     )
+    requester_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    technical_specialist_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
     current_stage_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.workflow_stages.id", ondelete="RESTRICT"), index=True
     )
@@ -340,7 +468,21 @@ class Demand(Base):
     workflow_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.workflow_versions.id", ondelete="RESTRICT"), index=True
     )
+    briefing_template_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.briefing_template_versions.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    category_template_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.category_template_bindings.id", ondelete="RESTRICT"),
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(40), default="WAITING_EXECUTION")
+    operational_state: Mapped[str] = mapped_column(
+        String(20), default="ACTIVE", server_default="ACTIVE"
+    )
+    approval_risk: Mapped[str] = mapped_column(String(10), default="A1", server_default="A1")
     priority: Mapped[str] = mapped_column(String(20), default="NORMAL")
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     forecast_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -394,6 +536,72 @@ class DemandStageInstance(Base):
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DemandStageVisit(Base):
+    __tablename__ = "demand_stage_visits"
+    __table_args__ = (
+        UniqueConstraint("demand_id", "visit_number", name="uq_demand_stage_visit_number"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    demand_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demands.id", ondelete="CASCADE"), index=True
+    )
+    workflow_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflow_versions.id", ondelete="RESTRICT"), index=True
+    )
+    workflow_stage_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.workflow_stages.id", ondelete="RESTRICT"), index=True
+    )
+    visit_number: Mapped[int] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(20))
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    entered_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    left_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    acceptance_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    source: Mapped[str] = mapped_column(String(30), default="workflow", server_default="workflow")
+    inferred: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DemandStateInterval(Base):
+    __tablename__ = "demand_state_intervals"
+    __table_args__ = {"schema": "app"}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT"), index=True
+    )
+    demand_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demands.id", ondelete="CASCADE"), index=True
+    )
+    state: Mapped[str] = mapped_column(String(20))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    started_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    ended_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    source: Mapped[str] = mapped_column(String(30), default="interface", server_default="interface")
+    inferred: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class DemandBriefingAnswer(Base):

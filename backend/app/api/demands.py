@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.api.access import require_any_permission, require_permission
@@ -21,6 +21,7 @@ from app.models import (
     DemandCategory,
     DemandChecklistItem,
     DemandStageInstance,
+    DemandStageVisit,
     DemandUpdate,
     Membership,
     MembershipStatus,
@@ -149,7 +150,13 @@ class DemandTimelineOut(BaseModel):
     stages: list[DemandTimelineStageOut]
 
 
-def workflow_definition(stages: list[WorkflowStage]) -> dict[str, Any]:
+def workflow_definition(
+    stages: list[WorkflowStage],
+    checklist_items: list[ChecklistTemplateItem] | None = None,
+) -> dict[str, Any]:
+    by_stage: dict[uuid.UUID, list[ChecklistTemplateItem]] = {}
+    for item in checklist_items or []:
+        by_stage.setdefault(item.workflow_stage_id, []).append(item)
     return {
         "stages": [
             {
@@ -161,7 +168,28 @@ def workflow_definition(stages: list[WorkflowStage]) -> dict[str, Any]:
                 "defaultAssigneeId": (
                     str(stage.default_assignee_id) if stage.default_assignee_id else None
                 ),
+                "ownerRoleId": str(stage.owner_role_id) if stage.owner_role_id else None,
+                "fallbackUserId": (
+                    str(stage.fallback_user_id) if stage.fallback_user_id else None
+                ),
                 "expectedDurationHours": stage.expected_duration_hours,
+                "slaHours": stage.sla_hours,
+                "acceptanceRule": stage.acceptance_rule,
+                "conditionRule": stage.condition_rule or {},
+                "checklistItems": [
+                    {
+                        "id": str(item.id),
+                        "title": item.title,
+                        "description": item.description,
+                        "position": item.position,
+                        "required": item.required,
+                    }
+                    for item in sorted(
+                        by_stage.get(stage.id, []),
+                        key=lambda value: (value.position, value.title),
+                    )
+                    if item.active
+                ],
             }
             for stage in sorted(stages, key=lambda item: (item.position, item.name))
             if stage.active
@@ -188,7 +216,20 @@ def ensure_workflow_version(
             )
         )
     )
-    definition = workflow_definition(stages)
+    stage_ids = [stage.id for stage in stages]
+    checklist_items = (
+        list(
+            db.scalars(
+                select(ChecklistTemplateItem).where(
+                    ChecklistTemplateItem.organization_id == organization_id,
+                    ChecklistTemplateItem.workflow_stage_id.in_(stage_ids),
+                )
+            )
+        )
+        if stage_ids
+        else []
+    )
+    definition = workflow_definition(stages, checklist_items)
     latest = db.scalar(
         select(WorkflowVersion)
         .where(
@@ -299,6 +340,7 @@ def create_demand_record(
                 Workflow.organization_id == principal.membership.organization_id,
                 Workflow.is_default.is_(True),
                 Workflow.active.is_(True),
+                Workflow.lifecycle_state == "PUBLISHED",
             )
         )
     if stage_id is None and workflow_id:
@@ -347,6 +389,22 @@ def create_demand_record(
     db.flush()
     instances = ensure_demand_stage_instances(db, demand, workflow_version)
     rebalance_stage_deadlines(instances, workflow_version, demand.deadline_at, now=demand.created_at)
+    if demand.current_stage_id:
+        db.add(
+            DemandStageVisit(
+                organization_id=demand.organization_id,
+                demand_id=demand.id,
+                workflow_version_id=workflow_version.id,
+                workflow_stage_id=demand.current_stage_id,
+                visit_number=1,
+                action="START",
+                assignee_id=demand.current_assignee_id,
+                entered_by=principal.profile.id,
+                entered_at=demand.created_at,
+                acceptance_snapshot={},
+                source=source,
+            )
+        )
     return demand
 
 
@@ -542,6 +600,60 @@ def move_stage_plan(
     return target
 
 
+def record_stage_visit_transition(
+    db: Session,
+    demand: Demand,
+    *,
+    actor_id: uuid.UUID,
+    from_stage_id: uuid.UUID | None,
+    to_stage_id: uuid.UUID | None,
+    action: str,
+    moved_at: datetime,
+    reason: str | None = None,
+    source: str = "workflow",
+) -> None:
+    """Fecha a visita atual e abre outra sem sobrescrever ciclos anteriores."""
+    if not demand.workflow_version_id:
+        return
+    current = db.scalar(
+        select(DemandStageVisit)
+        .where(
+            DemandStageVisit.demand_id == demand.id,
+            DemandStageVisit.left_at.is_(None),
+        )
+        .order_by(DemandStageVisit.visit_number.desc())
+        .limit(1)
+    )
+    if current:
+        current.left_at = moved_at
+        current.left_by = actor_id
+        if reason and not current.reason:
+            current.reason = reason
+    if to_stage_id is None:
+        return
+    next_number = db.scalar(
+        select(func.coalesce(func.max(DemandStageVisit.visit_number), 0) + 1).where(
+            DemandStageVisit.demand_id == demand.id
+        )
+    )
+    db.add(
+        DemandStageVisit(
+            organization_id=demand.organization_id,
+            demand_id=demand.id,
+            workflow_version_id=demand.workflow_version_id,
+            workflow_stage_id=to_stage_id,
+            visit_number=int(next_number or 1),
+            action=action.upper(),
+            assignee_id=demand.current_assignee_id,
+            entered_by=actor_id,
+            entered_at=moved_at,
+            reason=reason,
+            acceptance_snapshot={"fromStageId": str(from_stage_id) if from_stage_id else None},
+            source=source,
+        )
+    )
+
+
 def demand_out(db: Session, demand: Demand) -> DemandOut:
     company = db.get(Company, demand.primary_company_id) if demand.primary_company_id else None
     category = db.get(DemandCategory, demand.category_id) if demand.category_id else None
@@ -646,6 +758,7 @@ def validate_references(
             Workflow.id == resolved_workflow_id,
             Workflow.organization_id == organization_id,
             Workflow.active.is_(True),
+            Workflow.lifecycle_state == "PUBLISHED",
         )
     ):
         raise ApiError(422, "workflow_invalid", "O workflow selecionado não está disponível.")
@@ -662,6 +775,7 @@ def validate_references(
                 Workflow.organization_id == organization_id,
                 Workflow.is_default.is_(True),
                 Workflow.active.is_(True),
+                Workflow.lifecycle_state == "PUBLISHED",
             )
         )
     if not resolved_workflow_id:
@@ -882,15 +996,26 @@ def update_demand(
     if target_version:
         stage_instances = ensure_demand_stage_instances(db, demand, target_version)
         if previous_stage_id != stage_id and stage_id:
+            stage_moved_at = utc_now()
             target_instance = move_stage_plan(
                 stage_instances,
                 previous_stage_id if current_version and current_version.id == target_version.id else None,
                 stage_id,
                 action="manual",
-                moved_at=utc_now(),
+                moved_at=stage_moved_at,
             )
             target_instance.assignee_id = demand.current_assignee_id
             target_instance.forecast_at = demand.forecast_at
+            record_stage_visit_transition(
+                db,
+                demand,
+                actor_id=principal.profile.id,
+                from_stage_id=previous_stage_id,
+                to_stage_id=stage_id,
+                action="MANUAL",
+                moved_at=stage_moved_at,
+                source="demand_edit",
+            )
         rebalance_stage_deadlines(stage_instances, target_version, demand.deadline_at)
     demand.revision += 1
     demand.updated_at = utc_now()
@@ -1001,6 +1126,7 @@ def move_demand_stage(
         ),
     )
     previous_stage_id = demand.current_stage_id
+    moved_at = utc_now()
     demand.current_stage_id = stage.id
     apply_stage_snapshot_defaults(demand, stage_snapshot)
     target_instance = move_stage_plan(
@@ -1008,10 +1134,20 @@ def move_demand_stage(
         previous_stage_id,
         stage.id,
         action="manual",
-        moved_at=utc_now(),
+        moved_at=moved_at,
     )
     target_instance.assignee_id = demand.current_assignee_id
     target_instance.forecast_at = demand.forecast_at
+    record_stage_visit_transition(
+        db,
+        demand,
+        actor_id=principal.profile.id,
+        from_stage_id=previous_stage_id,
+        to_stage_id=stage.id,
+        action="MANUAL",
+        moved_at=moved_at,
+        source="stage_patch",
+    )
     demand.revision += 1
     demand.updated_at = utc_now()
     db.add(
@@ -1194,6 +1330,16 @@ def apply_workflow_action(
                     content=f"↩ Retorno para {target_name}: {return_comment}",
                 )
             )
+    record_stage_visit_transition(
+        db,
+        demand,
+        actor_id=principal.profile.id,
+        from_stage_id=current.workflow_stage_id,
+        to_stage_id=target.workflow_stage_id if target else None,
+        action="COMPLETE" if target is None else payload.action,
+        moved_at=now,
+        reason=return_comment or None,
+    )
     rebalance_stage_deadlines(instances, version, demand.deadline_at, now=now)
     demand.revision += 1
     demand.updated_at = now
