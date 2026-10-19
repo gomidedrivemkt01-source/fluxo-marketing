@@ -1051,7 +1051,7 @@ function WorkflowTimelineView({ timeline, compact = false, canEdit, busy, onOpen
   </section>;
 }
 
-function DemandStageDock({ demand, timeline, canEdit, busy, onAction }: { demand: Demand; timeline: DemandTimeline; canEdit: boolean; busy: boolean; onAction: (action: "advance" | "return", comment?: string) => Promise<boolean> }) {
+function DemandStageDock({ demand, timeline, people, canEdit, busy, onAction, onReassign }: { demand: Demand; timeline: DemandTimeline; people: Person[]; canEdit: boolean; busy: boolean; onAction: (action: "advance" | "return", comment?: string) => Promise<boolean>; onReassign: (assigneeId: string | null) => Promise<boolean> }) {
   const [expanded, setExpanded] = useState(false);
   const [returning, setReturning] = useState(false);
   const [comment, setComment] = useState("");
@@ -1069,7 +1069,7 @@ function DemandStageDock({ demand, timeline, canEdit, busy, onAction }: { demand
   return <>
     {expanded && <div className="stage-dock-popover">
       <header><div><span>Fluxo da demanda</span><strong>{timeline.workflowName}</strong></div><button type="button" onClick={() => { setExpanded(false); setReturning(false); }}>×</button></header>
-      <div className="stage-dock-list">{timeline.stages.map((stage, index) => <button type="button" key={stage.id} className={`${stage.state}${index === currentIndex - 1 || index === currentIndex + 1 ? " actionable" : ""}`} disabled={!canEdit || busy || Math.abs(index - currentIndex) !== 1} onClick={() => index < currentIndex ? setReturning(true) : void onAction("advance").then((saved) => { if (saved) setExpanded(false); })}><i style={{ background: stage.color }} /><span><strong>{stage.name}</strong><small>{stage.assigneeName ?? "Sem responsável"} · {timelineDate(stage.deadlineAt)}</small></span><b>{stage.state === "completed" ? "✓" : stage.state === "current" ? "Atual" : index === currentIndex - 1 ? "Voltar" : index === currentIndex + 1 ? "Avançar" : ""}</b></button>)}</div>
+      <div className="stage-dock-list">{timeline.stages.map((stage, index) => <div key={stage.id} className={`stage-dock-list-item ${stage.state}${index === currentIndex - 1 || index === currentIndex + 1 ? " actionable" : ""}`}><button type="button" disabled={!canEdit || busy || Math.abs(index - currentIndex) !== 1} onClick={() => index < currentIndex ? setReturning(true) : void onAction("advance").then((saved) => { if (saved) setExpanded(false); })}><i style={{ background: stage.color }} /><span><strong>{stage.name}</strong><small>{stage.assigneeName ?? "Sem responsável"} · {timelineDate(stage.deadlineAt)}</small></span><b>{stage.state === "completed" ? "✓" : stage.state === "current" ? "Atual" : index === currentIndex - 1 ? "Voltar" : index === currentIndex + 1 ? "Avançar" : ""}</b></button>{stage.state === "current" && <label className="stage-dock-assignee"><span>Responsável da etapa atual</span><select aria-label="Responsável da etapa atual" value={stage.assigneeId ?? ""} disabled={!canEdit || busy} onChange={(event) => void onReassign(event.target.value || null)}><option value="">Sem responsável</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select><small>O prazo vencido será preservado no histórico.</small></label>}</div>)}</div>
       {returning && <form className="stage-return-form" onSubmit={submitReturn}><strong>Justifique o retorno</strong><p>A mensagem será publicada no chat para orientar a pessoa responsável pela etapa anterior.</p><textarea value={comment} onChange={(event) => setComment(event.target.value)} minLength={3} maxLength={2000} rows={3} placeholder="O que precisa ser corrigido ou melhorado?" autoFocus required /><div><button type="button" onClick={() => setReturning(false)}>Cancelar</button><button className="primary" disabled={busy || comment.trim().length < 3}>{busy ? "Retornando…" : "Confirmar retorno"}</button></div></form>}
     </div>}
     <aside className="demand-stage-dock">
@@ -1095,7 +1095,7 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
     const selectedStages = stages.filter((stage) => stage.workflowId === selectedWorkflowId && stage.active).sort((a, b) => a.position - b.position);
     const stageId = selectedWorkflowId === demand.workflowId ? demand.stageId : selectedStages[0]?.id ?? null;
     try {
-      const updated = await api<Demand>(`/demands/${demand.id}`, { method: "PUT", body: JSON.stringify({ title: data.get("title"), description: data.get("description") || null, companyId: data.get("companyId") || null, categoryId: data.get("categoryId") || null, workflowId: data.get("workflowId") || null, assigneeId: data.get("assigneeId") || null, stageId, priority: data.get("priority"), status: data.get("status"), deadlineAt: deadline ? new Date(deadline).toISOString() : null, expectedRevision: demand.revision }) });
+      const updated = await api<Demand>(`/demands/${demand.id}`, { method: "PUT", body: JSON.stringify({ title: data.get("title"), description: data.get("description") || null, companyId: data.get("companyId") || null, categoryId: data.get("categoryId") || null, workflowId: data.get("workflowId") || null, assigneeId: demand.assigneeId, stageId, priority: data.get("priority"), status: data.get("status"), deadlineAt: deadline ? new Date(deadline).toISOString() : null, expectedRevision: demand.revision }) });
       onSaved(updated); setSuccess("Demanda atualizada.");
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
@@ -1104,6 +1104,16 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
     setBusy(true); setError(""); setSuccess("");
     try { const updated = await api<Demand>(`/demands/${demand.id}/workflow-actions`, { method: "POST", body: JSON.stringify({ action, comment: comment || null, expectedRevision: demand.revision }) }); onSaved(updated); setSuccess(action === "advance" && updated.status === "COMPLETED" ? "Demanda concluída." : `Workflow atualizado: ${updated.stageName}.`); return true; }
     catch (caught) { const message = messageFrom(caught); setError(message); if (message.toLocaleLowerCase().includes("checklist")) setTab("checklist"); return false; } finally { setBusy(false); }
+  }
+  async function reassignCurrentStage(assigneeId: string | null): Promise<boolean> {
+    if (!canEdit) return false;
+    setBusy(true); setError(""); setSuccess("");
+    try {
+      const updated = await api<Demand>(`/demands/${demand.id}/assignee`, { method: "PATCH", body: JSON.stringify({ assigneeId, expectedRevision: demand.revision }) });
+      onSaved(updated);
+      setSuccess(updated.assigneeName ? `Responsável alterado para ${updated.assigneeName}.` : "A etapa atual ficou sem responsável.");
+      return true;
+    } catch (caught) { setError(messageFrom(caught)); return false; } finally { setBusy(false); }
   }
   async function saveStageSchedule(stageId: string, deadlineAt: string | null, forecastAt: string | null) {
     if (!canEdit) return false;
@@ -1139,7 +1149,7 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
       <div className="form-grid"><Field label="Título" name="title" defaultValue={demand.title} required /><label className="field"><span>Situação</span><select name="status" defaultValue={demand.status} disabled={!canEdit}>{Object.entries(statusNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
       <label className="field"><span>Descrição</span><textarea name="description" rows={4} defaultValue={demand.description ?? ""} disabled={!canEdit} /></label>
       <div className="form-grid"><label className="field"><span>Empresa</span><select name="companyId" defaultValue={demand.primaryCompanyId ?? ""} disabled={!canEdit}><option value="">Sem empresa</option>{companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Categoria</span><select name="categoryId" defaultValue={demand.categoryId ?? ""} disabled={!canEdit}><option value="">Sem categoria</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
-      <div className="form-grid"><label className="field"><span>Workflow</span><select name="workflowId" value={selectedWorkflowId} disabled={!canEdit} onChange={(event) => setSelectedWorkflowId(event.target.value)}>{workflows.map((item) => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? " · padrão" : ""}</option>)}</select><small>A troca aplica a primeira etapa do novo fluxo. A etapa atual é controlada pela barra inferior.</small></label><label className="field"><span>Responsável</span><select name="assigneeId" defaultValue={demand.assigneeId ?? ""} disabled={!canEdit}><option value="">Sem responsável</option>{people.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
+      <label className="field"><span>Workflow</span><select name="workflowId" value={selectedWorkflowId} disabled={!canEdit} onChange={(event) => setSelectedWorkflowId(event.target.value)}>{workflows.map((item) => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? " · padrão" : ""}</option>)}</select><small>A troca aplica a primeira etapa do novo fluxo. A etapa e o responsável atual são controlados pela barra inferior.</small></label>
       <div className="form-grid"><label className="field"><span>Prioridade</span><select name="priority" defaultValue={demand.priority} disabled={!canEdit}>{Object.entries(priorityNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><Field label="Prazo final da demanda" name="deadlineAt" type="datetime-local" defaultValue={toInputDate(demand.deadlineAt)} disabled={!canEdit} /></div>
       <footer className="form-actions"><span className="revision-note">Revisão {demand.revision}</span><button className="primary action-primary" disabled={busy || !canEdit}>{busy ? "Salvando…" : "Salvar dados"}</button></footer>
     </form>
@@ -1155,7 +1165,7 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
       : tab === "workflow" ? timeline ? <WorkflowTimelineView timeline={timeline} canEdit={canEdit} busy={busy} onSchedule={saveStageSchedule} /> : timelineError ? <section className="panel work-content-panel"><Notice>{timelineError}</Notice></section> : <section className="panel feature-loading"><span className="loader" /></section>
       : tab === "activity" ? <ActivityPanel demandId={demand.id} canComment={canEdit} />
       : <TimePanel demandId={demand.id} canTrack={canEdit} canEditEstimate={canEditEstimate} onEstimateSaved={(expectedEffortMinutes, revision) => onSaved({ ...demand, expectedEffortMinutes, revision })} />}
-    {timeline && <DemandStageDock demand={demand} timeline={timeline} canEdit={canEdit} busy={busy} onAction={runWorkflowAction} />}
+    {timeline && <DemandStageDock demand={demand} timeline={timeline} people={people} canEdit={canEdit} busy={busy} onAction={runWorkflowAction} onReassign={reassignCurrentStage} />}
   </>;
 }
 function ComingSection({ icon, title, text, items }: { icon: string; title: string; text: string; items: string[] }) {

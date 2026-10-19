@@ -108,6 +108,11 @@ class DemandStageUpdate(BaseModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
+class DemandAssigneeUpdate(BaseModel):
+    assignee_id: uuid.UUID | None = Field(default=None, alias="assigneeId")
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
 class DemandWorkflowAction(BaseModel):
     action: str = Field(pattern=r"^(advance|return|skip)$")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
@@ -1383,6 +1388,116 @@ def update_demand(
                     "revision": demand.revision,
                 },
             },
+        )
+    )
+    db.commit()
+    db.refresh(demand)
+    return demand_out(db, demand)
+
+
+@router.patch(
+    "/{demand_id}/assignee",
+    response_model=DemandOut,
+    dependencies=[Depends(require_csrf)],
+)
+def update_demand_assignee(
+    demand_id: uuid.UUID,
+    payload: DemandAssigneeUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandOut:
+    """Redistribui a etapa atual sem recalcular os prazos da demanda."""
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = db.scalar(
+        select(Demand)
+        .where(
+            Demand.id == demand_id,
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not demand:
+        raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
+    if demand.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
+    if payload.assignee_id and not db.scalar(
+        select(Membership.id).where(
+            Membership.organization_id == principal.membership.organization_id,
+            Membership.user_profile_id == payload.assignee_id,
+            Membership.status == MembershipStatus.ACTIVE,
+        )
+    ):
+        raise ApiError(422, "assignee_invalid", "O responsável selecionado não está disponível.")
+
+    previous_assignee_id = demand.current_assignee_id
+    if previous_assignee_id == payload.assignee_id:
+        return demand_out(db, demand)
+
+    previous_assignee = (
+        db.get(UserProfile, previous_assignee_id) if previous_assignee_id else None
+    )
+    next_assignee = db.get(UserProfile, payload.assignee_id) if payload.assignee_id else None
+    changed_at = utc_now()
+    demand.current_assignee_id = payload.assignee_id
+    demand.revision += 1
+    demand.updated_at = changed_at
+
+    if demand.workflow_version_id and demand.current_stage_id:
+        current_instance = db.scalar(
+            select(DemandStageInstance)
+            .where(
+                DemandStageInstance.demand_id == demand.id,
+                DemandStageInstance.workflow_version_id == demand.workflow_version_id,
+                DemandStageInstance.workflow_stage_id == demand.current_stage_id,
+            )
+            .with_for_update()
+        )
+        if current_instance:
+            current_instance.assignee_id = payload.assignee_id
+            current_instance.revision += 1
+            current_instance.updated_at = changed_at
+        record_stage_visit_transition(
+            db,
+            demand,
+            actor_id=principal.profile.id,
+            from_stage_id=demand.current_stage_id,
+            to_stage_id=demand.current_stage_id,
+            action="REASSIGN",
+            moved_at=changed_at,
+            reason="Responsável da etapa atual redistribuído.",
+            source="assignee_change",
+        )
+
+    deadline_preserved = demand.deadline_at.isoformat() if demand.deadline_at else None
+    change_payload = {
+        "stageId": str(demand.current_stage_id) if demand.current_stage_id else None,
+        "previousAssigneeId": str(previous_assignee_id) if previous_assignee_id else None,
+        "previousAssigneeName": previous_assignee.full_name if previous_assignee else None,
+        "assigneeId": str(payload.assignee_id) if payload.assignee_id else None,
+        "assigneeName": next_assignee.full_name if next_assignee else None,
+        "deadlinePreserved": deadline_preserved,
+    }
+    db.add(
+        DemandUpdate(
+            demand_id=demand.id,
+            created_by=principal.profile.id,
+            kind="ASSIGNEE_CHANGED",
+            summary=(
+                f"Responsável da etapa alterado para {next_assignee.full_name}."
+                if next_assignee
+                else "Responsável da etapa removido."
+            ),
+            payload=change_payload,
+        )
+    )
+    db.add(
+        AuditEvent(
+            organization_id=principal.membership.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="DEMAND_ASSIGNEE_CHANGED",
+            source="interface",
+            metadata_json={"demandId": str(demand.id), **change_payload},
         )
     )
     db.commit()

@@ -1102,14 +1102,19 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .stage-dock-popover > header strong { margin-top: 4px; color: #29444f; font-size: .78rem; }
 .stage-dock-popover > header button { width: 30px; height: 30px; border: 0; border-radius: 7px; color: #6f838c; background: #edf2f3; font-size: 1rem; }
 .stage-dock-list { overflow-y: auto; max-height: 355px; padding: 8px; }
-.stage-dock-list > button { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 11px; align-items: center; width: 100%; padding: 11px; border: 0; border-radius: 8px; text-align: left; background: transparent; }
-.stage-dock-list > button.actionable { background: #f5f9f9; }
-.stage-dock-list > button.current { background: #eaf8f6; }
-.stage-dock-list > button > i { width: 6px; height: 33px; border-radius: 4px; }
+.stage-dock-list-item { border-radius: 8px; }
+.stage-dock-list-item > button { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 11px; align-items: center; width: 100%; padding: 11px; border: 0; border-radius: 8px; text-align: left; background: transparent; }
+.stage-dock-list-item.actionable { background: #f5f9f9; }
+.stage-dock-list-item.current { background: #eaf8f6; }
+.stage-dock-list-item > button > i { width: 6px; height: 33px; border-radius: 4px; }
 .stage-dock-list strong, .stage-dock-list small { display: block; }
 .stage-dock-list strong { color: #39535d; font-size: .7rem; }
 .stage-dock-list small { margin-top: 4px; color: #87989f; font-size: .58rem; }
 .stage-dock-list b { color: var(--teal-dark); font-size: .61rem; }
+.stage-dock-assignee { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, .9fr); gap: 5px 10px; align-items: center; margin: 0 11px 11px 28px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.stage-dock-assignee > span { color: var(--ink); font-size: .62rem; font-weight: 800; }
+.stage-dock-assignee select { min-width: 0; width: 100%; padding: 7px 28px 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font: inherit; font-size: .64rem; }
+.stage-dock-assignee small { grid-column: 1 / -1; margin: 0; }
 .stage-return-form { padding: 17px 18px; border-top: 1px solid #e3eaec; background: #f8fbfb; }
 .stage-return-form > strong { color: #304954; font-size: .76rem; }
 .stage-return-form > p { margin: 5px 0 11px; color: #788c94; font-size: .63rem; line-height: 1.45; }
@@ -1172,7 +1177,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .work-card, .demand-card, .category-table article, .time-summary-grid article, .timer-card, .manual-time-form, .demand-checklist > label, .template-list > button, .workflow-admin-list article, .inline-file-grid button { color: var(--ink); border-color: var(--line); background: var(--surface); }
 .work-card-footer, .card-footer, .activity-item, .file-list article, .time-entry-list article, .inline-file-grid { border-color: var(--line); }
 .grouped-list > section, .flat-demand-list, .flat-demand-list > button { border-color: var(--line); background: var(--surface); }
-.flat-demand-list > button:hover, .stage-dock-list > button.actionable { background: var(--surface-soft); }
+.flat-demand-list > button:hover, .stage-dock-list-item.actionable { background: var(--surface-soft); }
 
 .task-drawer > header, .drawer-context, .drawer-shortcuts, .drawer-form > footer { border-color: var(--line); background: var(--surface); }
 .drawer-shortcuts button { color: var(--teal-dark); border-color: var(--line); background: var(--surface-soft); }
@@ -1184,7 +1189,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .demand-stage-dock { border-color: var(--line); background: color-mix(in srgb, var(--surface) 97%, transparent); box-shadow: 0 -9px 28px var(--shadow-color); }
 .stage-dock-deadlines, .stage-dock-deadlines > span + span, .stage-return-form { border-color: var(--line); }
 .stage-dock-popover > header button { color: var(--muted); background: var(--surface-muted); }
-.stage-dock-list > button.current { background: var(--surface-hover); }
+.stage-dock-list-item.current { background: var(--surface-hover); }
 
 .modal-head, .form-actions, .modal-actions { border-color: var(--line); background: var(--surface); }
 .comment-composer, .file-uploader, .activity-mode, .time-head, .work-content-head, .intelligence-hero { border-color: var(--line); background: linear-gradient(110deg, var(--surface-soft), var(--surface)); }
@@ -1450,6 +1455,8 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .stage-dock-current .avatar { width: 33px; height: 33px; }
   .stage-dock-advance { min-width: 63px; padding: 0 9px; font-size: 0; }
   .stage-dock-advance span { font-size: .9rem; }
+  .stage-dock-assignee { grid-template-columns: 1fr; margin-left: 11px; }
+  .stage-dock-assignee small { grid-column: auto; }
   .global-timer { right: 10px; min-width: 195px; }
   .global-timer-copy span { max-width: 150px; }
   .inline-files > header { align-items: flex-start; flex-direction: column; }

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.orm import Session
 
+import app.api.demands as demands_api
 from app.api.catalogs import (
     WorkflowInput,
     WorkflowStageReorder,
@@ -14,12 +15,14 @@ from app.api.catalogs import (
     update_workflow_stage,
 )
 from app.api.demands import (
+    DemandAssigneeUpdate,
     apply_stage_defaults,
     get_demand_timeline,
     move_stage_plan,
     rebalance_stage_deadlines,
     resolve_stage_assignee,
     stage_risk,
+    update_demand_assignee,
     validate_stage_handoff,
     version_stage,
     workflow_definition,
@@ -91,6 +94,101 @@ def test_archive_company_preserves_linked_demands_and_registers_audit() -> None:
     assert isinstance(audit, AuditEvent)
     assert audit.event_type == "COMPANY_ARCHIVED"
     assert audit.metadata_json["after"]["linkedDemandsPreserved"] == 3
+    db.commit.assert_called_once()
+
+
+def test_reassigning_overdue_stage_preserves_deadlines_and_records_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    principal = _principal()
+    principal.role.permissions = ["demands:read", "demands:work"]
+    previous_assignee_id = uuid.uuid4()
+    next_assignee_id = uuid.uuid4()
+    workflow_version_id = uuid.uuid4()
+    stage_id = uuid.uuid4()
+    overdue_deadline = datetime(2026, 9, 25, 18, tzinfo=UTC)
+    stage_deadline = datetime(2026, 9, 24, 12, tzinfo=UTC)
+    demand = Demand(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        public_id="DMD-2026-000001",
+        title="Demanda atrasada",
+        current_assignee_id=previous_assignee_id,
+        current_stage_id=stage_id,
+        workflow_version_id=workflow_version_id,
+        deadline_at=overdue_deadline,
+        status="IN_PROGRESS",
+        priority="HIGH",
+        source="interface",
+        revision=4,
+        created_by=principal.profile.id,
+    )
+    stage_instance = DemandStageInstance(
+        id=uuid.uuid4(),
+        organization_id=principal.membership.organization_id,
+        demand_id=demand.id,
+        workflow_version_id=workflow_version_id,
+        workflow_stage_id=stage_id,
+        position=2,
+        state="current",
+        assignee_id=previous_assignee_id,
+        deadline_at=stage_deadline,
+        revision=2,
+    )
+    previous_assignee = UserProfile(
+        id=previous_assignee_id,
+        auth_user_id=uuid.uuid4(),
+        email="anterior@example.com",
+        full_name="Pessoa anterior",
+    )
+    next_assignee = UserProfile(
+        id=next_assignee_id,
+        auth_user_id=uuid.uuid4(),
+        email="nova@example.com",
+        full_name="Pessoa nova",
+    )
+    db = MagicMock(spec=Session)
+    db.scalar.side_effect = [demand, uuid.uuid4(), stage_instance]
+    db.get.side_effect = lambda model, identifier: {
+        previous_assignee_id: previous_assignee,
+        next_assignee_id: next_assignee,
+    }.get(identifier)
+    transition = MagicMock()
+    expected_response = object()
+    monkeypatch.setattr(demands_api, "record_stage_visit_transition", transition)
+    monkeypatch.setattr(demands_api, "demand_out", lambda _db, _demand: expected_response)
+
+    result = update_demand_assignee(
+        demand.id,
+        DemandAssigneeUpdate(assigneeId=next_assignee_id, expectedRevision=4),
+        principal,
+        db,
+    )
+
+    assert result is expected_response
+    assert demand.current_assignee_id == next_assignee_id
+    assert demand.deadline_at == overdue_deadline
+    assert demand.revision == 5
+    assert stage_instance.assignee_id == next_assignee_id
+    assert stage_instance.deadline_at == stage_deadline
+    assert stage_instance.revision == 3
+    transition.assert_called_once_with(
+        db,
+        demand,
+        actor_id=principal.profile.id,
+        from_stage_id=stage_id,
+        to_stage_id=stage_id,
+        action="REASSIGN",
+        moved_at=demand.updated_at,
+        reason="Responsável da etapa atual redistribuído.",
+        source="assignee_change",
+    )
+    added = [call.args[0] for call in db.add.call_args_list]
+    update = next(item for item in added if isinstance(item, DemandUpdate))
+    audit = next(item for item in added if isinstance(item, AuditEvent))
+    assert update.kind == "ASSIGNEE_CHANGED"
+    assert update.payload["deadlinePreserved"] == overdue_deadline.isoformat()
+    assert audit.event_type == "DEMAND_ASSIGNEE_CHANGED"
     db.commit.assert_called_once()
 
 
