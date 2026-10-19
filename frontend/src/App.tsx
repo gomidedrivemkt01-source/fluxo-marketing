@@ -116,6 +116,9 @@ type DailyImport = {
   items: DailyItem[];
 };
 type ReportBreakdown = { id: string; label: string; color: string | null; count: number; overdue: number; totalMinutes: number };
+type ReportTrendPoint = { date: string; created: number; completed: number; trackedMinutes: number };
+type ReportCapacity = { profileId: string; profileName: string; activeDemands: number; expectedMinutes: number; trackedMinutes: number };
+type ReportStagePerformance = { stageId: string; stageName: string; color: string; visits: number; averageHours: number; totalHours: number; slaHours: number | null; withinSla: number; breachedSla: number; slaRate: number | null; returns: number };
 type OperationalReport = {
   periodDays: number;
   periodStartedAt: string;
@@ -131,6 +134,10 @@ type OperationalReport = {
   byCategory: ReportBreakdown[];
   byAssignee: ReportBreakdown[];
   byStage: ReportBreakdown[];
+  trendGranularity: "day" | "week" | "month";
+  trend: ReportTrendPoint[];
+  capacity: ReportCapacity[];
+  stagePerformance: ReportStagePerformance[];
   attention: { id: string; publicId: string; title: string; companyName: string | null; assigneeName: string | null; stageName: string | null; status: string; priority: string; deadlineAt: string | null; reasons: string[] }[];
 };
 type MappingChoice = "map" | "create" | "ignore";
@@ -1176,6 +1183,27 @@ function ReportBreakdownList({ title, eyebrow, items, showTime = false }: { titl
   return <section className="panel report-breakdown"><header><div><span className="eyebrow dark">{eyebrow}</span><h3>{title}</h3></div><span>{items.reduce((total, item) => total + item.count, 0)} cards</span></header>{visible.length ? <div className="report-bars">{visible.map((item) => <article key={item.id}><div className="report-bar-copy"><span><i style={{ background: item.color ?? "var(--teal-dark)" }} /><strong>{item.label}</strong></span><span><b>{item.count}</b>{showTime && <small>{reportDuration(item.totalMinutes)}</small>}{item.overdue > 0 && <em>{item.overdue} atrasada{item.overdue === 1 ? "" : "s"}</em>}</span></div><div className="report-bar-track"><i style={{ width: `${Math.max(4, Math.round((item.count / largest) * 100))}%`, background: item.color ?? "var(--teal-dark)" }} /></div></article>)}</div> : <div className="report-empty">Ainda não há dados para esta distribuição.</div>}</section>;
 }
 
+function reportTrendLabel(value: string, granularity: OperationalReport["trendGranularity"]): string {
+  const date = new Date(`${value}T00:00:00`);
+  if (granularity === "month") return new Intl.DateTimeFormat("pt-BR", { month: "short" }).format(date).replace(".", "");
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(date);
+}
+
+function ReportTrend({ points, granularity }: { points: ReportTrendPoint[]; granularity: OperationalReport["trendGranularity"] }) {
+  const largest = Math.max(1, ...points.flatMap((point) => [point.created, point.completed]));
+  const intervalName = granularity === "month" ? "mês" : granularity === "week" ? "semana" : "dia";
+  return <section className="panel report-trend"><header><div><span className="eyebrow dark">Histórico operacional</span><h3>Entradas e conclusões por {intervalName}</h3><p>O tempo exibido em cada coluna corresponde aos apontamentos do mesmo intervalo.</p></div><div className="report-legend"><span><i className="created" />Criadas</span><span><i className="completed" />Concluídas</span></div></header>{points.length ? <div className={`report-trend-scroll ${granularity}`}><div className="report-trend-chart">{points.map((point) => <article key={point.date} title={`${point.created} criadas · ${point.completed} concluídas · ${reportDuration(point.trackedMinutes)} apontadas`}><div className="report-trend-time">{point.trackedMinutes > 0 ? reportDuration(point.trackedMinutes) : "—"}</div><div className="report-trend-bars"><i className="created" style={{ height: point.created ? `${Math.max(8, Math.round((point.created / largest) * 100))}%` : "0" }}><span>{point.created || ""}</span></i><i className="completed" style={{ height: point.completed ? `${Math.max(8, Math.round((point.completed / largest) * 100))}%` : "0" }}><span>{point.completed || ""}</span></i></div><time dateTime={point.date}>{reportTrendLabel(point.date, granularity)}</time></article>)}</div></div> : <div className="report-empty">Ainda não há histórico para o período selecionado.</div>}</section>;
+}
+
+function ReportCapacityPanel({ items, periodLabel }: { items: ReportCapacity[]; periodLabel: string }) {
+  const largest = Math.max(1, ...items.flatMap((item) => [item.expectedMinutes, item.trackedMinutes]));
+  return <section className="panel report-capacity"><header><div><span className="eyebrow dark">Distribuição de capacidade</span><h3>Carteira prevista e tempo realizado</h3><p>Estimativa dos cards atualmente abertos comparada ao tempo apontado em {periodLabel.toLocaleLowerCase("pt-BR")}.</p></div></header>{items.length ? <div className="report-capacity-list">{items.map((item) => <article key={item.profileId}><div className="report-capacity-name"><strong>{item.profileName}</strong><small>{item.activeDemands} {item.activeDemands === 1 ? "demanda aberta" : "demandas abertas"}</small></div><div className="report-capacity-metric"><span><b>Previsto em aberto</b><strong>{reportDuration(item.expectedMinutes)}</strong></span><i><b style={{ width: `${Math.max(item.expectedMinutes ? 4 : 0, Math.round((item.expectedMinutes / largest) * 100))}%` }} /></i></div><div className="report-capacity-metric tracked"><span><b>Apontado no período</b><strong>{reportDuration(item.trackedMinutes)}</strong></span><i><b style={{ width: `${Math.max(item.trackedMinutes ? 4 : 0, Math.round((item.trackedMinutes / largest) * 100))}%` }} /></i></div></article>)}</div> : <div className="report-empty">Ainda não há estimativas ou apontamentos para distribuir.</div>}</section>;
+}
+
+function ReportStagePerformancePanel({ items }: { items: ReportStagePerformance[] }) {
+  return <section className="panel report-stage-performance"><header><div><span className="eyebrow dark">SLA real por etapa</span><h3>Tempo observado no fluxo</h3><p>Horas corridas, sem ocultar noites ou fins de semana. O SLA usa o ciclo integral de cada passagem.</p></div></header>{items.length ? <div className="report-stage-table"><div className="report-stage-table-head"><span>Etapa</span><span>Passagens</span><span>Média observada</span><span>SLA configurado</span><span>Aderência</span><span>Retornos</span></div>{items.map((item) => <article key={item.stageId}><span className="report-stage-name"><i style={{ background: item.color }} /><span><strong>{item.stageName}</strong><small>{item.totalHours.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}h observadas</small></span></span><strong>{item.visits}</strong><span>{item.averageHours.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}h</span><span>{item.slaHours ? `${item.slaHours}h` : "Não definido"}</span><span>{item.slaRate === null ? <em className="neutral">Sem SLA</em> : <em className={item.slaRate >= 80 ? "good" : item.slaRate >= 60 ? "warning" : "danger"}>{item.slaRate}% <small>({item.withinSla}/{item.withinSla + item.breachedSla})</small></em>}</span><span>{item.returns}</span></article>)}</div> : <div className="report-empty">As passagens pelas etapas aparecerão aqui conforme o workflow for utilizado.</div>}</section>;
+}
+
 function OperationalReports({ onOpen, canViewTeam, people }: { onOpen: (demandId: string) => void; canViewTeam: boolean; people: Person[] }) {
   const [periodMode, setPeriodMode] = useState<ReportPeriodMode>("30");
   const [draftRange, setDraftRange] = useState(defaultCustomReportRange);
@@ -1215,6 +1243,9 @@ function OperationalReports({ onOpen, canViewTeam, people }: { onOpen: (demandId
       <article className={summary.blocked || summary.unassigned ? "warning" : ""}><span>Pontos de atenção</span><strong>{summary.blocked + summary.unassigned}</strong><small>{summary.blocked} bloqueada{summary.blocked === 1 ? "" : "s"} · {summary.unassigned} sem responsável</small><i className="orange" /></article>
     </section>
     <section className="report-signal-row"><div><span className="report-signal danger">{summary.overdue}</span><p><strong>Demandas atrasadas</strong><small>Precisam de replanejamento ou conclusão.</small></p></div><div><span className="report-signal orange">{summary.urgent}</span><p><strong>Prioridade urgente</strong><small>Cards abertos marcados como urgentes.</small></p></div><div><span className="report-signal teal">{reportDuration(summary.expectedMinutes)}</span><p><strong>Esforço previsto aberto</strong><small>Soma das estimativas ainda em carteira.</small></p></div></section>
+    <ReportTrend points={report.trend} granularity={report.trendGranularity} />
+    <ReportCapacityPanel items={report.capacity} periodLabel={periodLabel} />
+    <ReportStagePerformancePanel items={report.stagePerformance} />
     <div className="report-grid"><ReportBreakdownList eyebrow="Fluxo" title="Onde estão as demandas" items={report.byStage} /><ReportBreakdownList eyebrow={`Capacidade · ${periodLabel}`} title={teamReport ? "Carga por responsável" : "Carteira e tempo individual"} items={report.byAssignee} showTime /><ReportBreakdownList eyebrow="Carteira" title="Distribuição por empresa" items={report.byCompany} /><ReportBreakdownList eyebrow="Tipos de entrega" title="Distribuição por categoria" items={report.byCategory} /></div>
     <section className="panel report-status"><header><div><span className="eyebrow dark">Situação atual</span><h3>Distribuição por status</h3></div><small>Atualizado {new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(report.generatedAt))}</small></header><div>{report.byStatus.map((item) => <article key={item.id}><span><i style={{ background: item.color ?? "var(--teal-dark)" }} />{item.label}</span><strong>{item.count}</strong><small>{item.overdue ? `${item.overdue} atrasada${item.overdue === 1 ? "" : "s"}` : "Dentro do fluxo"}</small></article>)}</div></section>
     <section className="panel report-attention"><header><div><span className="eyebrow dark">{teamReport ? "Prioridade de gestão" : "Prioridades da carteira"}</span><h3>Demandas que pedem atenção</h3><p>Ordenadas primeiro por atraso e bloqueio.</p></div><span className="count">{report.attention.length}</span></header>{report.attention.length ? <div className="report-attention-list">{report.attention.map((item) => <button key={item.id} onClick={() => onOpen(item.id)}><span className="report-attention-title"><strong>{item.title}</strong><small>{item.publicId} · {item.companyName ?? "Sem empresa"}</small></span><span>{item.assigneeName ?? "Sem responsável"}</span><span>{item.stageName ?? "Sem etapa"}</span><span className="attention-reasons">{item.reasons.map((reason) => <em key={reason}>{reason}</em>)}</span><time>{item.deadlineAt ? dateLabel(item.deadlineAt) : "Sem prazo"}</time><b>›</b></button>)}</div> : <div className="report-empty report-empty-good"><span>✓</span><strong>Nenhuma demanda crítica agora</strong><p>Não há cards atrasados, bloqueados, urgentes ou sem responsável.</p></div>}</section>

@@ -21,7 +21,8 @@ O upload de uma Daily é um recurso complementar na área de Inteligência e nun
 - **Marco 3 — Fluxo e foco pessoal:** agenda Todoist, Kanban pessoal, biblioteca de workflows, versões imutáveis, agenda por etapa, handoffs validados e alertas de risco concluídos nesta base.
 - **Marco 4 — Relatórios operacionais:** primeira visão executiva concluída com períodos rápidos ou personalizados, indicadores de prazo, volume, tempo apontado, esforço previsto e gargalos por empresa, categoria, responsável e etapa. Administradores e coordenadores alternam entre o overview da equipe e relatórios individuais; colaboradores e visualizadores recebem somente o próprio relatório, com a restrição aplicada também na API.
 - **Marco 5 — Governança de dados:** área administrativa para validar, importar e exportar JSON compatível com Trello; vínculo estável por cartão para impedir duplicações; histórico de lotes com reversão; versões automáticas das demandas; restauração de itens arquivados; e retenção bimestral reversível de demandas concluídas, preservando tempos e indicadores.
-- **Próximo incremento — Histórico e distribuição:** evolução dos relatórios com tendência temporal, SLA por etapa, capacidade planejada versus realizada e filtros persistentes.
+- **Marco 6 — Histórico, indicadores e distribuição (em andamento):** relatórios com tendência temporal de entradas, conclusões e horas apontadas; leitura de carteira prevista versus tempo realizado por pessoa; e tempo real por etapa com aderência ao SLA em horas corridas e ciclos de retorno.
+- **Próximo incremento:** filtros persistentes dos relatórios, lead/cycle time, tempo bloqueado, aprovação na primeira passagem, alertas de saturação e aprendizado pós-publicação.
 
 ## Importação e retenção
 

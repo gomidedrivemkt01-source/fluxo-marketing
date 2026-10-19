@@ -1221,11 +1221,11 @@ def _job_role_assignments(
     return [
         JobRoleAssignmentOut(
             id=assignment.id,
-            roleId=assignment.job_role_id,
-            profileId=membership.user_profile_id,
-            profileName=profile.full_name,
+            role_id=assignment.job_role_id,
+            profile_id=membership.user_profile_id,
+            profile_name=profile.full_name,
             priority=assignment.priority,
-            isFallback=assignment.is_fallback,
+            is_fallback=assignment.is_fallback,
             active=assignment.active,
         )
         for assignment, membership, profile in rows

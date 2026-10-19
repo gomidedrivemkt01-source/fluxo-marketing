@@ -5,7 +5,16 @@ import pytest
 
 from app.api.errors import ApiError
 from app.api.reports import build_operational_report, resolve_report_period, resolve_report_scope
-from app.models import Company, Demand, DemandCategory, TimeEntry, UserProfile, WorkflowStage
+from app.models import (
+    Company,
+    Demand,
+    DemandCategory,
+    DemandStageVisit,
+    DemandUpdate,
+    TimeEntry,
+    UserProfile,
+    WorkflowStage,
+)
 
 
 def _demand(
@@ -77,6 +86,7 @@ def test_operational_report_consolidates_portfolio_and_time() -> None:
         code="PRODUCAO",
         color="#087F76",
         position=1,
+        sla_hours=24,
     )
     overdue = _demand(
         organization_id=organization_id,
@@ -135,10 +145,39 @@ def test_operational_report_consolidates_portfolio_and_time() -> None:
             duration_minutes=90,
         ),
     ]
+    completion_events = [
+        DemandUpdate(
+            id=uuid.uuid4(),
+            demand_id=completed.id,
+            created_by=profile_id,
+            kind="DEMAND_COMPLETED",
+            summary="Demanda concluída.",
+            payload={},
+            created_at=now - timedelta(days=3),
+        )
+    ]
+    stage_visits = [
+        DemandStageVisit(
+            id=uuid.uuid4(),
+            organization_id=organization_id,
+            demand_id=due_soon.id,
+            workflow_version_id=uuid.uuid4(),
+            workflow_stage_id=stage_id,
+            visit_number=2,
+            action="RETURN",
+            assignee_id=profile_id,
+            entered_by=profile_id,
+            entered_at=now - timedelta(hours=10),
+            left_at=now - timedelta(hours=2),
+            source="workflow",
+        )
+    ]
 
     report = build_operational_report(
         demands=[overdue, completed, due_soon],
         entries=entries,
+        completion_events=completion_events,
+        stage_visits=stage_visits,
         companies={company_id: company},
         categories={category_id: category},
         profiles={profile_id: profile},
@@ -162,6 +201,17 @@ def test_operational_report_consolidates_portfolio_and_time() -> None:
     assert report.by_stage[0].count == 1
     assert report.by_assignee[0].label == "Pessoa Teste"
     assert report.by_assignee[0].total_minutes == 90
+    assert sum(point.created for point in report.trend) == 2
+    assert sum(point.completed for point in report.trend) == 1
+    assert sum(point.tracked_minutes for point in report.trend) == 120
+    assert report.capacity[0].profile_name == "Pessoa Teste"
+    assert report.capacity[0].active_demands == 1
+    assert report.capacity[0].expected_minutes == 60
+    assert report.capacity[0].tracked_minutes == 120
+    assert report.stage_performance[0].stage_name == "Produção"
+    assert report.stage_performance[0].average_hours == 8
+    assert report.stage_performance[0].sla_rate == 100
+    assert report.stage_performance[0].returns == 1
     assert report.attention[0].public_id == "DMD-1"
     assert report.attention[0].reasons == ["Prazo vencido", "Bloqueada", "Urgente", "Sem responsável"]
 

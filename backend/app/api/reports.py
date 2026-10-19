@@ -20,6 +20,8 @@ from app.models import (
     Company,
     Demand,
     DemandCategory,
+    DemandStageVisit,
+    DemandUpdate,
     Membership,
     MembershipStatus,
     TimeEntry,
@@ -72,6 +74,41 @@ class ReportAttentionOut(BaseModel):
     reasons: list[str]
 
 
+class ReportTrendPointOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    date: date
+    created: int
+    completed: int
+    tracked_minutes: int = Field(alias="trackedMinutes")
+
+
+class ReportCapacityOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    profile_id: uuid.UUID = Field(alias="profileId")
+    profile_name: str = Field(alias="profileName")
+    active_demands: int = Field(alias="activeDemands")
+    expected_minutes: int = Field(alias="expectedMinutes")
+    tracked_minutes: int = Field(alias="trackedMinutes")
+
+
+class ReportStagePerformanceOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    stage_id: uuid.UUID = Field(alias="stageId")
+    stage_name: str = Field(alias="stageName")
+    color: str
+    visits: int
+    average_hours: float = Field(alias="averageHours")
+    total_hours: float = Field(alias="totalHours")
+    sla_hours: int | None = Field(alias="slaHours")
+    within_sla: int = Field(alias="withinSla")
+    breached_sla: int = Field(alias="breachedSla")
+    sla_rate: int | None = Field(alias="slaRate")
+    returns: int
+
+
 class OperationalReportOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -89,6 +126,10 @@ class OperationalReportOut(BaseModel):
     by_category: list[ReportBreakdownOut] = Field(alias="byCategory")
     by_assignee: list[ReportBreakdownOut] = Field(alias="byAssignee")
     by_stage: list[ReportBreakdownOut] = Field(alias="byStage")
+    trend_granularity: str = Field(alias="trendGranularity")
+    trend: list[ReportTrendPointOut]
+    capacity: list[ReportCapacityOut]
+    stage_performance: list[ReportStagePerformanceOut] = Field(alias="stagePerformance")
     attention: list[ReportAttentionOut]
 
 
@@ -158,6 +199,8 @@ def build_operational_report(
     *,
     demands: list[Demand],
     entries: list[TimeEntry],
+    completion_events: list[DemandUpdate] | None = None,
+    stage_visits: list[DemandStageVisit] | None = None,
     companies: dict[uuid.UUID, Company],
     categories: dict[uuid.UUID, DemandCategory],
     profiles: dict[uuid.UUID, UserProfile],
@@ -170,9 +213,12 @@ def build_operational_report(
     scope_profile_id: uuid.UUID | None = None,
     scope_profile_name: str | None = None,
     can_view_team: bool = True,
+    timezone_name: str = "America/Sao_Paulo",
 ) -> OperationalReportOut:
     period_started_at = period_started_at or now - timedelta(days=days)
     period_ended_at = period_ended_at or now
+    completion_events = completion_events or []
+    stage_visits = stage_visits or []
     active = [demand for demand in demands if demand.status != "COMPLETED"]
     time_by_demand: dict[uuid.UUID, int] = defaultdict(int)
     for entry in entries:
@@ -190,6 +236,140 @@ def build_operational_report(
     category_labels[missing] = "Sem categoria"
     profile_labels[missing] = "Sem responsável"
     stage_labels[missing] = "Sem etapa"
+
+    try:
+        report_timezone: ZoneInfo | timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        report_timezone = timezone(timedelta(hours=-3), name="America/Sao_Paulo")
+
+    if days <= 45:
+        trend_granularity = "day"
+    elif days <= 180:
+        trend_granularity = "week"
+    else:
+        trend_granularity = "month"
+
+    def trend_bucket(value: datetime) -> date:
+        local_date = value.astimezone(report_timezone).date()
+        if trend_granularity == "week":
+            return local_date - timedelta(days=local_date.weekday())
+        if trend_granularity == "month":
+            return local_date.replace(day=1)
+        return local_date
+
+    trend_values: dict[date, dict[str, int]] = defaultdict(
+        lambda: {"created": 0, "completed": 0, "tracked_minutes": 0}
+    )
+    local_start = period_started_at.astimezone(report_timezone).date()
+    local_end = period_ended_at.astimezone(report_timezone).date()
+    cursor = trend_bucket(period_started_at)
+    while cursor <= local_end:
+        trend_values[cursor]
+        if trend_granularity == "month":
+            cursor = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
+        else:
+            cursor += timedelta(days=7 if trend_granularity == "week" else 1)
+    for demand in demands:
+        if period_started_at <= demand.created_at <= period_ended_at:
+            trend_values[trend_bucket(demand.created_at)]["created"] += 1
+    for event in completion_events:
+        if period_started_at <= event.created_at <= period_ended_at:
+            trend_values[trend_bucket(event.created_at)]["completed"] += 1
+    for entry in entries:
+        trend_values[trend_bucket(entry.started_at)]["tracked_minutes"] += (
+            entry.duration_minutes or 0
+        )
+    trend = [
+        ReportTrendPointOut(
+            date=bucket_date,
+            created=values["created"],
+            completed=values["completed"],
+            tracked_minutes=values["tracked_minutes"],
+        )
+        for bucket_date, values in sorted(trend_values.items())
+        if bucket_date <= local_end and (
+            trend_granularity != "day" or bucket_date >= local_start
+        )
+    ]
+
+    capacity_values: dict[uuid.UUID, dict[str, int]] = defaultdict(
+        lambda: {"active_demands": 0, "expected_minutes": 0, "tracked_minutes": 0}
+    )
+    for demand in active:
+        if demand.current_assignee_id:
+            capacity_values[demand.current_assignee_id]["active_demands"] += 1
+            capacity_values[demand.current_assignee_id]["expected_minutes"] += (
+                demand.expected_effort_minutes or 0
+            )
+    for entry in entries:
+        capacity_values[entry.user_profile_id]["tracked_minutes"] += entry.duration_minutes or 0
+    capacity = sorted(
+        [
+            ReportCapacityOut(
+                profile_id=profile_id,
+                profile_name=(profiles[profile_id].full_name if profile_id in profiles else "Usuário"),
+                active_demands=values["active_demands"],
+                expected_minutes=values["expected_minutes"],
+                tracked_minutes=values["tracked_minutes"],
+            )
+            for profile_id, values in capacity_values.items()
+        ],
+        key=lambda item: (-item.tracked_minutes, -item.expected_minutes, item.profile_name.casefold()),
+    )
+
+    performance_values: dict[uuid.UUID, dict[str, float | int]] = defaultdict(
+        lambda: {
+            "visits": 0,
+            "total_seconds": 0.0,
+            "within_sla": 0,
+            "breached_sla": 0,
+            "returns": 0,
+        }
+    )
+    for visit in stage_visits:
+        stage = stages.get(visit.workflow_stage_id)
+        if not stage:
+            continue
+        visit_end = visit.left_at or min(now, period_ended_at)
+        observed_start = max(visit.entered_at, period_started_at)
+        observed_end = min(visit_end, period_ended_at)
+        if observed_end < observed_start:
+            continue
+        elapsed_seconds = max(0.0, (observed_end - observed_start).total_seconds())
+        values = performance_values[visit.workflow_stage_id]
+        values["visits"] += 1
+        values["total_seconds"] += elapsed_seconds
+        values["returns"] += int(visit.action == "RETURN")
+        if stage.sla_hours:
+            full_elapsed = max(0.0, (visit_end - visit.entered_at).total_seconds())
+            if full_elapsed <= stage.sla_hours * 3600:
+                values["within_sla"] += 1
+            else:
+                values["breached_sla"] += 1
+    stage_performance: list[ReportStagePerformanceOut] = []
+    for stage_id, values in performance_values.items():
+        stage = stages[stage_id]
+        visits_count = int(values["visits"])
+        within_sla = int(values["within_sla"])
+        breached_sla = int(values["breached_sla"])
+        measured_sla = within_sla + breached_sla
+        total_hours = float(values["total_seconds"]) / 3600
+        stage_performance.append(
+            ReportStagePerformanceOut(
+                stage_id=stage_id,
+                stage_name=stage.name,
+                color=stage.color,
+                visits=visits_count,
+                average_hours=round(total_hours / visits_count, 1) if visits_count else 0,
+                total_hours=round(total_hours, 1),
+                sla_hours=stage.sla_hours,
+                within_sla=within_sla,
+                breached_sla=breached_sla,
+                sla_rate=round((within_sla / measured_sla) * 100) if measured_sla else None,
+                returns=int(values["returns"]),
+            )
+        )
+    stage_performance.sort(key=lambda item: (-item.total_hours, item.stage_name.casefold()))
 
     attention: list[ReportAttentionOut] = []
     for demand in active:
@@ -305,6 +485,10 @@ def build_operational_report(
             time_by_demand=time_by_demand,
             now=now,
         ),
+        trend_granularity=trend_granularity,
+        trend=trend,
+        capacity=capacity,
+        stage_performance=stage_performance,
         attention=attention[:20],
     )
 
@@ -435,6 +619,32 @@ def operational_report(
     if scope_profile_id:
         time_statement = time_statement.where(TimeEntry.user_profile_id == scope_profile_id)
     entries = list(db.scalars(time_statement))
+    completion_statement = (
+        select(DemandUpdate)
+        .join(Demand, Demand.id == DemandUpdate.demand_id)
+        .where(
+            Demand.organization_id == organization_id,
+            DemandUpdate.kind == "DEMAND_COMPLETED",
+            DemandUpdate.created_at >= period_started_at,
+            DemandUpdate.created_at <= period_ended_at,
+        )
+    )
+    if scope_profile_id:
+        completion_statement = completion_statement.where(
+            DemandUpdate.created_by == scope_profile_id
+        )
+    completion_events = list(db.scalars(completion_statement))
+    visit_statement = select(DemandStageVisit).where(
+        DemandStageVisit.organization_id == organization_id,
+        DemandStageVisit.entered_at <= period_ended_at,
+        or_(
+            DemandStageVisit.left_at.is_(None),
+            DemandStageVisit.left_at >= period_started_at,
+        ),
+    )
+    if scope_profile_id:
+        visit_statement = visit_statement.where(DemandStageVisit.assignee_id == scope_profile_id)
+    stage_visits = list(db.scalars(visit_statement))
     companies = {
         item.id: item
         for item in db.scalars(select(Company).where(Company.organization_id == organization_id))
@@ -452,6 +662,8 @@ def operational_report(
         )
     }
     assignee_ids = {demand.current_assignee_id for demand in demands if demand.current_assignee_id}
+    assignee_ids.update(entry.user_profile_id for entry in entries)
+    assignee_ids.update(visit.assignee_id for visit in stage_visits if visit.assignee_id)
     profiles = (
         {
             item.id: item
@@ -465,6 +677,8 @@ def operational_report(
     return build_operational_report(
         demands=demands,
         entries=entries,
+        completion_events=completion_events,
+        stage_visits=stage_visits,
         companies=companies,
         categories=categories,
         profiles=profiles,
@@ -477,4 +691,5 @@ def operational_report(
         scope_profile_id=scope_profile_id,
         scope_profile_name=scope_profile.full_name if scope_profile else None,
         can_view_team=can_view_team,
+        timezone_name=principal.profile.timezone,
     )
