@@ -426,6 +426,9 @@ async def apply_trello(
         applied_at=now,
     )
     db.add(batch)
+    # Card links reference the batch UUID directly, so persist the parent row
+    # before the bulk link insert. The flush remains in this atomic transaction.
+    db.flush()
     changes: list[dict[str, Any]] = []
     created = updated = unchanged = archived = 0
     try:
@@ -597,6 +600,9 @@ async def apply_trello(
             "uq_trello_card_org_board_card": (
                 "Outro lote vinculou cartões deste quadro durante a importação. "
                 "Valide o arquivo novamente."
+            ),
+            "trello_card_links_last_import_id_fkey": (
+                "O lote não foi registrado antes dos vínculos dos cartões."
             ),
         }
         raise ApiError(
