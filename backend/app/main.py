@@ -1,12 +1,15 @@
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
@@ -25,11 +28,13 @@ from app.api.time_tracking import router as time_tracking_router
 from app.api.users import router as users_router
 from app.api.work_content import catalog_router as work_catalog_router
 from app.api.work_content import demand_router as work_demand_router
+from app.api.workspace import router as workspace_router
 from app.auth.router import router as auth_router
 from app.core.config import get_settings
 from app.retention import retention_loop
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -57,10 +62,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-CSRF-Token", "X-Request-ID"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.middleware("http")
 async def request_context(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    started_at = perf_counter()
     request_id = request.headers.get("X-Request-ID", "")[:80] or str(uuid.uuid4())
     request.state.request_id = request_id
     response = await call_next(request)
@@ -69,6 +76,21 @@ async def request_context(request: Request, call_next: RequestResponseEndpoint) 
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    elapsed_ms = (perf_counter() - started_at) * 1000
+    response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+    if request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache"
+    if elapsed_ms >= 750:
+        logger.warning(
+            "slow_request method=%s path=%s status=%s duration_ms=%.1f request_id=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+            request_id,
+        )
     return response
 
 
@@ -101,6 +123,7 @@ app.include_router(time_tracking_router, prefix="/api/v1")
 app.include_router(active_time_tracking_router, prefix="/api/v1")
 app.include_router(reports_router, prefix="/api/v1")
 app.include_router(governance_router, prefix="/api/v1")
+app.include_router(workspace_router, prefix="/api/v1")
 
 
 @app.get("/health", include_in_schema=False)

@@ -76,22 +76,22 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
 
   const load = useCallback(async () => {
     try {
-      const [nextBatches, nextOverview, nextRetention, nextEnrichment, nextTrelloReset] = await Promise.all([
-        api<Batch[]>("/governance/trello/batches"),
-        api<Overview>("/governance/overview"),
-        api<Retention>("/governance/retention"),
-        api<Enrichment>("/governance/trello/enrichment"),
-        api<TrelloReset>("/governance/trello/reset"),
-      ]);
-      setBatches(nextBatches);
-      setOverview(nextOverview);
-      setRetention(nextRetention);
-      setEnrichment(nextEnrichment);
-      setTrelloReset(nextTrelloReset);
+      if (tab === "transfer") {
+        const [nextBatches, nextEnrichment, nextTrelloReset] = await Promise.all([
+          api<Batch[]>("/governance/trello/batches"),
+          api<Enrichment>("/governance/trello/enrichment"),
+          api<TrelloReset>("/governance/trello/reset"),
+        ]);
+        setBatches(nextBatches); setEnrichment(nextEnrichment); setTrelloReset(nextTrelloReset);
+      } else if (tab === "history") {
+        setOverview(await api<Overview>("/governance/overview"));
+      } else {
+        setRetention(await api<Retention>("/governance/retention"));
+      }
     } catch (error) {
       setNotice({ kind: "error", text: messageFrom(error) });
     }
-  }, []);
+  }, [tab]);
 
   useEffect(() => { void load(); }, [load]);
 

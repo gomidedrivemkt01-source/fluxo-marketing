@@ -737,15 +737,18 @@ def record_stage_visit_transition(
     )
 
 
-def demand_out(db: Session, demand: Demand) -> DemandOut:
-    company = db.get(Company, demand.primary_company_id) if demand.primary_company_id else None
-    category = db.get(DemandCategory, demand.category_id) if demand.category_id else None
-    assignee = db.get(UserProfile, demand.current_assignee_id) if demand.current_assignee_id else None
-    creator = db.get(UserProfile, demand.created_by)
+def _demand_out_from_related(
+    demand: Demand,
+    *,
+    company: Company | None,
+    category: DemandCategory | None,
+    assignee: UserProfile | None,
+    creator: UserProfile | None,
+    stage: WorkflowStage | None,
+    workflow: Workflow | None,
+    version: WorkflowVersion | None,
+) -> DemandOut:
     assert creator is not None
-    stage = db.get(WorkflowStage, demand.current_stage_id) if demand.current_stage_id else None
-    workflow = db.get(Workflow, demand.workflow_id) if demand.workflow_id else None
-    version = db.get(WorkflowVersion, demand.workflow_version_id) if demand.workflow_version_id else None
     stage_snapshot = version_stage(version, demand.current_stage_id)
     return DemandOut(
         id=demand.id,
@@ -787,6 +790,93 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
         revision=demand.revision,
         createdAt=demand.created_at,
     )
+
+
+def demand_out(db: Session, demand: Demand) -> DemandOut:
+    return _demand_out_from_related(
+        demand,
+        company=db.get(Company, demand.primary_company_id) if demand.primary_company_id else None,
+        category=db.get(DemandCategory, demand.category_id) if demand.category_id else None,
+        assignee=(
+            db.get(UserProfile, demand.current_assignee_id)
+            if demand.current_assignee_id
+            else None
+        ),
+        creator=db.get(UserProfile, demand.created_by),
+        stage=db.get(WorkflowStage, demand.current_stage_id) if demand.current_stage_id else None,
+        workflow=db.get(Workflow, demand.workflow_id) if demand.workflow_id else None,
+        version=(
+            db.get(WorkflowVersion, demand.workflow_version_id)
+            if demand.workflow_version_id
+            else None
+        ),
+    )
+
+
+def demands_out(db: Session, demands: list[Demand]) -> list[DemandOut]:
+    """Serializa uma lista com buscas em lote, evitando consultas por card."""
+    if not demands:
+        return []
+
+    company_ids = {item.primary_company_id for item in demands if item.primary_company_id}
+    category_ids = {item.category_id for item in demands if item.category_id}
+    user_ids = {
+        value
+        for item in demands
+        for value in (item.current_assignee_id, item.created_by)
+        if value
+    }
+    stage_ids = {item.current_stage_id for item in demands if item.current_stage_id}
+    workflow_ids = {item.workflow_id for item in demands if item.workflow_id}
+    version_ids = {item.workflow_version_id for item in demands if item.workflow_version_id}
+
+    companies = {
+        item.id: item
+        for item in db.scalars(select(Company).where(Company.id.in_(company_ids)))
+    }
+    categories = {
+        item.id: item
+        for item in db.scalars(
+            select(DemandCategory).where(DemandCategory.id.in_(category_ids))
+        )
+    }
+    users = {
+        item.id: item
+        for item in db.scalars(select(UserProfile).where(UserProfile.id.in_(user_ids)))
+    }
+    stages = {
+        item.id: item
+        for item in db.scalars(select(WorkflowStage).where(WorkflowStage.id.in_(stage_ids)))
+    }
+    workflows = {
+        item.id: item
+        for item in db.scalars(select(Workflow).where(Workflow.id.in_(workflow_ids)))
+    }
+    versions = {
+        item.id: item
+        for item in db.scalars(
+            select(WorkflowVersion).where(WorkflowVersion.id.in_(version_ids))
+        )
+    }
+    return [
+        _demand_out_from_related(
+            demand,
+            company=(
+                companies.get(demand.primary_company_id) if demand.primary_company_id else None
+            ),
+            category=categories.get(demand.category_id) if demand.category_id else None,
+            assignee=(
+                users.get(demand.current_assignee_id) if demand.current_assignee_id else None
+            ),
+            creator=users.get(demand.created_by),
+            stage=stages.get(demand.current_stage_id) if demand.current_stage_id else None,
+            workflow=workflows.get(demand.workflow_id) if demand.workflow_id else None,
+            version=(
+                versions.get(demand.workflow_version_id) if demand.workflow_version_id else None
+            ),
+        )
+        for demand in demands
+    ]
 
 
 def validate_references(
@@ -896,7 +986,7 @@ def list_demands(
             or_(Demand.public_id.ilike(pattern), Demand.title.ilike(pattern))
         )
     demands = list(db.scalars(statement.order_by(Demand.updated_at.desc()).limit(50)))
-    return [demand_out(db, demand) for demand in demands]
+    return demands_out(db, demands)
 
 
 @router.post(
