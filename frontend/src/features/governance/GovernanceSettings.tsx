@@ -12,6 +12,14 @@ type Preview = {
 };
 
 type Batch = { id: string; filename: string; boardName: string; state: string; totalCards: number; createdCards: number; updatedCards: number; unchangedCards: number; archivedCards: number; createdAt: string; revertedAt: string | null };
+type Enrichment = {
+  counts: { total?: number; demandsWithChanges?: number; companyChanges?: number; categoryChanges?: number; companyAlreadySet?: number; categoryAlreadySet?: number; companyUnmatched?: number; categoryUnmatched?: number; withoutSnapshot?: number };
+  companyMappings: { name: string; cards: number }[];
+  categoryMappings: { name: string; cards: number }[];
+  unmatchedSamples: { publicId: string; title: string }[];
+  preservesManualWorkflowChanges: boolean;
+  applied?: { demands: number; companies: number; categories: number; workflows: number };
+};
 type Overview = {
   events: { id: string; eventType: string; source: string; actorName: string; metadata: Record<string, unknown>; createdAt: string }[];
   archivedDemands: { id: string; publicId: string; title: string; status: string; archivedAt: string | null; deletedAt: string | null }[];
@@ -39,20 +47,23 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
   const [batches, setBatches] = useState<Batch[]>([]);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [retention, setRetention] = useState<Retention | null>(null);
+  const [enrichment, setEnrichment] = useState<Enrichment | null>(null);
   const [updateExisting, setUpdateExisting] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState<{ kind: "error" | "success"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [nextBatches, nextOverview, nextRetention] = await Promise.all([
+      const [nextBatches, nextOverview, nextRetention, nextEnrichment] = await Promise.all([
         api<Batch[]>("/governance/trello/batches"),
         api<Overview>("/governance/overview"),
         api<Retention>("/governance/retention"),
+        api<Enrichment>("/governance/trello/enrichment"),
       ]);
       setBatches(nextBatches);
       setOverview(nextOverview);
       setRetention(nextRetention);
+      setEnrichment(nextEnrichment);
     } catch (error) {
       setNotice({ kind: "error", text: messageFrom(error) });
     }
@@ -95,6 +106,19 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
     try {
       const result = await api<{ restored: number; archived: number }>(`/governance/trello/batches/${batch.id}/revert`, { method: "POST" });
       setNotice({ kind: "success", text: `Lote revertido: ${result.restored} demandas restauradas e ${result.archived} criações arquivadas.` });
+      await Promise.all([load(), onReload()]);
+    } catch (error) { setNotice({ kind: "error", text: messageFrom(error) }); }
+    finally { setBusy(""); }
+  }
+
+  async function applyEnrichment() {
+    const pending = enrichment?.counts.demandsWithChanges ?? 0;
+    if (!pending || !window.confirm(`Classificar ${pending} demanda(s) importada(s)? Somente campos vazios serão preenchidos e cada alteração terá uma versão recuperável.`)) return;
+    setBusy("enrichment"); setNotice(null);
+    try {
+      const result = await api<Enrichment>("/governance/trello/enrichment", { method: "POST" });
+      const applied = result.applied ?? { demands: 0, companies: 0, categories: 0, workflows: 0 };
+      setNotice({ kind: "success", text: `Normalização concluída em ${applied.demands} demandas: ${applied.companies} empresas, ${applied.categories} categorias e ${applied.workflows} workflows alinhados.` });
       await Promise.all([load(), onReload()]);
     } catch (error) { setNotice({ kind: "error", text: messageFrom(error) }); }
     finally { setBusy(""); }
@@ -155,6 +179,12 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
       <article className="governance-card"><div className="governance-card-head"><div><span className="governance-step">03</span><h4>Histórico de importações</h4><p>Cada lote pode ser revertido enquanto não houver outra importação posterior dos mesmos cartões.</p></div></div>
         <div className="table-wrap"><table><thead><tr><th>Arquivo</th><th>Resultado</th><th>Data</th><th>Situação</th><th>Ação</th></tr></thead><tbody>{batches.length ? batches.map((batch) => <tr key={batch.id}><td><strong>{batch.boardName}</strong><small className="table-subtitle">{batch.filename}</small></td><td>{batch.createdCards} criadas · {batch.updatedCards} atualizadas</td><td>{dateTime(batch.createdAt)}</td><td><span className={`import-state ${batch.state}`}>{batch.state === "reverted" ? "Revertida" : "Aplicada"}</span></td><td>{batch.state === "applied" ? <button className="table-action danger-text" disabled={busy === batch.id} onClick={() => void revert(batch)}>{busy === batch.id ? "Revertendo…" : "Reverter lote"}</button> : "—"}</td></tr>) : <tr><td colSpan={5}>Nenhuma importação do Trello realizada.</td></tr>}</tbody></table></div>
       </article>
+      {enrichment && <article className="governance-card preview-card"><div className="governance-card-head"><div><span className="governance-step">04</span><h4>Normalizar empresas e categorias</h4><p>Reconhece os prefixos e formatos do Trello. Campos já preenchidos e workflows alterados manualmente permanecem preservados.</p></div><span className={(enrichment.counts.demandsWithChanges ?? 0) ? "status-pill ready" : "status-pill"}>{(enrichment.counts.demandsWithChanges ?? 0) ? "Prévia pronta" : "Tudo normalizado"}</span></div>
+        <div className="governance-metrics"><span><strong>{enrichment.counts.total ?? 0}</strong> importadas</span><span><strong>{enrichment.counts.demandsWithChanges ?? 0}</strong> com alterações</span><span><strong>{enrichment.counts.companyChanges ?? 0}</strong> empresas</span><span><strong>{enrichment.counts.categoryChanges ?? 0}</strong> categorias</span></div>
+        <div className="mapping-grid"><div><h5>Empresas reconhecidas</h5>{enrichment.companyMappings.length ? enrichment.companyMappings.map((item) => <p key={item.name}><strong>{item.name}</strong><span>{item.cards} cards</span></p>) : <p><span>Nenhuma associação pendente.</span></p>}</div><div><h5>Categorias reconhecidas</h5>{enrichment.categoryMappings.length ? enrichment.categoryMappings.map((item) => <p key={item.name}><strong>{item.name}</strong><span>{item.cards} cards</span></p>) : <p><span>Nenhuma associação pendente.</span></p>}</div></div>
+        {!!enrichment.unmatchedSamples.length && <details className="enrichment-unmatched"><summary>Ver amostra de títulos mantidos sem classificação automática</summary><div className="history-list">{enrichment.unmatchedSamples.map((item) => <div key={item.publicId}><span><strong>{item.title}</strong><small>{item.publicId}</small></span></div>)}</div></details>}
+        <div className="governance-actions"><button className="primary action-primary compact" disabled={!(enrichment.counts.demandsWithChanges ?? 0) || Boolean(busy)} onClick={() => void applyEnrichment()}>{busy === "enrichment" ? "Normalizando…" : "Aplicar normalização"}</button></div>
+      </article>}
     </div>}
 
     {tab === "history" && <div className="governance-content two-column-governance">

@@ -1513,6 +1513,9 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .trello-upload label { display: grid; gap: 8px; color: var(--ink-soft); font-size: .77rem; font-weight: 750; }
 .trello-upload input[type="file"] { min-height: 46px; padding: 8px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--muted); background: var(--surface-soft); }
 .trello-upload input[type="file"]::file-selector-button { height: 28px; margin-right: 12px; border: 0; border-radius: 6px; padding: 0 11px; color: var(--on-primary); background: var(--teal-dark); font-weight: 750; }
+.enrichment-unmatched { border-top: 1px solid var(--line); padding-top: 14px; }
+.enrichment-unmatched summary { cursor: pointer; color: var(--ink-soft); font-size: .79rem; font-weight: 750; }
+.enrichment-unmatched .history-list { margin-top: 12px; max-height: 240px; overflow: auto; }
 .status-pill { padding: 7px 10px; border-radius: 999px; font-size: .7rem; font-weight: 800; white-space: nowrap; }
 .status-pill.ready { color: #1a6543; background: #e1f4e9; }
 .status-pill.warning { color: #8a5712; background: #fff0d7; }

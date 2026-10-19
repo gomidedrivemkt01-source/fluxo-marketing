@@ -1,8 +1,13 @@
 import json
+import uuid
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError
+from app.api.governance import imported_demand_sources
 from app.governance import (
     best_named_match,
     best_profile_match,
@@ -10,8 +15,11 @@ from app.governance import (
     card_snapshot,
     priority_for_card,
     status_for_list,
+    trello_category_code,
+    trello_company_name,
     validate_trello_document,
 )
+from app.models import Demand, DemandUpdate
 
 
 def trello_document() -> dict:
@@ -109,3 +117,73 @@ def test_does_not_guess_ambiguous_profile_names() -> None:
         ("second", "João Santos", "joao.santos@example.com"),
     ]
     assert best_profile_match("João", profiles) is None
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("🔴 GOM | BLOG | Reforma tributária", "Gomide Contabilidade"),
+        ("🟡G. OLIVEIRA | REELS | Holding", "Gomide e Oliveira Advogados"),
+        ("Vídeo holding - Gomide Oliveira", "Gomide e Oliveira Advogados"),
+        ("CARROSSEL - IMPOSTO NO BOLSO", "Imposto no Bolso"),
+        ("[ESTATICO] - ELOFISCAL", "EloFiscal"),
+        ("⚪ TODAS AS EMPRESAS | BLOG | Informe", None),
+    ],
+)
+def test_maps_explicit_trello_company_aliases(title: str, expected: str | None) -> None:
+    assert trello_company_name(title) == expected
+
+
+@pytest.mark.parametrize(
+    ("title", "labels", "expected"),
+    [
+        ("🔴 GOM | CARROSSEL | Reforma", [], "CAROUSEL"),
+        ("🔵 EXP | VÍDEO | Entrevista", [], "VIDEO_REELS"),
+        ("vídeo Natali - Youtube", [], "VIDEO_YOUTUBE"),
+        ("BLOGS DA SEMANA - SEMANA 1", [], "BLOG"),
+        ("LP PRODUTOS DA REFORMA", [], "LANDING_PAGE"),
+        ("Pauta sem formato explícito", ["📰 BLOG"], "BLOG"),
+        ("RELATÓRIO VENDAS", [], None),
+    ],
+)
+def test_maps_only_explicit_trello_category_formats(
+    title: str, labels: list[str], expected: str | None
+) -> None:
+    assert trello_category_code(title, labels) == expected
+
+
+def test_detects_operational_edits_after_trello_import() -> None:
+    demand_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    imported_at = datetime(2026, 10, 19, 12, tzinfo=UTC)
+    demand = Demand(
+        id=demand_id,
+        organization_id=uuid.uuid4(),
+        public_id="DMD-2026-000001",
+        title="Card importado",
+        source="trello_import",
+        created_by=actor_id,
+    )
+    trello_update = DemandUpdate(
+        demand_id=demand_id,
+        created_by=actor_id,
+        kind="trello_import",
+        summary="Importada",
+        payload={"trello": {"name": "🔴 GOM | BLOG | Card importado"}},
+        created_at=imported_at,
+    )
+    manual_update = DemandUpdate(
+        demand_id=demand_id,
+        created_by=actor_id,
+        kind="STAGE_CHANGED",
+        summary="Etapa alterada",
+        payload={},
+        created_at=imported_at + timedelta(minutes=5),
+    )
+    db = MagicMock(spec=Session)
+    db.scalars.return_value = iter([manual_update, trello_update])
+
+    sources, protected = imported_demand_sources(db, [demand])
+
+    assert sources[demand_id]["name"].endswith("Card importado")
+    assert protected == {demand_id}

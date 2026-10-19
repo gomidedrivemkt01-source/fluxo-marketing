@@ -13,10 +13,140 @@ from app.api.errors import ApiError
 MAX_TRELLO_BYTES = 25 * 1024 * 1024
 
 
+TRELLO_COMPANY_NAMES = {
+    "ANDERSON_NUNES": "Anderson Nunes",
+    "ECLUSA": "Eclusa",
+    "ELOFISCAL": "EloFiscal",
+    "EXPERT_CONSULTORIA": "Expert Consultoria",
+    "GOMIDE_CONTABILIDADE": "Gomide Contabilidade",
+    "GOMIDE_OLIVEIRA_ADVOGADOS": "Gomide e Oliveira Advogados",
+    "IMPOSTO_NO_BOLSO": "Imposto no Bolso",
+    "RAFAEL_OLIVEIRA": "Rafael Oliveira",
+    "RETRIBUTARIA": "Retributária",
+}
+
+
+TRELLO_CATEGORY_ALIASES = {
+    "AUTOMACAO": "AUTOMATION",
+    "BLOG": "BLOG",
+    "BLOGS": "BLOG",
+    "CAMPANHA": "CAMPAIGN",
+    "CAMPANHAS": "CAMPAIGN",
+    "CARROSSEL": "CAROUSEL",
+    "CARROSSSEL": "CAROUSEL",
+    "ENDOMARKETING": "INTERNAL_MARKETING",
+    "ENDORMAKETING": "INTERNAL_MARKETING",
+    "ESTATICO": "STATIC",
+    "EVENTO": "EVENT",
+    "LANDING PAGE": "LANDING_PAGE",
+    "LP": "LANDING_PAGE",
+    "MATERIAL GRAFICO": "GRAPHIC_MATERIAL",
+    "OOH": "GRAPHIC_MATERIAL",
+    "REELS": "VIDEO_REELS",
+    "STORIES": "STORY",
+    "STORY": "STORY",
+    "VIDEO": "VIDEO_REELS",
+    "VIDEO REELS": "VIDEO_REELS",
+    "VIDEO YOUTUBE": "VIDEO_YOUTUBE",
+    "YOUTUBE": "VIDEO_YOUTUBE",
+}
+
+
 def normalized(value: str | None) -> str:
     text = unicodedata.normalize("NFKD", value or "")
     text = "".join(char for char in text if not unicodedata.combining(char))
     return " ".join(re.sub(r"[^A-Z0-9]+", " ", text.upper()).split())
+
+
+def trello_company_name(title: str | None) -> str | None:
+    """Resolve marcas do quadro sem confundir abreviações com palavras do título."""
+
+    raw_title = title or ""
+    value = normalized(raw_title)
+    prefix = normalized(raw_title.split("|", 1)[0]) if "|" in raw_title else ""
+
+    # Nomes compostos precisam ser avaliados antes de "Gomide" isolado.
+    if any(token in value for token in ("GOMIDE E OLIVEIRA", "GOMIDE OLIVEIRA", "GOMIDE ADVOCA")):
+        return TRELLO_COMPANY_NAMES["GOMIDE_OLIVEIRA_ADVOGADOS"]
+
+    structured_aliases = (
+        (("G OLIVEIRA", "GOA"), "GOMIDE_OLIVEIRA_ADVOGADOS"),
+        (("GOM",), "GOMIDE_CONTABILIDADE"),
+        (("EXP",), "EXPERT_CONSULTORIA"),
+        (("IMP",), "IMPOSTO_NO_BOLSO"),
+        (("ELO",), "ELOFISCAL"),
+        (("ECL",), "ECLUSA"),
+        (("RAF", "RAFAEL"), "RAFAEL_OLIVEIRA"),
+        (("AND",), "ANDERSON_NUNES"),
+        (("RET", "RETRIB"), "RETRIBUTARIA"),
+    )
+    if prefix and prefix not in {"INTERNO", "TODAS AS EMPRESAS", "VALIDAR"}:
+        for aliases, company_key in structured_aliases:
+            if any(prefix == alias or prefix.startswith(f"{alias} ") for alias in aliases):
+                return TRELLO_COMPANY_NAMES[company_key]
+
+    explicit_names = (
+        (("IMPOSTO NO BOLSO",), "IMPOSTO_NO_BOLSO"),
+        (("GOMIDE CONTABILIDADE",), "GOMIDE_CONTABILIDADE"),
+        (("EXPERT CONSULTORIA", "EXPERT"), "EXPERT_CONSULTORIA"),
+        (("ELOFISCAL", "ELO FISCAL"), "ELOFISCAL"),
+        (("ECLUSA",), "ECLUSA"),
+        (("RAFAEL OLIVEIRA",), "RAFAEL_OLIVEIRA"),
+        (("ANDERSON NUNES",), "ANDERSON_NUNES"),
+        (("RETRIBUTARIA",), "RETRIBUTARIA"),
+    )
+    for aliases, company_key in explicit_names:
+        if any(alias in value for alias in aliases):
+            return TRELLO_COMPANY_NAMES[company_key]
+
+    # O quadro histórico usa estes nomes simples como marca no início ou fim do título.
+    if re.search(r"(?:^| )GOMIDE(?:$| )", value):
+        return TRELLO_COMPANY_NAMES["GOMIDE_CONTABILIDADE"]
+    if re.search(r"(?:^| )ANDERSON(?:$| )", value):
+        return TRELLO_COMPANY_NAMES["ANDERSON_NUNES"]
+    return None
+
+
+def trello_category_code(title: str | None, label_names: list[str] | None = None) -> str | None:
+    """Classifica apenas formatos explícitos; títulos ambíguos permanecem sem categoria."""
+
+    for label in label_names or []:
+        if code := TRELLO_CATEGORY_ALIASES.get(normalized(label)):
+            return code
+
+    raw_title = title or ""
+    segments = raw_title.split("|")
+    if len(segments) > 1:
+        structured_type = normalized(segments[1])
+        if "YOUTUBE" in structured_type:
+            return "VIDEO_YOUTUBE"
+        for alias, code in TRELLO_CATEGORY_ALIASES.items():
+            if structured_type == alias or structured_type.startswith(f"{alias} "):
+                return code
+        if structured_type == "PLANEJAMENTO":
+            return "CAMPAIGN"
+
+    value = normalized(raw_title)
+    if "YOUTUBE" in value and re.search(r"(?:^| )VIDEO(?:$| )", value):
+        return "VIDEO_YOUTUBE"
+    patterns = (
+        (r"^(?:EDICAO DE? |EDITAR O? )?VIDEOS?\b", "VIDEO_REELS"),
+        (r"^ALTERACOES CAPA DO REELS\b", "VIDEO_REELS"),
+        (r"^(?:BLOG|BLOGS)\b", "BLOG"),
+        (r"^CARROSS?SEL\b", "CAROUSEL"),
+        (r"^(?:ESTATICO|POST ESTATICO)\b", "STATIC"),
+        (r"^(?:STORY|STORIES)\b", "STORY"),
+        (r"^(?:ENDOMARKETING|ENDORMAKETING)\b", "INTERNAL_MARKETING"),
+        (r"^(?:CAMPANHA|RELATORIO DE CAMPANHAS)\b", "CAMPAIGN"),
+        (r"^(?:LP|LANDING PAGE)\b", "LANDING_PAGE"),
+        (r"^(?:OOH|MATERIAL GRAFICO)\b", "GRAPHIC_MATERIAL"),
+        (r"^EVENTO\b", "EVENT"),
+        (r"^SYSTEM\b", "AUTOMATION"),
+    )
+    for pattern, code in patterns:
+        if re.search(pattern, value):
+            return code
+    return None
 
 
 def parse_source_datetime(value: Any) -> datetime | None:

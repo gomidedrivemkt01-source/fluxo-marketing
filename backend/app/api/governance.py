@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import uuid
+from collections import Counter
 from datetime import timedelta
 from typing import Any
 
@@ -13,7 +14,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.demands import ensure_workflow_version
+from app.api.demands import demand_revision_snapshot, ensure_workflow_version
 from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
@@ -26,11 +27,14 @@ from app.governance import (
     parse_source_datetime,
     priority_for_card,
     status_for_list,
+    trello_category_code,
+    trello_company_name,
     trello_object_created_at,
     validate_trello_document,
 )
 from app.models import (
     AuditEvent,
+    Company,
     DataRetentionPolicy,
     Demand,
     DemandCategory,
@@ -145,12 +149,21 @@ def import_context(db: Session, principal: Principal) -> dict[str, Any]:
             )
         )
     )
+    companies = list(
+        db.scalars(
+            select(Company).where(
+                Company.organization_id == organization_id,
+                Company.active.is_(True),
+            )
+        )
+    )
     return {
         "workflow": workflow,
         "version": version,
         "stages": stages,
         "profiles": profiles,
         "categories": categories,
+        "companies": companies,
     }
 
 
@@ -295,6 +308,7 @@ def demand_state(demand: Demand) -> dict[str, Any]:
     fields = (
         "title",
         "description",
+        "primary_company_id",
         "category_id",
         "current_assignee_id",
         "current_stage_id",
@@ -364,12 +378,313 @@ def mapped_profile(
 def mapped_category(
     card: dict[str, Any], labels: dict[str, Any], categories: list[DemandCategory]
 ) -> uuid.UUID | None:
-    for label_id in card.get("idLabels", []):
-        label_name = str(labels.get(str(label_id), {}).get("name") or "")
+    label_names = [
+        str(labels.get(str(label_id), {}).get("name") or "")
+        for label_id in card.get("idLabels", [])
+    ]
+    return matched_category_id(str(card.get("name") or ""), label_names, categories)
+
+
+def matched_category_id(
+    title: str, label_names: list[str], categories: list[DemandCategory]
+) -> uuid.UUID | None:
+    category_code = trello_category_code(title, label_names)
+    if category_code:
+        exact = [item for item in categories if item.code.upper() == category_code]
+        if len(exact) == 1:
+            return exact[0].id
+    for label_name in label_names:
         matched = best_named_match(label_name, [(str(item.id), item.name) for item in categories])
         if matched:
             return uuid.UUID(matched)
     return None
+
+
+def mapped_company(title: str, companies: list[Company]) -> uuid.UUID | None:
+    target_name = trello_company_name(title)
+    if not target_name:
+        return None
+    matches = [item for item in companies if item.name.casefold() == target_name.casefold()]
+    return matches[0].id if len(matches) == 1 else None
+
+
+def category_workflow_bundle(
+    db: Session,
+    principal: Principal,
+    category_id: uuid.UUID | None,
+    context: dict[str, Any],
+    cache: dict[uuid.UUID, dict[str, Any]],
+) -> dict[str, Any]:
+    if not category_id:
+        return context
+    category = next((item for item in context["categories"] if item.id == category_id), None)
+    if not category or not category.default_workflow_id:
+        return context
+    if category.id in cache:
+        return cache[category.id]
+    workflow = db.scalar(
+        select(Workflow).where(
+            Workflow.id == category.default_workflow_id,
+            Workflow.organization_id == principal.membership.organization_id,
+            Workflow.active.is_(True),
+            Workflow.lifecycle_state == "PUBLISHED",
+        )
+    )
+    if not workflow:
+        cache[category.id] = context
+        return context
+    stages = list(
+        db.scalars(
+            select(WorkflowStage)
+            .where(
+                WorkflowStage.organization_id == principal.membership.organization_id,
+                WorkflowStage.workflow_id == workflow.id,
+                WorkflowStage.active.is_(True),
+            )
+            .order_by(WorkflowStage.position)
+        )
+    )
+    if not stages:
+        cache[category.id] = context
+        return context
+    bundle = {
+        **context,
+        "workflow": workflow,
+        "version": ensure_workflow_version(
+            db, principal.membership.organization_id, workflow.id, principal.profile.id
+        ),
+        "stages": stages,
+    }
+    cache[category.id] = bundle
+    return bundle
+
+
+OPERATIONAL_UPDATE_KINDS = {"DEMAND_UPDATED", "STAGE_CHANGED"}
+
+
+def imported_demand_sources(
+    db: Session, demands: list[Demand]
+) -> tuple[dict[uuid.UUID, dict[str, Any]], set[uuid.UUID]]:
+    demand_ids = [item.id for item in demands]
+    if not demand_ids:
+        return {}, set()
+    updates = list(
+        db.scalars(
+            select(DemandUpdate)
+            .where(DemandUpdate.demand_id.in_(demand_ids))
+            .order_by(DemandUpdate.created_at.desc())
+        )
+    )
+    sources: dict[uuid.UUID, dict[str, Any]] = {}
+    imported_at: dict[uuid.UUID, Any] = {}
+    operational_updates: dict[uuid.UUID, list[Any]] = {}
+    for update in updates:
+        if update.kind == "trello_import" and update.demand_id not in sources:
+            trello = (update.payload or {}).get("trello")
+            if isinstance(trello, dict):
+                sources[update.demand_id] = trello
+                imported_at[update.demand_id] = update.created_at
+        elif update.kind in OPERATIONAL_UPDATE_KINDS:
+            operational_updates.setdefault(update.demand_id, []).append(update.created_at)
+    protected = {
+        demand_id
+        for demand_id, timestamps in operational_updates.items()
+        if (source_at := imported_at.get(demand_id))
+        and any(timestamp > source_at for timestamp in timestamps)
+    }
+    return sources, protected
+
+
+def trello_enrichment_plan(
+    db: Session, principal: Principal, *, lock: bool = False
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    organization_id = principal.membership.organization_id
+    statement = select(Demand).where(
+        Demand.organization_id == organization_id,
+        Demand.source == "trello_import",
+    )
+    if lock:
+        statement = statement.with_for_update()
+    demands = list(db.scalars(statement.order_by(Demand.created_at)))
+    sources, workflow_protected = imported_demand_sources(db, demands)
+    companies = list(
+        db.scalars(
+            select(Company).where(
+                Company.organization_id == organization_id,
+                Company.active.is_(True),
+            )
+        )
+    )
+    categories = list(
+        db.scalars(
+            select(DemandCategory).where(
+                DemandCategory.organization_id == organization_id,
+                DemandCategory.active.is_(True),
+            )
+        )
+    )
+    company_by_id = {item.id: item for item in companies}
+    category_by_id = {item.id: item for item in categories}
+    company_mappings: Counter[str] = Counter()
+    category_mappings: Counter[str] = Counter()
+    counts: Counter[str] = Counter(total=len(demands))
+    items: list[dict[str, Any]] = []
+    unmatched_samples: list[dict[str, str]] = []
+    for demand in demands:
+        source = sources.get(demand.id)
+        if not source:
+            counts["withoutSnapshot"] += 1
+            continue
+        title = str(source.get("name") or demand.title)
+        label_names = [
+            str(item.get("name") or "")
+            for item in source.get("labels", [])
+            if isinstance(item, dict)
+        ]
+        company_id = mapped_company(title, companies)
+        category_id = matched_category_id(title, label_names, categories)
+        if demand.primary_company_id:
+            counts["companyAlreadySet"] += 1
+            company_id = None
+        elif company_id:
+            counts["companyChanges"] += 1
+            company_mappings[company_by_id[company_id].name] += 1
+        else:
+            counts["companyUnmatched"] += 1
+        if demand.category_id:
+            counts["categoryAlreadySet"] += 1
+            category_id = None
+        elif category_id:
+            counts["categoryChanges"] += 1
+            category_mappings[category_by_id[category_id].name] += 1
+        else:
+            counts["categoryUnmatched"] += 1
+        if not company_id and not category_id:
+            if (
+                len(unmatched_samples) < 12
+                and demand.primary_company_id is None
+                and demand.category_id is None
+            ):
+                unmatched_samples.append({"publicId": demand.public_id, "title": demand.title})
+            continue
+        items.append(
+            {
+                "demand": demand,
+                "source": source,
+                "companyId": company_id,
+                "categoryId": category_id,
+                "workflowProtected": demand.id in workflow_protected,
+            }
+        )
+    counts["demandsWithChanges"] = len(items)
+    return items, {
+        "counts": dict(counts),
+        "companyMappings": [
+            {"name": name, "cards": cards} for name, cards in company_mappings.most_common()
+        ],
+        "categoryMappings": [
+            {"name": name, "cards": cards} for name, cards in category_mappings.most_common()
+        ],
+        "unmatchedSamples": unmatched_samples,
+        "preservesManualWorkflowChanges": True,
+    }
+
+
+@router.get("/trello/enrichment")
+def preview_trello_enrichment(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    require_admin(principal)
+    return trello_enrichment_plan(db, principal)[1]
+
+
+@router.post("/trello/enrichment", dependencies=[Depends(require_csrf)])
+def apply_trello_enrichment(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    require_admin(principal)
+    items, preview = trello_enrichment_plan(db, principal, lock=True)
+    if not items:
+        return {**preview, "applied": {"demands": 0, "companies": 0, "categories": 0, "workflows": 0}}
+    context = import_context(db, principal)
+    workflow_cache: dict[uuid.UUID, dict[str, Any]] = {}
+    now = utc_now()
+    changed_demands = company_changes = category_changes = workflow_changes = 0
+    for item in items:
+        demand: Demand = item["demand"]
+        previous_revision = demand.revision
+        db.add(
+            DemandRevision(
+                organization_id=demand.organization_id,
+                demand_id=demand.id,
+                revision=previous_revision,
+                operation="TRELLO_ENRICH",
+                snapshot=demand_revision_snapshot(demand),
+            )
+        )
+        before = {
+            "companyId": str(demand.primary_company_id) if demand.primary_company_id else None,
+            "categoryId": str(demand.category_id) if demand.category_id else None,
+            "workflowId": str(demand.workflow_id) if demand.workflow_id else None,
+            "stageId": str(demand.current_stage_id) if demand.current_stage_id else None,
+        }
+        if item["companyId"]:
+            demand.primary_company_id = item["companyId"]
+            company_changes += 1
+        if item["categoryId"]:
+            demand.category_id = item["categoryId"]
+            category_changes += 1
+            if not item["workflowProtected"]:
+                bundle = category_workflow_bundle(
+                    db, principal, item["categoryId"], context, workflow_cache
+                )
+                if bundle["workflow"].id != demand.workflow_id:
+                    list_name = str((item["source"].get("list") or {}).get("name") or "")
+                    stage = stage_for_list(list_name, demand.status, bundle["stages"])
+                    demand.workflow_id = bundle["workflow"].id
+                    demand.workflow_version_id = bundle["version"].id
+                    demand.current_stage_id = stage.id
+                    workflow_changes += 1
+        demand.revision += 1
+        demand.updated_at = now
+        changed_demands += 1
+        db.add(
+            DemandUpdate(
+                demand_id=demand.id,
+                created_by=principal.profile.id,
+                kind="TRELLO_CLASSIFIED",
+                summary="Empresa e categoria reconhecidas a partir do padrão do Trello.",
+                payload={
+                    "before": before,
+                    "after": {
+                        "companyId": (
+                            str(demand.primary_company_id) if demand.primary_company_id else None
+                        ),
+                        "categoryId": str(demand.category_id) if demand.category_id else None,
+                        "workflowId": str(demand.workflow_id) if demand.workflow_id else None,
+                        "stageId": str(demand.current_stage_id) if demand.current_stage_id else None,
+                    },
+                    "workflowPreserved": bool(item["workflowProtected"]),
+                },
+            )
+        )
+    applied = {
+        "demands": changed_demands,
+        "companies": company_changes,
+        "categories": category_changes,
+        "workflows": workflow_changes,
+    }
+    db.add(
+        AuditEvent(
+            organization_id=principal.membership.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="trello.classification_applied",
+            source="interface",
+            metadata_json=applied,
+        )
+    )
+    db.commit()
+    return {**preview, "applied": applied}
 
 
 @router.post("/trello/validate", dependencies=[Depends(require_csrf)])
@@ -430,6 +745,7 @@ async def apply_trello(
     # before the bulk link insert. The flush remains in this atomic transaction.
     db.flush()
     changes: list[dict[str, Any]] = []
+    workflow_cache: dict[uuid.UUID, dict[str, Any]] = {}
     created = updated = unchanged = archived = 0
     try:
         for card in document["cards"]:
@@ -447,7 +763,6 @@ async def apply_trello(
                 continue
             list_name = str(lists[str(card["idList"])].get("name", ""))
             status = status_for_list(list_name)
-            stage = stage_for_list(list_name, status, context["stages"])
             label_names = [
                 str(labels.get(str(item), {}).get("name") or "")
                 for item in card.get("idLabels", [])
@@ -455,6 +770,11 @@ async def apply_trello(
             source_updated_at = parse_source_datetime(card.get("dateLastActivity"))
             assignee_id = mapped_profile(card, members, context["profiles"])
             category_id = mapped_category(card, labels, context["categories"])
+            company_id = mapped_company(str(card.get("name") or ""), context["companies"])
+            import_bundle = category_workflow_bundle(
+                db, principal, category_id, context, workflow_cache
+            )
+            stage = stage_for_list(list_name, status, import_bundle["stages"])
             due = parse_source_datetime(card.get("due"))
             source_completed_old = status == "COMPLETED" and bool(
                 source_updated_at and source_updated_at <= now - timedelta(days=60)
@@ -482,11 +802,16 @@ async def apply_trello(
                 updated += 1
                 demand.title = " ".join(str(card["name"]).split())[:300]
                 demand.description = str(card.get("desc") or "") or None
-                demand.category_id = category_id
+                if demand.primary_company_id is None:
+                    demand.primary_company_id = company_id
+                if demand.category_id is None:
+                    demand.category_id = category_id
                 demand.current_assignee_id = assignee_id
-                demand.current_stage_id = stage.id
-                demand.workflow_id = context["workflow"].id
-                demand.workflow_version_id = context["version"].id
+                # Reimportações preservam a organização manual do workflow existente.
+                if demand.workflow_id is None:
+                    demand.current_stage_id = stage.id
+                    demand.workflow_id = import_bundle["workflow"].id
+                    demand.workflow_version_id = import_bundle["version"].id
                 demand.status = status
                 demand.priority = priority_for_card(card, list_name, label_names)
                 demand.deadline_at = due
@@ -506,11 +831,12 @@ async def apply_trello(
                     public_id=next(public_ids),
                     title=" ".join(str(card["name"]).split())[:300],
                     description=str(card.get("desc") or "") or None,
+                    primary_company_id=company_id,
                     category_id=category_id,
                     current_assignee_id=assignee_id,
                     current_stage_id=stage.id,
-                    workflow_id=context["workflow"].id,
-                    workflow_version_id=context["version"].id,
+                    workflow_id=import_bundle["workflow"].id,
+                    workflow_version_id=import_bundle["version"].id,
                     status=status,
                     priority=priority_for_card(card, list_name, label_names),
                     deadline_at=due,
@@ -609,7 +935,7 @@ async def apply_trello(
             409,
             "trello_import_conflict",
             messages.get(
-                diagnostic,
+                diagnostic if isinstance(diagnostic, str) else "",
                 "A importação encontrou um conflito de integridade. "
                 "Nenhum card foi criado; valide o arquivo novamente.",
             ),
