@@ -1519,6 +1519,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .status-pill { padding: 7px 10px; border-radius: 999px; font-size: .7rem; font-weight: 800; white-space: nowrap; }
 .status-pill.ready { color: #1a6543; background: #e1f4e9; }
 .status-pill.warning { color: #8a5712; background: #fff0d7; }
+.status-pill.blocked { color: #9d3535; background: #fde7e7; }
 .governance-metrics { display: grid; grid-template-columns: repeat(5, minmax(100px, 1fr)); gap: 8px; margin: 20px 0; }
 .governance-metrics span { display: grid; gap: 3px; padding: 12px; border-radius: 8px; color: var(--muted); background: var(--surface-soft); font-size: .72rem; }
 .governance-metrics strong { color: var(--ink); font-size: 1.12rem; }
@@ -1531,6 +1532,13 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .mapping-grid p span { color: var(--muted); }
 .governance-update-check { margin-top: 18px; padding: 14px; border-radius: 8px; background: var(--surface-hover); }
 .governance-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.trello-reset-card { border-color: color-mix(in srgb, #b33f3f 28%, var(--line)); }
+.governance-step.danger { color: #a83a3a; }
+.reset-preserved { display: grid; gap: 5px; margin: 4px 0 16px; padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--teal) 32%, var(--line)); border-radius: 8px; background: var(--surface-hover); }
+.reset-preserved strong { color: var(--teal-dark); font-size: .76rem; }
+.reset-preserved span { color: var(--muted); font-size: .72rem; line-height: 1.55; }
+.danger-button { min-height: 43px; border: 1px solid #a93838; border-radius: 8px; color: #fff; background: #a93838; font-weight: 750; transition: transform .15s ease, background .15s ease; }
+.danger-button:not(:disabled):hover { background: #8e2f2f; transform: translateY(-1px); }
 .governance-card .table-wrap { margin-top: 18px; border: 1px solid var(--line); border-radius: 8px; }
 .governance-card table { width: 100%; border-collapse: collapse; font-size: .78rem; }
 .governance-card th, .governance-card td { padding: 12px; text-align: left; border-bottom: 1px solid var(--line); }

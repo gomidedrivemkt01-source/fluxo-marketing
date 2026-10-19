@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError
-from app.api.governance import imported_demand_sources
+from app.api.governance import imported_demand_sources, trello_reset_preview
 from app.governance import (
     best_named_match,
     best_profile_match,
@@ -187,3 +187,46 @@ def test_detects_operational_edits_after_trello_import() -> None:
 
     assert sources[demand_id]["name"].endswith("Card importado")
     assert protected == {demand_id}
+
+
+def test_trello_reset_preview_counts_only_operational_import_data() -> None:
+    db = MagicMock(spec=Session)
+    db.scalar.side_effect = [
+        0,  # linked existing demands
+        980,  # demands
+        336,  # active
+        644,  # archived
+        644,  # soft deleted by the previous batch revert
+        0,  # time entries
+        980,  # stage visits
+        980,  # state intervals
+        980,  # updates
+        89,  # todo items
+        0,  # files
+        547,  # revisions
+        0,  # daily links
+        980,  # card links
+        1,  # batches
+    ]
+
+    preview = trello_reset_preview(db, uuid.uuid4())
+
+    assert preview["safeToReset"] is True
+    assert preview["counts"]["demands"] == 980
+    assert preview["counts"]["archivedDemands"] == 644
+    assert preview["counts"]["revisions"] == 547
+    assert "Workflows, etapas e modelos de checklist" in preview["preserved"]
+
+
+def test_trello_reset_preview_blocks_physical_files_and_existing_demands() -> None:
+    db = MagicMock(spec=Session)
+    values = [0] * 15
+    values[0] = 2  # linked existing demands
+    values[10] = 3  # files
+    db.scalar.side_effect = values
+
+    preview = trello_reset_preview(db, uuid.uuid4())
+
+    assert preview["safeToReset"] is False
+    assert preview["counts"]["files"] == 3
+    assert preview["counts"]["linkedExistingDemands"] == 2

@@ -26,6 +26,27 @@ type Overview = {
   revisions: { id: string; demandId: string; revision: number; operation: string; title: string; createdAt: string }[];
 };
 type Retention = { automaticEnabled: boolean; intervalDays: number; completedAfterDays: number; lastRunAt: string | null; eligibleCompleted: number; permanentDeletion: false };
+type TrelloReset = {
+  counts: {
+    demands: number;
+    activeDemands: number;
+    archivedDemands: number;
+    deletedDemands: number;
+    timeEntries: number;
+    stageVisits: number;
+    stateIntervals: number;
+    updates: number;
+    todoItems: number;
+    files: number;
+    revisions: number;
+    dailyLinks: number;
+    cardLinks: number;
+    batches: number;
+    linkedExistingDemands: number;
+  };
+  safeToReset: boolean;
+  preserved: string[];
+};
 
 const statusNames: Record<string, string> = {
   WAITING_EXECUTION: "Aguardando execução",
@@ -48,22 +69,25 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
   const [overview, setOverview] = useState<Overview | null>(null);
   const [retention, setRetention] = useState<Retention | null>(null);
   const [enrichment, setEnrichment] = useState<Enrichment | null>(null);
+  const [trelloReset, setTrelloReset] = useState<TrelloReset | null>(null);
   const [updateExisting, setUpdateExisting] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState<{ kind: "error" | "success"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [nextBatches, nextOverview, nextRetention, nextEnrichment] = await Promise.all([
+      const [nextBatches, nextOverview, nextRetention, nextEnrichment, nextTrelloReset] = await Promise.all([
         api<Batch[]>("/governance/trello/batches"),
         api<Overview>("/governance/overview"),
         api<Retention>("/governance/retention"),
         api<Enrichment>("/governance/trello/enrichment"),
+        api<TrelloReset>("/governance/trello/reset"),
       ]);
       setBatches(nextBatches);
       setOverview(nextOverview);
       setRetention(nextRetention);
       setEnrichment(nextEnrichment);
+      setTrelloReset(nextTrelloReset);
     } catch (error) {
       setNotice({ kind: "error", text: messageFrom(error) });
     }
@@ -119,6 +143,20 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
       const result = await api<Enrichment>("/governance/trello/enrichment", { method: "POST" });
       const applied = result.applied ?? { demands: 0, companies: 0, categories: 0, workflows: 0 };
       setNotice({ kind: "success", text: `Normalização concluída em ${applied.demands} demandas: ${applied.companies} empresas, ${applied.categories} categorias e ${applied.workflows} workflows alinhados.` });
+      await Promise.all([load(), onReload()]);
+    } catch (error) { setNotice({ kind: "error", text: messageFrom(error) }); }
+    finally { setBusy(""); }
+  }
+
+  async function resetTrelloImports() {
+    if (!trelloReset?.safeToReset || !(trelloReset.counts.demands || trelloReset.counts.batches || trelloReset.counts.cardLinks)) return;
+    const question = `Remover permanentemente ${trelloReset.counts.demands} demanda(s) originada(s) do Trello e seus dados operacionais? Empresas, categorias, usuários, workflows, modelos e demandas manuais serão preservados.`;
+    if (!window.confirm(question)) return;
+    setBusy("trello-reset"); setNotice(null);
+    try {
+      const result = await api<{ removed: TrelloReset["counts"]; remaining: TrelloReset["counts"]; preserved: string[] }>("/governance/trello/reset", { method: "DELETE" });
+      setNotice({ kind: "success", text: `Limpeza concluída: ${result.removed.demands} demanda(s) e ${result.removed.batches} lote(s) do Trello removidos. A plataforma está pronta para uma nova importação.` });
+      setFile(null); setPreview(null); setUpdateExisting(false);
       await Promise.all([load(), onReload()]);
     } catch (error) { setNotice({ kind: "error", text: messageFrom(error) }); }
     finally { setBusy(""); }
@@ -184,6 +222,13 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
         <div className="mapping-grid"><div><h5>Empresas reconhecidas</h5>{enrichment.companyMappings.length ? enrichment.companyMappings.map((item) => <p key={item.name}><strong>{item.name}</strong><span>{item.cards} cards</span></p>) : <p><span>Nenhuma associação pendente.</span></p>}</div><div><h5>Categorias reconhecidas</h5>{enrichment.categoryMappings.length ? enrichment.categoryMappings.map((item) => <p key={item.name}><strong>{item.name}</strong><span>{item.cards} cards</span></p>) : <p><span>Nenhuma associação pendente.</span></p>}</div></div>
         {!!enrichment.unmatchedSamples.length && <details className="enrichment-unmatched"><summary>Ver amostra de títulos mantidos sem classificação automática</summary><div className="history-list">{enrichment.unmatchedSamples.map((item) => <div key={item.publicId}><span><strong>{item.title}</strong><small>{item.publicId}</small></span></div>)}</div></details>}
         <div className="governance-actions"><button className="primary action-primary compact" disabled={!(enrichment.counts.demandsWithChanges ?? 0) || Boolean(busy)} onClick={() => void applyEnrichment()}>{busy === "enrichment" ? "Normalizando…" : "Aplicar normalização"}</button></div>
+      </article>}
+      {trelloReset && <article className="governance-card trello-reset-card"><div className="governance-card-head"><div><span className="governance-step danger">05</span><h4>Reiniciar dados importados do Trello</h4><p>Remove somente cards originados do Trello e os registros operacionais que alimentam relatórios. A estrutura da plataforma permanece intacta.</p></div><span className={`status-pill ${trelloReset.safeToReset ? "warning" : "blocked"}`}>{trelloReset.safeToReset ? "Limpeza disponível" : "Revisão necessária"}</span></div>
+        <div className="governance-metrics"><span><strong>{trelloReset.counts.demands}</strong> demandas</span><span><strong>{trelloReset.counts.activeDemands}</strong> ativas</span><span><strong>{trelloReset.counts.archivedDemands}</strong> arquivadas</span><span><strong>{trelloReset.counts.timeEntries}</strong> tempos</span><span><strong>{trelloReset.counts.batches}</strong> lotes</span></div>
+        <div className="reset-preserved"><strong>Será preservado</strong><span>{trelloReset.preserved.join(" · ")}</span></div>
+        {!!trelloReset.counts.files && <div className="inline-warning">Existem {trelloReset.counts.files} arquivo(s) físico(s) vinculados. Remova-os antes de executar a limpeza.</div>}
+        {!!trelloReset.counts.linkedExistingDemands && <div className="inline-warning">Existem {trelloReset.counts.linkedExistingDemands} demanda(s) preexistente(s) atualizada(s) pelo Trello. Reverta os lotes antes de executar a limpeza.</div>}
+        <div className="governance-actions"><button className="danger-button compact" disabled={!(trelloReset.counts.demands || trelloReset.counts.batches || trelloReset.counts.cardLinks) || !trelloReset.safeToReset || Boolean(busy)} onClick={() => void resetTrelloImports()}>{busy === "trello-reset" ? "Limpando…" : "Limpar importações do Trello"}</button></div>
       </article>}
     </div>}
 

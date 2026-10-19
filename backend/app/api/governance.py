@@ -10,7 +10,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
+from sqlalchemy import update as sql_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -35,14 +36,19 @@ from app.governance import (
 from app.models import (
     AuditEvent,
     Company,
+    DailyImportItem,
     DataRetentionPolicy,
     Demand,
     DemandCategory,
+    DemandFile,
     DemandRevision,
+    DemandStageVisit,
+    DemandStateInterval,
     DemandTodoItem,
     DemandUpdate,
     Membership,
     MembershipStatus,
+    TimeEntry,
     TrelloCardLink,
     TrelloImportBatch,
     UserProfile,
@@ -55,6 +61,13 @@ from app.retention import archive_completed_demands, eligible_retention_count, g
 router = APIRouter(prefix="/governance", tags=["Governança"])
 logger = logging.getLogger(__name__)
 
+TRELLO_RESET_AUDIT_EVENTS = (
+    "trello.import_applied",
+    "trello.import_reverted",
+    "trello.classification_applied",
+    "trello.reset_completed",
+)
+
 
 def require_admin(principal: Principal) -> None:
     if (
@@ -63,6 +76,185 @@ def require_admin(principal: Principal) -> None:
         or principal.role.code != "admin"
     ):
         raise ApiError(403, "admin_required", "Esta área é exclusiva para administradores.")
+
+
+def _count(db: Session, model: type[Any], *criteria: Any) -> int:
+    return int(db.scalar(select(func.count()).select_from(model).where(*criteria)) or 0)
+
+
+def trello_reset_preview(db: Session, organization_id: uuid.UUID) -> dict[str, Any]:
+    """Describe only operational data created by Trello imports for one organization."""
+    imported_ids = select(Demand.id).where(
+        Demand.organization_id == organization_id,
+        Demand.source == "trello_import",
+    )
+    linked_existing = _count(
+        db,
+        TrelloCardLink,
+        TrelloCardLink.organization_id == organization_id,
+        ~TrelloCardLink.demand_id.in_(imported_ids),
+    )
+    counts = {
+        "demands": _count(
+            db,
+            Demand,
+            Demand.organization_id == organization_id,
+            Demand.source == "trello_import",
+        ),
+        "activeDemands": _count(
+            db,
+            Demand,
+            Demand.organization_id == organization_id,
+            Demand.source == "trello_import",
+            Demand.archived_at.is_(None),
+            Demand.deleted_at.is_(None),
+        ),
+        "archivedDemands": _count(
+            db,
+            Demand,
+            Demand.organization_id == organization_id,
+            Demand.source == "trello_import",
+            Demand.archived_at.is_not(None),
+        ),
+        "deletedDemands": _count(
+            db,
+            Demand,
+            Demand.organization_id == organization_id,
+            Demand.source == "trello_import",
+            Demand.deleted_at.is_not(None),
+        ),
+        "timeEntries": _count(db, TimeEntry, TimeEntry.demand_id.in_(imported_ids)),
+        "stageVisits": _count(db, DemandStageVisit, DemandStageVisit.demand_id.in_(imported_ids)),
+        "stateIntervals": _count(
+            db, DemandStateInterval, DemandStateInterval.demand_id.in_(imported_ids)
+        ),
+        "updates": _count(db, DemandUpdate, DemandUpdate.demand_id.in_(imported_ids)),
+        "todoItems": _count(db, DemandTodoItem, DemandTodoItem.demand_id.in_(imported_ids)),
+        "files": _count(db, DemandFile, DemandFile.demand_id.in_(imported_ids)),
+        "revisions": _count(
+            db,
+            DemandRevision,
+            DemandRevision.organization_id == organization_id,
+            DemandRevision.demand_id.in_(imported_ids),
+        ),
+        "dailyLinks": _count(
+            db, DailyImportItem, DailyImportItem.target_demand_id.in_(imported_ids)
+        ),
+        "cardLinks": _count(
+            db, TrelloCardLink, TrelloCardLink.organization_id == organization_id
+        ),
+        "batches": _count(
+            db, TrelloImportBatch, TrelloImportBatch.organization_id == organization_id
+        ),
+        "linkedExistingDemands": linked_existing,
+    }
+    return {
+        "counts": counts,
+        "safeToReset": counts["files"] == 0 and linked_existing == 0,
+        "preserved": [
+            "Usuários e acessos",
+            "Empresas",
+            "Categorias e briefings",
+            "Workflows, etapas e modelos de checklist",
+            "Configurações, temas e políticas",
+            "Demandas criadas manualmente",
+        ],
+    }
+
+
+@router.get("/trello/reset")
+def preview_trello_reset(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    require_admin(principal)
+    return trello_reset_preview(db, principal.membership.organization_id)
+
+
+@router.delete("/trello/reset", dependencies=[Depends(require_csrf)])
+def reset_trello_imports(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """Permanently clear Trello-imported operational data without touching configuration."""
+    require_admin(principal)
+    organization_id = principal.membership.organization_id
+    demand_ids = list(
+        db.scalars(
+            select(Demand.id)
+            .where(
+                Demand.organization_id == organization_id,
+                Demand.source == "trello_import",
+            )
+            .with_for_update()
+        )
+    )
+    before = trello_reset_preview(db, organization_id)
+    counts = before["counts"]
+    if counts["files"]:
+        raise ApiError(
+            409,
+            "trello_reset_has_files",
+            "Há arquivos enviados em demandas importadas. Remova esses arquivos antes da limpeza.",
+        )
+    if counts["linkedExistingDemands"]:
+        raise ApiError(
+            409,
+            "trello_reset_has_existing_demands",
+            "Há demandas preexistentes atualizadas pelo Trello. Reverta esses lotes antes da limpeza.",
+        )
+
+    if demand_ids:
+        db.execute(
+            sql_update(DailyImportItem)
+            .where(DailyImportItem.target_demand_id.in_(demand_ids))
+            .values(
+                target_demand_id=None,
+                mapping_action="pending",
+                reviewed_by=None,
+                reviewed_at=None,
+                applied_at=None,
+            )
+        )
+    db.execute(
+        delete(TrelloCardLink).where(TrelloCardLink.organization_id == organization_id)
+    )
+    if demand_ids:
+        db.execute(
+            delete(DemandRevision).where(
+                DemandRevision.organization_id == organization_id,
+                DemandRevision.demand_id.in_(demand_ids),
+            )
+        )
+        db.execute(
+            delete(Demand).where(
+                Demand.organization_id == organization_id,
+                Demand.id.in_(demand_ids),
+                Demand.source == "trello_import",
+            )
+        )
+    db.execute(
+        delete(TrelloImportBatch).where(TrelloImportBatch.organization_id == organization_id)
+    )
+    db.execute(
+        delete(AuditEvent).where(
+            AuditEvent.organization_id == organization_id,
+            AuditEvent.event_type.in_(TRELLO_RESET_AUDIT_EVENTS),
+        )
+    )
+    db.add(
+        AuditEvent(
+            organization_id=organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="trello.reset_completed",
+            source="interface",
+            metadata_json={"removed": counts},
+        )
+    )
+    db.commit()
+    return {
+        "removed": counts,
+        "remaining": trello_reset_preview(db, organization_id)["counts"],
+        "preserved": before["preserved"],
+    }
 
 
 async def read_trello_upload(upload: UploadFile) -> tuple[bytes, dict[str, Any]]:
