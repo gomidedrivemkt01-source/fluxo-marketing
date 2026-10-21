@@ -846,6 +846,7 @@ class DemandFile(Base):
     content_type: Mapped[str] = mapped_column(String(160))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
+    is_cover: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

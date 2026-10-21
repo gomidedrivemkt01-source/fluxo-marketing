@@ -12,6 +12,8 @@ type DemandFile = {
   uploaderName: string;
   revision: number;
   canDelete: boolean;
+  isCover: boolean;
+  canSetCover: boolean;
   createdAt: string;
 };
 
@@ -22,6 +24,8 @@ const acceptedTypes = [
   ".png",
   ".jpg",
   ".jpeg",
+  ".tif",
+  ".tiff",
   ".webp",
   ".gif",
   ".txt",
@@ -191,6 +195,24 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
     }
   }
 
+  async function setCover(item: DemandFile) {
+    setBusy(item.id);
+    setError("");
+    try {
+      const updated = await api<DemandFile>(`/demands/${demandId}/files/${item.id}/cover`, {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: item.revision }),
+      });
+      setFiles((current) => current?.map((file) => file.id === item.id ? updated : { ...file, isCover: false }) ?? []);
+      await onFilesChanged?.();
+    } catch (caught) {
+      setError(messageFrom(caught));
+      await load();
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!files) {
     return (
       <section className="panel files-panel files-loading">
@@ -225,6 +247,7 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
         <footer>
           <div><strong>{fileSize(currentImage.sizeBytes)}</strong><span>{currentImage.uploaderName} · {fileDate(currentImage.createdAt)}</span></div>
           <div>
+            {canManage && currentImage.canSetCover && <button type="button" className="file-viewer-cover" disabled={busy === currentImage.id || currentImage.isCover} onClick={() => void setCover(currentImage)}>{currentImage.isCover ? "✓ Capa atual" : "Usar como capa"}</button>}
             {currentImage.canDelete && <button type="button" className="file-viewer-delete" disabled={busy === currentImage.id} onClick={() => void remove(currentImage)}>Excluir arquivo</button>}
             <button type="button" className="file-viewer-download" disabled={busy === currentImage.id} onClick={() => void download(currentImage)}>{busy === currentImage.id ? "Preparando…" : "↓ Download"}</button>
           </div>

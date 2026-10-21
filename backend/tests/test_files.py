@@ -9,12 +9,14 @@ from starlette.datastructures import Headers
 
 from app.api.errors import ApiError
 from app.api.files import (
+    DemandFileCover,
     DemandFileDelete,
     can_delete_file,
     delete_file,
     normalize_upload,
     preview_image,
     read_upload,
+    set_file_cover,
     sign_file_download,
     upload_file,
 )
@@ -40,6 +42,8 @@ class FakeStorage:
     def __init__(self) -> None:
         self.uploaded: tuple[str, bytes, str, str] | None = None
         self.signed: tuple[str, str, int, str] | None = None
+        self.downloaded: tuple[str, str] | None = None
+        self.download_contents = b""
 
     async def upload(
         self, path: str, data: bytes, content_type: str, access_token: str
@@ -48,6 +52,10 @@ class FakeStorage:
 
     async def remove(self, path: str, access_token: str) -> None:
         return None
+
+    async def download(self, path: str, access_token: str) -> bytes:
+        self.downloaded = (path, access_token)
+        return self.download_contents
 
     async def create_signed_url(
         self,
@@ -115,6 +123,7 @@ def _file(principal: Principal, demand: Demand) -> DemandFile:
         content_type="application/pdf",
         size_bytes=12,
         sha256="a" * 64,
+        is_cover=False,
         revision=1,
         created_at=utc_now(),
         updated_at=utc_now(),
@@ -128,6 +137,13 @@ def test_upload_validation_normalizes_name_and_rejects_disguised_extension() -> 
     assert name == "Planejamento Mídia 2026.PDF"
     assert content_type == "application/pdf"
     assert safe_name == "planejamento-midia-2026.pdf"
+
+    tiff_name, tiff_type, tiff_safe_name = normalize_upload("Retrato.TIFF", "image/x-tiff")
+    assert (tiff_name, tiff_type, tiff_safe_name) == (
+        "Retrato.TIFF",
+        "image/tiff",
+        "retrato.tiff",
+    )
 
     with pytest.raises(ApiError) as caught:
         normalize_upload("script.exe", "application/pdf")
@@ -187,6 +203,8 @@ async def test_upload_file_persists_hash_event_and_audit(monkeypatch: pytest.Mon
     assert result.name == "Briefing Final.pdf"
     assert result.sha256 == "3c87d37f1dbea6909f917ce437c390fb8e655a774387d9e69301c0b2283d5b63"
     assert result.can_delete
+    assert result.is_cover is False
+    assert result.can_set_cover is False
     assert storage.uploaded is not None
     assert storage.uploaded[0].startswith(f"{demand.organization_id}/{demand.id}/")
     assert storage.uploaded[2:] == ("application/pdf", "user-token")
@@ -194,6 +212,37 @@ async def test_upload_file_persists_hash_event_and_audit(monkeypatch: pytest.Mon
     assert any(isinstance(value, DemandUpdate) and value.kind == "FILE_ATTACHED" for value in added)
     assert any(
         isinstance(value, AuditEvent) and value.event_type == "DEMAND_FILE_UPLOADED"
+        for value in added
+    )
+    db.commit.assert_called_once()
+
+
+def test_set_file_cover_replaces_previous_cover_and_records_history() -> None:
+    principal = _principal()
+    demand = _demand(principal)
+    item = _file(principal, demand)
+    item.original_name = "nova-capa.png"
+    item.content_type = "image/png"
+    db = MagicMock(spec=Session)
+    db.scalar.side_effect = [demand, item]
+    db.get.return_value = principal.profile
+
+    result = set_file_cover(
+        demand.id,
+        item.id,
+        DemandFileCover(expectedRevision=1),
+        principal,
+        db,
+    )
+
+    assert result.is_cover is True
+    assert result.can_set_cover is True
+    assert item.revision == 2
+    db.execute.assert_called_once()
+    added = [call.args[0] for call in db.add.call_args_list]
+    assert any(isinstance(value, DemandUpdate) and value.kind == "FILE_COVER_SET" for value in added)
+    assert any(
+        isinstance(value, AuditEvent) and value.event_type == "DEMAND_FILE_COVER_SET"
         for value in added
     )
     db.commit.assert_called_once()
@@ -286,3 +335,40 @@ async def test_image_preview_redirects_to_private_signed_object(
     assert result.headers["location"].startswith("https://example.supabase.co/")
     assert result.headers["cache-control"] == "private, max-age=60"
     assert storage.signed == (item.storage_path, "user-token", 120, None)
+
+
+@pytest.mark.asyncio
+async def test_tiff_preview_is_converted_to_png(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+
+    principal = _principal()
+    demand = _demand(principal)
+    item = _file(principal, demand)
+    item.original_name = "capa.tiff"
+    item.content_type = "image/tiff"
+    source = BytesIO()
+    Image.new("RGB", (30, 60), "#008f82").save(source, format="TIFF")
+    storage = FakeStorage()
+    storage.download_contents = source.getvalue()
+    db = MagicMock(spec=Session)
+    db.scalar.side_effect = [demand, item]
+
+    async def with_token(operation, principal_arg, settings_arg, db_arg):
+        return await operation("user-token")
+
+    monkeypatch.setattr("app.api.files._with_storage_token", with_token)
+    result = await preview_image(
+        demand.id,
+        item.id,
+        principal,
+        db,
+        get_settings(),
+        storage,  # type: ignore[arg-type]
+    )
+
+    assert result.status_code == 200
+    assert result.media_type == "image/png"
+    assert bytes(result.body).startswith(b"\x89PNG")
+    assert storage.downloaded == (item.storage_path, "user-token")

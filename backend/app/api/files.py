@@ -1,4 +1,5 @@
 import hashlib
+import io
 import logging
 import mimetypes
 import re
@@ -9,11 +10,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, Response
 
 from app.api.access import require_any_permission, require_permission
 from app.api.errors import ApiError
@@ -33,6 +35,7 @@ ALLOWED_FILE_TYPES: dict[str, set[str]] = {
     "application/pdf": {".pdf"},
     "image/png": {".png"},
     "image/jpeg": {".jpg", ".jpeg"},
+    "image/tiff": {".tif", ".tiff"},
     "image/webp": {".webp"},
     "image/gif": {".gif"},
     "text/plain": {".txt", ".md"},
@@ -48,6 +51,10 @@ ALLOWED_FILE_TYPES: dict[str, set[str]] = {
     "video/quicktime": {".mov"},
 }
 
+COVER_FILE_TYPES = {"image/jpeg", "image/png", "image/tiff"}
+TIFF_FILE_TYPES = {"image/tiff", "image/x-tiff"}
+TIFF_PREVIEW_MAX_SIZE = (2400, 2400)
+
 
 class DemandFileOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -61,10 +68,16 @@ class DemandFileOut(BaseModel):
     uploader_name: str = Field(alias="uploaderName")
     revision: int
     can_delete: bool = Field(alias="canDelete")
+    is_cover: bool = Field(alias="isCover")
+    can_set_cover: bool = Field(alias="canSetCover")
     created_at: datetime = Field(alias="createdAt")
 
 
 class DemandFileDelete(BaseModel):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class DemandFileCover(BaseModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
@@ -83,14 +96,21 @@ def get_storage_gateway(settings: Settings = Depends(get_settings)) -> SupabaseS
     )
 
 
-def _get_demand(db: Session, demand_id: uuid.UUID, principal: Principal) -> Demand:
-    demand = db.scalar(
-        select(Demand).where(
-            Demand.id == demand_id,
-            Demand.organization_id == principal.membership.organization_id,
-            Demand.deleted_at.is_(None),
-        )
+def _get_demand(
+    db: Session,
+    demand_id: uuid.UUID,
+    principal: Principal,
+    *,
+    lock: bool = False,
+) -> Demand:
+    query = select(Demand).where(
+        Demand.id == demand_id,
+        Demand.organization_id == principal.membership.organization_id,
+        Demand.deleted_at.is_(None),
     )
+    if lock:
+        query = query.with_for_update()
+    demand = db.scalar(query)
     if not demand:
         raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
     return demand
@@ -137,6 +157,8 @@ def _file_out(item: DemandFile, uploader: UserProfile, principal: Principal) -> 
         uploader_name=uploader.full_name,
         revision=item.revision,
         can_delete=can_delete_file(principal, item),
+        is_cover=bool(item.is_cover),
+        can_set_cover=item.content_type in COVER_FILE_TYPES,
         created_at=item.created_at,
     )
 
@@ -157,6 +179,8 @@ def normalize_upload(filename: str | None, content_type: str | None) -> tuple[st
     original_name = original_name[:255]
     suffix = Path(original_name).suffix.lower()
     normalized_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized_type == "image/x-tiff":
+        normalized_type = "image/tiff"
     if normalized_type in {"", "application/octet-stream"}:
         normalized_type = mimetypes.guess_type(original_name)[0] or ""
     allowed_extensions = ALLOWED_FILE_TYPES.get(normalized_type)
@@ -170,6 +194,30 @@ def normalize_upload(filename: str | None, content_type: str | None) -> tuple[st
     ascii_stem = normalized_stem.encode("ascii", "ignore").decode().lower()
     safe_stem = re.sub(r"[^a-z0-9]+", "-", ascii_stem).strip("-") or "arquivo"
     return original_name, normalized_type, f"{safe_stem[:80]}{suffix}"
+
+
+def tiff_preview(contents: bytes) -> bytes:
+    """Converte a primeira página de um TIFF para um PNG limitado para o navegador."""
+    try:
+        with Image.open(io.BytesIO(contents)) as source:
+            source.seek(0)
+            if source.width * source.height > 40_000_000:
+                raise ApiError(
+                    422,
+                    "file_preview_image_too_large",
+                    "A imagem TIFF possui dimensões grandes demais para visualização.",
+                )
+            source.thumbnail(TIFF_PREVIEW_MAX_SIZE)
+            frame = source.convert("RGBA" if "transparency" in source.info else "RGB")
+            output = io.BytesIO()
+            frame.save(output, format="PNG", optimize=True)
+            return output.getvalue()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ApiError(
+            422,
+            "file_preview_invalid_image",
+            "Não foi possível gerar a visualização desta imagem TIFF.",
+        ) from exc
 
 
 async def read_upload(upload: UploadFile, max_size: int) -> tuple[bytes, str]:
@@ -352,7 +400,68 @@ async def sign_file_download(
     )
 
 
-@router.get("/{demand_id}/files/{file_id}/preview", response_class=RedirectResponse)
+@router.post(
+    "/{demand_id}/files/{file_id}/cover",
+    response_model=DemandFileOut,
+    dependencies=[Depends(require_csrf)],
+)
+def set_file_cover(
+    demand_id: uuid.UUID,
+    file_id: uuid.UUID,
+    payload: DemandFileCover,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> DemandFileOut:
+    require_any_permission(principal, "demands:write", "demands:work")
+    demand = _get_demand(db, demand_id, principal, lock=True)
+    item = _get_file(db, demand, file_id, lock=True)
+    if item.content_type not in COVER_FILE_TYPES:
+        raise ApiError(
+            422,
+            "demand_file_cover_not_supported",
+            "A capa deve ser uma imagem JPEG, PNG ou TIFF.",
+        )
+    if item.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "O arquivo foi alterado. Atualize a lista.")
+    if not item.is_cover:
+        changed_at = utc_now()
+        db.execute(
+            update(DemandFile)
+            .where(
+                DemandFile.demand_id == demand.id,
+                DemandFile.deleted_at.is_(None),
+                DemandFile.is_cover.is_(True),
+            )
+            .values(is_cover=False, updated_at=changed_at)
+        )
+        item.is_cover = True
+        item.updated_at = changed_at
+        item.revision += 1
+        db.add(
+            DemandUpdate(
+                demand_id=demand.id,
+                created_by=principal.profile.id,
+                kind="FILE_COVER_SET",
+                summary=f"{item.original_name} foi definida como capa da demanda.",
+                payload={"fileId": str(item.id)},
+            )
+        )
+        db.add(
+            _audit(
+                principal,
+                "DEMAND_FILE_COVER_SET",
+                {"demandId": str(demand.id), "fileId": str(item.id)},
+            )
+        )
+        db.commit()
+        db.refresh(item)
+    uploader = db.get(UserProfile, item.uploaded_by)
+    if uploader is None:
+        raise ApiError(404, "file_uploader_not_found", "O autor do arquivo não foi encontrado.")
+    return _file_out(item, uploader, principal)
+
+
+@router.get("/{demand_id}/files/{file_id}/preview", response_class=Response)
 async def preview_image(
     demand_id: uuid.UUID,
     file_id: uuid.UUID,
@@ -360,12 +469,24 @@ async def preview_image(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     storage: SupabaseStorageGateway = Depends(get_storage_gateway),
-) -> RedirectResponse:
+) -> Response:
     require_permission(principal, "demands:read")
     demand = _get_demand(db, demand_id, principal)
     item = _get_file(db, demand, file_id)
     if not item.content_type.startswith("image/"):
         raise ApiError(422, "file_preview_not_supported", "Este arquivo não é uma imagem.")
+    if item.content_type in TIFF_FILE_TYPES:
+        contents = await _with_storage_token(
+            lambda token: storage.download(item.storage_path, token),
+            principal,
+            settings,
+            db,
+        )
+        return Response(
+            tiff_preview(contents),
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=60"},
+        )
     url = await _with_storage_token(
         lambda token: storage.create_signed_url(
             item.storage_path,
@@ -404,7 +525,9 @@ def delete_file(
     if item.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "O arquivo foi alterado. Atualize a lista.")
     changed_at = utc_now()
+    was_cover = item.is_cover
     item.deleted_at = changed_at
+    item.is_cover = False
     item.updated_at = changed_at
     item.revision += 1
     db.add(
@@ -413,14 +536,14 @@ def delete_file(
             created_by=principal.profile.id,
             kind="FILE_REMOVED",
             summary=f"{item.original_name} foi removido da demanda.",
-            payload={"fileId": str(item.id)},
+            payload={"fileId": str(item.id), "wasCover": was_cover},
         )
     )
     db.add(
         _audit(
             principal,
             "DEMAND_FILE_REMOVED",
-            {"demandId": str(demand.id), "fileId": str(item.id)},
+            {"demandId": str(demand.id), "fileId": str(item.id), "wasCover": was_cover},
         )
     )
     db.commit()

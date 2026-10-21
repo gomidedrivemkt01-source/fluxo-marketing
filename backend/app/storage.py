@@ -109,6 +109,14 @@ class SupabaseStorageGateway:
             json={"prefixes": [path]},
         )
 
+    async def download(self, path: str, access_token: str) -> bytes:
+        response = await self._request(
+            "GET",
+            self._object_url(path),
+            headers=self._headers(access_token),
+        )
+        return response.content
+
     async def create_signed_url(
         self,
         path: str,

@@ -873,7 +873,7 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
 def cover_image_ids(
     db: Session, demand_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, uuid.UUID]:
-    """Retorna a primeira imagem ativa de cada demanda em uma única consulta."""
+    """Retorna a capa escolhida ou, na ausência dela, a primeira imagem ativa."""
     if not demand_ids:
         return {}
     files = db.scalars(
@@ -883,7 +883,7 @@ def cover_image_ids(
             DemandFile.deleted_at.is_(None),
             DemandFile.content_type.like("image/%"),
         )
-        .order_by(DemandFile.created_at.asc(), DemandFile.id.asc())
+        .order_by(DemandFile.is_cover.desc(), DemandFile.created_at.asc(), DemandFile.id.asc())
     )
     covers: dict[uuid.UUID, uuid.UUID] = {}
     for item in files:
