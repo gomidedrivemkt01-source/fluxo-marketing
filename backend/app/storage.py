@@ -114,7 +114,7 @@ class SupabaseStorageGateway:
         path: str,
         access_token: str,
         expires_in: int,
-        download_name: str,
+        download_name: str | None,
     ) -> str:
         response = await self._request(
             "POST",
@@ -126,5 +126,7 @@ class SupabaseStorageGateway:
         signed_path = str(payload.get("signedURL") or payload.get("signedUrl") or "")
         if not signed_path:
             raise ApiError(502, "file_sign_failed", "Não foi possível preparar o download.")
+        if download_name is None:
+            return f"{self._root}{signed_path}"
         separator = "&" if "?" in signed_path else "?"
         return f"{self._root}{signed_path}{separator}{urlencode({'download': download_name})}"

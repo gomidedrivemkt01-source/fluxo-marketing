@@ -138,6 +138,7 @@ def test_demands_out_uses_fixed_number_of_related_queries() -> None:
         revision=1,
         created_at=now,
     )
+    cover_id = uuid.uuid4()
     related = [
         [SimpleNamespace(id=company_id, name="Gomide", color="#155E75")],
         [SimpleNamespace(id=category_id, name="Vídeo", color="#475569")],
@@ -177,14 +178,16 @@ def test_demands_out_uses_fixed_number_of_related_queries() -> None:
                 },
             )
         ],
+        [SimpleNamespace(id=cover_id, demand_id=demand.id)],
     ]
     db = MagicMock(spec=Session)
     db.scalars.side_effect = related
 
     result = demands_out(db, [demand, demand])
 
-    assert db.scalars.call_count == 6
+    assert db.scalars.call_count == 7
     assert len(result) == 2
     assert result[0].company_name == "Gomide"
     assert result[0].assignee_name == "Responsável"
     assert result[0].stage_name == "Briefing"
+    assert result[0].cover_image_url == f"/api/v1/demands/{demand.id}/files/{cover_id}/preview"

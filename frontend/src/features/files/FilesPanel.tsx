@@ -62,27 +62,25 @@ function fileIcon(contentType: string): string {
   return "DOC";
 }
 
-export function FilesPanel({ demandId, canManage, compact = false }: { demandId: string; canManage: boolean; compact?: boolean }) {
+function previewUrl(demandId: string, fileId: string): string {
+  return `/api/v1/demands/${demandId}/files/${fileId}/preview`;
+}
+
+export function FilesPanel({ demandId, canManage, compact = false, onFilesChanged }: { demandId: string; canManage: boolean; compact?: boolean; onFilesChanged?: () => void | Promise<void> }) {
   const [files, setFiles] = useState<DemandFile[] | null>(null);
-  const [previews, setPreviews] = useState<Record<string, string>>({});
   const [selectedName, setSelectedName] = useState("");
   const [busy, setBusy] = useState("");
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const imageFiles = files?.filter((item) => item.contentType.startsWith("image/")) ?? [];
+  const currentImage = viewerIndex === null ? null : imageFiles[viewerIndex] ?? null;
 
   async function load() {
     setError("");
     try {
       const loaded = await api<DemandFile[]>(`/demands/${demandId}/files`);
       setFiles(loaded);
-      const imageFiles = loaded.filter((item) => item.contentType.startsWith("image/")).slice(0, 8);
-      const signed = await Promise.all(imageFiles.map(async (item) => {
-        try {
-          const result = await api<SignedFile>(`/demands/${demandId}/files/${item.id}/download`, { method: "POST" });
-          return [item.id, result.url] as const;
-        } catch { return null; }
-      }));
-      setPreviews(Object.fromEntries(signed.filter((item): item is readonly [string, string] => item !== null)));
     } catch (caught) {
       setError(messageFrom(caught));
     }
@@ -90,8 +88,35 @@ export function FilesPanel({ demandId, canManage, compact = false }: { demandId:
 
   useEffect(() => {
     setFiles(null);
+    setViewerIndex(null);
     void load();
   }, [demandId]);
+
+  useEffect(() => {
+    if (viewerIndex === null) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setViewerIndex(null);
+      if (event.key === "ArrowLeft") navigate(-1);
+      if (event.key === "ArrowRight") navigate(1);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [viewerIndex, imageFiles.length]);
+
+  function openViewer(item: DemandFile) {
+    const index = imageFiles.findIndex((image) => image.id === item.id);
+    if (index >= 0) setViewerIndex(index);
+  }
+
+  function navigate(direction: -1 | 1) {
+    if (imageFiles.length < 2) return;
+    setViewerIndex((current) => current === null ? null : (current + direction + imageFiles.length) % imageFiles.length);
+  }
 
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     setSelectedName(event.target.files?.[0]?.name ?? "");
@@ -112,10 +137,7 @@ export function FilesPanel({ demandId, canManage, compact = false }: { demandId:
         body,
       });
       setFiles((current) => [created, ...(current ?? [])]);
-      if (created.contentType.startsWith("image/")) {
-        const signed = await api<SignedFile>(`/demands/${demandId}/files/${created.id}/download`, { method: "POST" });
-        setPreviews((current) => ({ ...current, [created.id]: signed.url }));
-      }
+      await onFilesChanged?.();
       form.reset();
       setSelectedName("");
     } catch (caught) {
@@ -156,7 +178,11 @@ export function FilesPanel({ demandId, canManage, compact = false }: { demandId:
         body: JSON.stringify({ expectedRevision: item.revision }),
       });
       setFiles((current) => current?.filter((file) => file.id !== item.id) ?? []);
-      setPreviews((current) => { const next = { ...current }; delete next[item.id]; return next; });
+      if (currentImage?.id === item.id) {
+        const remaining = imageFiles.filter((image) => image.id !== item.id);
+        setViewerIndex(remaining.length ? Math.min(viewerIndex ?? 0, remaining.length - 1) : null);
+      }
+      await onFilesChanged?.();
     } catch (caught) {
       setError(messageFrom(caught));
       await load();
@@ -184,18 +210,41 @@ export function FilesPanel({ demandId, canManage, compact = false }: { demandId:
     );
   }
 
+  const viewer = currentImage ? (
+    <div className="file-viewer-backdrop" onClick={() => setViewerIndex(null)}>
+      <section className="file-viewer" role="dialog" aria-modal="true" aria-label={`Visualização de ${currentImage.name}`} onClick={(event) => event.stopPropagation()}>
+        <header>
+          <div><strong>{currentImage.name}</strong><span>Imagem {(viewerIndex ?? 0) + 1} de {imageFiles.length}</span></div>
+          <button type="button" onClick={() => setViewerIndex(null)} aria-label="Fechar visualização">×</button>
+        </header>
+        <div className="file-viewer-stage">
+          {imageFiles.length > 1 && <button type="button" className="file-viewer-nav previous" onClick={() => navigate(-1)} aria-label="Imagem anterior">‹</button>}
+          <img key={currentImage.id} src={previewUrl(demandId, currentImage.id)} alt={currentImage.name} />
+          {imageFiles.length > 1 && <button type="button" className="file-viewer-nav next" onClick={() => navigate(1)} aria-label="Próxima imagem">›</button>}
+        </div>
+        <footer>
+          <div><strong>{fileSize(currentImage.sizeBytes)}</strong><span>{currentImage.uploaderName} · {fileDate(currentImage.createdAt)}</span></div>
+          <div>
+            {currentImage.canDelete && <button type="button" className="file-viewer-delete" disabled={busy === currentImage.id} onClick={() => void remove(currentImage)}>Excluir arquivo</button>}
+            <button type="button" className="file-viewer-download" disabled={busy === currentImage.id} onClick={() => void download(currentImage)}>{busy === currentImage.id ? "Preparando…" : "↓ Download"}</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  ) : null;
+
   if (compact) {
     return (
-      <section className="inline-files">
+      <><section className="inline-files">
         <header><div><strong>Arquivos e mídias</strong><span>{files.length ? `${files.length} anexado${files.length === 1 ? "" : "s"}` : "Nenhum anexo"}</span></div>{canManage && <form onSubmit={upload}><label className="inline-file-add"><input ref={inputRef} type="file" accept={acceptedTypes} disabled={busy === "upload"} onChange={chooseFile} required /><span>＋</span>{selectedName || "Anexar"}</label>{selectedName && <button disabled={busy === "upload"}>{busy === "upload" ? "Enviando…" : "Enviar"}</button>}</form>}</header>
         {error && <div className="activity-error">{error}</div>}
-        {files.length > 0 && <div className="inline-file-grid">{files.slice(0, 8).map((item) => <button type="button" key={item.id} onClick={() => void download(item)} title={`Baixar ${item.name}`}><span>{previews[item.id] ? <img src={previews[item.id]} alt="" /> : fileIcon(item.contentType)}</span><small>{item.name}</small></button>)}</div>}
-      </section>
+        {files.length > 0 && <div className="inline-file-grid">{files.slice(0, 8).map((item) => { const image = item.contentType.startsWith("image/"); return <button type="button" key={item.id} onClick={() => image ? openViewer(item) : void download(item)} title={image ? `Visualizar ${item.name}` : `Baixar ${item.name}`}><span>{image ? <img src={previewUrl(demandId, item.id)} alt="" loading="lazy" /> : fileIcon(item.contentType)}</span><small>{item.name}</small></button>; })}</div>}
+      </section>{viewer}</>
     );
   }
 
   return (
-    <section className="panel files-panel">
+    <><section className="panel files-panel">
       <header className="files-head">
         <div>
           <span className="eyebrow dark">Documentos e mídias</span>
@@ -239,7 +288,7 @@ export function FilesPanel({ demandId, canManage, compact = false }: { demandId:
         <div className="file-list">
           {files.map((item) => (
             <article key={item.id}>
-              <span className="file-icon">{fileIcon(item.contentType)}</span>
+              {item.contentType.startsWith("image/") ? <button type="button" className="file-icon file-open" onClick={() => openViewer(item)} title={`Visualizar ${item.name}`}><img src={previewUrl(demandId, item.id)} alt="" loading="lazy" /></button> : <span className="file-icon">{fileIcon(item.contentType)}</span>}
               <div className="file-copy">
                 <strong title={item.name}>{item.name}</strong>
                 <span>{fileSize(item.sizeBytes)} · {item.uploaderName} · {fileDate(item.createdAt)}</span>
@@ -267,6 +316,6 @@ export function FilesPanel({ demandId, canManage, compact = false }: { demandId:
           ))}
         </div>
       )}
-    </section>
+    </section>{viewer}</>
   );
 }

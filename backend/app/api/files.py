@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.responses import RedirectResponse
 
 from app.api.access import require_any_permission, require_permission
 from app.api.errors import ApiError
@@ -348,6 +349,38 @@ async def sign_file_download(
     return SignedFileOut(
         url=url,
         expires_at=utc_now() + timedelta(seconds=settings.storage_signed_url_ttl),
+    )
+
+
+@router.get("/{demand_id}/files/{file_id}/preview", response_class=RedirectResponse)
+async def preview_image(
+    demand_id: uuid.UUID,
+    file_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    storage: SupabaseStorageGateway = Depends(get_storage_gateway),
+) -> RedirectResponse:
+    require_permission(principal, "demands:read")
+    demand = _get_demand(db, demand_id, principal)
+    item = _get_file(db, demand, file_id)
+    if not item.content_type.startswith("image/"):
+        raise ApiError(422, "file_preview_not_supported", "Este arquivo não é uma imagem.")
+    url = await _with_storage_token(
+        lambda token: storage.create_signed_url(
+            item.storage_path,
+            token,
+            settings.storage_signed_url_ttl,
+            None,
+        ),
+        principal,
+        settings,
+        db,
+    )
+    return RedirectResponse(
+        url,
+        status_code=307,
+        headers={"Cache-Control": "private, max-age=60"},
     )
 
 

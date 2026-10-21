@@ -21,6 +21,7 @@ from app.models import (
     Demand,
     DemandCategory,
     DemandChecklistItem,
+    DemandFile,
     DemandRevision,
     DemandStageInstance,
     DemandStageVisit,
@@ -83,6 +84,7 @@ class DemandOut(BaseModel):
     deadline_at: datetime | None = Field(alias="deadlineAt")
     forecast_at: datetime | None = Field(alias="forecastAt")
     expected_effort_minutes: int | None = Field(alias="expectedEffortMinutes")
+    cover_image_url: str | None = Field(alias="coverImageUrl")
     revision: int
     created_at: datetime = Field(alias="createdAt")
 
@@ -794,6 +796,7 @@ def _demand_out_from_related(
     stage: WorkflowStage | None,
     workflow: Workflow | None,
     version: WorkflowVersion | None,
+    cover_image_id: uuid.UUID | None,
 ) -> DemandOut:
     assert creator is not None
     stage_snapshot = version_stage(version, demand.current_stage_id)
@@ -834,12 +837,18 @@ def _demand_out_from_related(
         deadlineAt=demand.deadline_at,
         forecastAt=demand.forecast_at,
         expectedEffortMinutes=demand.expected_effort_minutes,
+        coverImageUrl=(
+            f"/api/v1/demands/{demand.id}/files/{cover_image_id}/preview"
+            if cover_image_id
+            else None
+        ),
         revision=demand.revision,
         createdAt=demand.created_at,
     )
 
 
 def demand_out(db: Session, demand: Demand) -> DemandOut:
+    cover_image_id = cover_image_ids(db, {demand.id}).get(demand.id)
     return _demand_out_from_related(
         demand,
         company=db.get(Company, demand.primary_company_id) if demand.primary_company_id else None,
@@ -857,7 +866,29 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
             if demand.workflow_version_id
             else None
         ),
+        cover_image_id=cover_image_id,
     )
+
+
+def cover_image_ids(
+    db: Session, demand_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Retorna a primeira imagem ativa de cada demanda em uma única consulta."""
+    if not demand_ids:
+        return {}
+    files = db.scalars(
+        select(DemandFile)
+        .where(
+            DemandFile.demand_id.in_(demand_ids),
+            DemandFile.deleted_at.is_(None),
+            DemandFile.content_type.like("image/%"),
+        )
+        .order_by(DemandFile.created_at.asc(), DemandFile.id.asc())
+    )
+    covers: dict[uuid.UUID, uuid.UUID] = {}
+    for item in files:
+        covers.setdefault(item.demand_id, item.id)
+    return covers
 
 
 def demands_out(db: Session, demands: list[Demand]) -> list[DemandOut]:
@@ -876,7 +907,6 @@ def demands_out(db: Session, demands: list[Demand]) -> list[DemandOut]:
     stage_ids = {item.current_stage_id for item in demands if item.current_stage_id}
     workflow_ids = {item.workflow_id for item in demands if item.workflow_id}
     version_ids = {item.workflow_version_id for item in demands if item.workflow_version_id}
-
     companies = {
         item.id: item
         for item in db.scalars(select(Company).where(Company.id.in_(company_ids)))
@@ -905,6 +935,7 @@ def demands_out(db: Session, demands: list[Demand]) -> list[DemandOut]:
             select(WorkflowVersion).where(WorkflowVersion.id.in_(version_ids))
         )
     }
+    covers = cover_image_ids(db, {item.id for item in demands})
     return [
         _demand_out_from_related(
             demand,
@@ -921,6 +952,7 @@ def demands_out(db: Session, demands: list[Demand]) -> list[DemandOut]:
             version=(
                 versions.get(demand.workflow_version_id) if demand.workflow_version_id else None
             ),
+            cover_image_id=covers.get(demand.id),
         )
         for demand in demands
     ]

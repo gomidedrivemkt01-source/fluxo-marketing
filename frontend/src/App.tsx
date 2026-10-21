@@ -67,6 +67,7 @@ type Demand = {
   deadlineAt: string | null;
   forecastAt: string | null;
   expectedEffortMinutes: number | null;
+  coverImageUrl: string | null;
   assigneeId: string | null;
   assigneeName: string | null;
   assigneeAvatarUrl: string | null;
@@ -559,8 +560,14 @@ function AvatarView({ name, url, size = "normal" }: { name: string; url?: string
   return <span className={`avatar avatar-${size}`}>{url ? <img src={url} alt="" /> : name.charAt(0).toUpperCase()}</span>;
 }
 
+function CardCover({ demand, variant }: { demand: Demand; variant: "demand" | "work" }) {
+  if (!demand.coverImageUrl) return null;
+  return <span className={`card-cover ${variant}-card-cover`}><img src={demand.coverImageUrl} alt="" loading="lazy" onError={(event) => { event.currentTarget.parentElement!.hidden = true; }} /></span>;
+}
+
 function DemandCard({ demand, onOpen }: { demand: Demand; onOpen: () => void }) {
   return <button className="demand-card" onClick={onOpen}>
+    <CardCover demand={demand} variant="demand" />
     <span className="card-top"><span /><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority] ?? demand.priority}</span></span>
     <span className="card-company">{demand.companyColor && <i style={{ background: demand.companyColor }} />}{demand.companyName ?? "Sem empresa"}</span>
     <strong>{demand.title}</strong>
@@ -575,6 +582,7 @@ function WorkCard({ demand, canEdit, canTrack, onOpen, onTimerStart, dragging = 
   return <article className={`work-card${dragging ? " dragging" : ""}`} draggable={canEdit} onDragStart={onDragStart} onDragEnd={onDragEnd}>
     {canTrack && <button className="work-card-timer" type="button" draggable={false} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onTimerStart(); }} aria-label={`Iniciar timer de ${demand.title}`} title="Iniciar timer"><span aria-hidden="true">▶</span></button>}
     <button className="work-card-open" onClick={onOpen}>
+      <CardCover demand={demand} variant="work" />
       <span className="work-card-priority"><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority] ?? demand.priority}</span></span>
       <span className="card-company">{demand.companyColor && <i style={{ background: demand.companyColor }} />}{demand.companyName ?? "Sem empresa"}</span>
       <strong>{demand.title}</strong>
@@ -1107,6 +1115,10 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
     try { const updated = await api<Demand>(`/demands/${demand.id}/timeline/${stageId}`, { method: "PATCH", body: JSON.stringify({ deadlineAt, forecastAt, expectedRevision: demand.revision }) }); onSaved(updated); setSuccess("Agenda da etapa atualizada."); return true; }
     catch (caught) { setError(messageFrom(caught)); return false; } finally { setBusy(false); }
   }
+  async function refreshDemandFiles() {
+    try { onSaved(await api<Demand>(`/demands/${demand.id}`)); }
+    catch (caught) { setError(messageFrom(caught)); }
+  }
   async function removeDemand(mode: "archive" | "delete") {
     const message = mode === "archive" ? `Arquivar “${demand.title}”? Ela sairá das áreas operacionais e poderá ser restaurada nas Configurações.` : `Enviar “${demand.title}” para a lixeira? O histórico será preservado e um administrador poderá restaurá-la.`;
     if (!window.confirm(message)) return;
@@ -1145,7 +1157,7 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
     <section className="demand-detail-head"><div><span className="demand-id">{demand.publicId}</span><h2>{demand.title}</h2><p>{demand.companyName ?? "Sem empresa"} · {demand.categoryName ?? "Sem categoria"}</p></div><div className="detail-head-actions"><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status]}</span>{canEdit && <button className="secondary compact" disabled={busy} onClick={() => void removeDemand("archive")}>Arquivar</button>}{canDelete && <button className="secondary compact danger-text" disabled={busy} onClick={() => void removeDemand("delete")}>Excluir</button>}</div></section>
     <nav className="detail-tabs" aria-label="Seções da demanda">{tabs.map((item) => <button className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)} key={item.id}>{item.label}</button>)}</nav>
     {tab !== "overview" && error && <Notice>{error}</Notice>}{tab !== "overview" && success && <Notice kind="success">{success}</Notice>}
-    {tab === "overview" ? <div className="demand-overview-layout"><div className="demand-overview-main">{editForm}<FilesPanel demandId={demand.id} canManage={canEdit} compact /><section className="overview-block overview-shortcuts"><header><div><span className="overview-icon">⌘</span><span><strong>Funções do card</strong><small>Acesso às áreas avançadas</small></span></div></header><div><button onClick={() => setTab("briefing")}><b>▤</b><span><strong>Briefing</strong><small>{demand.categoryName ?? "Defina uma categoria"}</small></span></button><button onClick={() => setTab("checklist")}><b>✓</b><span><strong>Checklist</strong><small>Entregas obrigatórias da etapa</small></span></button><button onClick={() => setTab("time")}><b>◷</b><span><strong>Tempo</strong><small>Histórico e lançamentos manuais</small></span></button></div></section></div><aside className="demand-conversation"><ActivityPanel demandId={demand.id} canComment={canEdit} compact /></aside></div>
+    {tab === "overview" ? <div className="demand-overview-layout"><div className="demand-overview-main">{editForm}<FilesPanel demandId={demand.id} canManage={canEdit} compact onFilesChanged={refreshDemandFiles} /><section className="overview-block overview-shortcuts"><header><div><span className="overview-icon">⌘</span><span><strong>Funções do card</strong><small>Acesso às áreas avançadas</small></span></div></header><div><button onClick={() => setTab("briefing")}><b>▤</b><span><strong>Briefing</strong><small>{demand.categoryName ?? "Defina uma categoria"}</small></span></button><button onClick={() => setTab("checklist")}><b>✓</b><span><strong>Checklist</strong><small>Entregas obrigatórias da etapa</small></span></button><button onClick={() => setTab("time")}><b>◷</b><span><strong>Tempo</strong><small>Histórico e lançamentos manuais</small></span></button></div></section></div><aside className="demand-conversation"><ActivityPanel demandId={demand.id} canComment={canEdit} compact /></aside></div>
       : tab === "briefing" ? <BriefingPanel demand={demand} canEdit={canEdit} onSaved={onSaved} />
       : tab === "checklist" ? <ChecklistPanel demand={demand} canEdit={canEdit} onSaved={onSaved} />
       : tab === "workflow" ? timeline ? <WorkflowTimelineView timeline={timeline} canEdit={canEdit} busy={busy} onSchedule={saveStageSchedule} /> : timelineError ? <section className="panel work-content-panel"><Notice>{timelineError}</Notice></section> : <section className="panel feature-loading"><span className="loader" /></section>
