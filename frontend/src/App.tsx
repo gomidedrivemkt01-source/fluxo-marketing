@@ -1036,26 +1036,27 @@ function WorkflowTimelineView({ timeline, compact = false, canEdit, busy, onOpen
   </section>;
 }
 
-function DemandStageDock({ demand, timeline, people, canEdit, busy, onAction, onReassign }: { demand: Demand; timeline: DemandTimeline; people: Person[]; canEdit: boolean; busy: boolean; onAction: (action: "advance" | "return", comment?: string) => Promise<boolean>; onReassign: (assigneeId: string | null) => Promise<boolean> }) {
+function DemandStageDock({ demand, timeline, people, canEdit, busy, onAction, onReassign }: { demand: Demand; timeline: DemandTimeline; people: Person[]; canEdit: boolean; busy: boolean; onAction: (action: "advance" | "return", targetStageId?: string, comment?: string) => Promise<boolean>; onReassign: (assigneeId: string | null) => Promise<boolean> }) {
   const [expanded, setExpanded] = useState(false);
-  const [returning, setReturning] = useState(false);
+  const [returnTargetId, setReturnTargetId] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const currentIndex = timeline.stages.findIndex((stage) => stage.state === "current");
   const current = timeline.stages[currentIndex];
   if (!current) return null;
   const isLast = currentIndex === timeline.stages.length - 1;
+  const returnTarget = timeline.stages.find((stage) => stage.id === returnTargetId);
   async function submitReturn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (comment.trim().length < 3) return;
-    if (await onAction("return", comment.trim())) {
-      setComment(""); setReturning(false); setExpanded(false);
+    if (!returnTargetId || comment.trim().length < 3) return;
+    if (await onAction("return", returnTargetId, comment.trim())) {
+      setComment(""); setReturnTargetId(null); setExpanded(false);
     }
   }
   return <>
     {expanded && <div className="stage-dock-popover">
-      <header><div><span>Fluxo da demanda</span><strong>{timeline.workflowName}</strong></div><button type="button" onClick={() => { setExpanded(false); setReturning(false); }}>×</button></header>
-      <div className="stage-dock-list">{timeline.stages.map((stage, index) => <div key={stage.id} className={`stage-dock-list-item ${stage.state}${index === currentIndex - 1 || index === currentIndex + 1 ? " actionable" : ""}`}><button type="button" disabled={!canEdit || busy || Math.abs(index - currentIndex) !== 1} onClick={() => index < currentIndex ? setReturning(true) : void onAction("advance").then((saved) => { if (saved) setExpanded(false); })}><i style={{ background: stage.color }} /><span><strong>{stage.name}</strong><small>{stage.assigneeName ?? "Sem responsável"} · {timelineDate(stage.deadlineAt)}</small></span><b>{stage.state === "completed" ? "✓" : stage.state === "current" ? "Atual" : index === currentIndex - 1 ? "Voltar" : index === currentIndex + 1 ? "Avançar" : ""}</b></button>{stage.state === "current" && <label className="stage-dock-assignee"><span>Responsável da etapa atual</span><select aria-label="Responsável da etapa atual" value={stage.assigneeId ?? ""} disabled={!canEdit || busy} onChange={(event) => void onReassign(event.target.value || null)}><option value="">Sem responsável</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select><small>O prazo vencido será preservado no histórico.</small></label>}</div>)}</div>
-      {returning && <form className="stage-return-form" onSubmit={submitReturn}><strong>Justifique o retorno</strong><p>A mensagem será publicada no chat para orientar a pessoa responsável pela etapa anterior.</p><textarea value={comment} onChange={(event) => setComment(event.target.value)} minLength={3} maxLength={2000} rows={3} placeholder="O que precisa ser corrigido ou melhorado?" autoFocus required /><div><button type="button" onClick={() => setReturning(false)}>Cancelar</button><button className="primary" disabled={busy || comment.trim().length < 3}>{busy ? "Retornando…" : "Confirmar retorno"}</button></div></form>}
+      <header><div><span>Escolher etapa da demanda</span><strong>{timeline.workflowName}</strong></div><button type="button" onClick={() => { setExpanded(false); setReturnTargetId(null); }}>×</button></header>
+      <div className="stage-dock-list">{timeline.stages.map((stage, index) => <div key={stage.id} className={`stage-dock-list-item ${stage.state}${index !== currentIndex ? " actionable" : ""}${stage.id === returnTargetId ? " selected" : ""}`}><button type="button" disabled={!canEdit || busy || index === currentIndex} onClick={() => { if (index < currentIndex) { setComment(""); setReturnTargetId(stage.id); } else { setReturnTargetId(null); void onAction("advance", stage.id).then((saved) => { if (saved) setExpanded(false); }); } }}><i style={{ background: stage.color }} /><span><strong>{stage.name}</strong><small>{stage.assigneeName ?? "Sem responsável"} · {timelineDate(stage.deadlineAt)}</small></span><b>{stage.state === "current" ? "Atual" : index < currentIndex ? "Retornar" : "Mover"}</b></button>{stage.state === "current" && <label className="stage-dock-assignee"><span>Responsável da etapa atual</span><select aria-label="Responsável da etapa atual" value={stage.assigneeId ?? ""} disabled={!canEdit || busy} onChange={(event) => void onReassign(event.target.value || null)}><option value="">Sem responsável</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select><small>O prazo vencido será preservado no histórico.</small></label>}</div>)}</div>
+      {returnTarget && <form className="stage-return-form" onSubmit={submitReturn}><strong>Retornar para {returnTarget.name}</strong><p>A justificativa será publicada no chat para orientar a pessoa responsável por essa etapa.</p><textarea value={comment} onChange={(event) => setComment(event.target.value)} minLength={3} maxLength={2000} rows={3} placeholder="O que precisa ser corrigido ou melhorado?" autoFocus required /><div><button type="button" onClick={() => setReturnTargetId(null)}>Cancelar</button><button className="primary" disabled={busy || comment.trim().length < 3}>{busy ? "Retornando…" : "Confirmar retorno"}</button></div></form>}
     </div>}
     <aside className="demand-stage-dock">
       <button type="button" className="stage-dock-current" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}><i style={{ background: current.color }} /><AvatarView name={current.assigneeName ?? "Sem responsável"} url={current.assigneeAvatarUrl} /><span><small>Etapa atual</small><strong>{current.name}</strong><em>{current.assigneeName ?? "Sem responsável"}</em></span><b>⌃</b></button>
@@ -1084,10 +1085,10 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
       onSaved(updated); setSuccess("Demanda atualizada.");
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
-  async function runWorkflowAction(action: "advance" | "return", comment?: string): Promise<boolean> {
+  async function runWorkflowAction(action: "advance" | "return", targetStageId?: string, comment?: string): Promise<boolean> {
     if (!canEdit) return false;
     setBusy(true); setError(""); setSuccess("");
-    try { const updated = await api<Demand>(`/demands/${demand.id}/workflow-actions`, { method: "POST", body: JSON.stringify({ action, comment: comment || null, expectedRevision: demand.revision }) }); onSaved(updated); setSuccess(action === "advance" && updated.status === "COMPLETED" ? "Demanda concluída." : `Workflow atualizado: ${updated.stageName}.`); return true; }
+    try { const updated = await api<Demand>(`/demands/${demand.id}/workflow-actions`, { method: "POST", body: JSON.stringify({ action, targetStageId: targetStageId || null, comment: comment || null, expectedRevision: demand.revision }) }); onSaved(updated); setSuccess(action === "advance" && updated.status === "COMPLETED" ? "Demanda concluída." : `Workflow atualizado: ${updated.stageName}.`); return true; }
     catch (caught) { const message = messageFrom(caught); setError(message); if (message.toLocaleLowerCase().includes("checklist")) setTab("checklist"); return false; } finally { setBusy(false); }
   }
   async function reassignCurrentStage(assigneeId: string | null): Promise<boolean> {

@@ -21,6 +21,7 @@ from app.api.demands import (
     move_stage_plan,
     rebalance_stage_deadlines,
     resolve_stage_assignee,
+    resolve_workflow_target,
     stage_risk,
     update_demand_assignee,
     validate_stage_handoff,
@@ -497,6 +498,56 @@ def test_stage_plan_records_advance_skip_and_return_states() -> None:
 
     move_stage_plan(instances, third_id, second_id, action="return", moved_at=moved_at)
     assert [item.state for item in instances] == ["completed", "current", "upcoming"]
+
+
+def test_workflow_target_allows_direct_advance_and_return() -> None:
+    stage_ids = [uuid.uuid4() for _ in range(4)]
+    instances = [
+        DemandStageInstance(
+            id=uuid.uuid4(),
+            organization_id=uuid.uuid4(),
+            demand_id=uuid.uuid4(),
+            workflow_version_id=uuid.uuid4(),
+            workflow_stage_id=stage_id,
+            position=index + 1,
+            state="current" if index == 1 else "upcoming",
+            revision=1,
+        )
+        for index, stage_id in enumerate(stage_ids)
+    ]
+
+    action, target_index = resolve_workflow_target(instances, 1, "advance", stage_ids[3])
+    assert action == "advance"
+    assert target_index == 3
+
+    action, target_index = resolve_workflow_target(instances, 3, "return", stage_ids[0])
+    assert action == "return"
+    assert target_index == 0
+
+
+def test_workflow_target_rejects_wrong_direction_and_current_stage() -> None:
+    stage_ids = [uuid.uuid4() for _ in range(3)]
+    instances = [
+        DemandStageInstance(
+            id=uuid.uuid4(),
+            organization_id=uuid.uuid4(),
+            demand_id=uuid.uuid4(),
+            workflow_version_id=uuid.uuid4(),
+            workflow_stage_id=stage_id,
+            position=index + 1,
+            state="current" if index == 1 else "upcoming",
+            revision=1,
+        )
+        for index, stage_id in enumerate(stage_ids)
+    ]
+
+    with pytest.raises(ApiError) as wrong_direction:
+        resolve_workflow_target(instances, 1, "advance", stage_ids[0])
+    assert wrong_direction.value.code == "workflow_direction_invalid"
+
+    with pytest.raises(ApiError) as current_stage:
+        resolve_workflow_target(instances, 1, "advance", stage_ids[1])
+    assert current_stage.value.code == "workflow_target_current"
 
 
 def test_stage_deadlines_are_weighted_and_finish_at_demand_deadline() -> None:

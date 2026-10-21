@@ -116,6 +116,7 @@ class DemandAssigneeUpdate(BaseModel):
 class DemandWorkflowAction(BaseModel):
     action: str = Field(pattern=r"^(advance|return|skip)$")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
+    target_stage_id: uuid.UUID | None = Field(default=None, alias="targetStageId")
     comment: str | None = Field(default=None, min_length=3, max_length=2000)
 
 
@@ -686,6 +687,47 @@ def move_stage_plan(
             item.revision += 1
             item.updated_at = moved_at
     return target
+
+
+def resolve_workflow_target(
+    instances: list[DemandStageInstance],
+    current_index: int,
+    action: str,
+    target_stage_id: uuid.UUID | None,
+) -> tuple[str, int | None]:
+    """Resolve uma movimentação sequencial ou direta sem perder a direção do fluxo."""
+    if target_stage_id:
+        target_index = next(
+            (
+                index
+                for index, item in enumerate(instances)
+                if item.workflow_stage_id == target_stage_id
+            ),
+            -1,
+        )
+        if target_index < 0:
+            raise ApiError(422, "workflow_target_invalid", "A etapa escolhida não pertence ao fluxo.")
+        if target_index == current_index:
+            raise ApiError(422, "workflow_target_current", "A demanda já está nesta etapa.")
+        expected_action = "return" if target_index < current_index else "advance"
+        if action != expected_action:
+            raise ApiError(
+                422,
+                "workflow_direction_invalid",
+                "A direção da movimentação não corresponde à etapa escolhida.",
+            )
+        return expected_action, target_index
+    if action == "return":
+        target_index = current_index - 1
+        if target_index < 0:
+            raise ApiError(422, "workflow_start_reached", "A demanda já está na primeira etapa.")
+        return action, target_index
+    target_index = current_index + 1
+    if target_index >= len(instances):
+        if action == "advance":
+            return action, None
+        raise ApiError(422, "workflow_end_reached", "Não há próxima etapa neste workflow.")
+    return action, target_index
 
 
 def record_stage_visit_transition(
@@ -1711,22 +1753,28 @@ def apply_workflow_action(
     )
     if current_index < 0:
         raise ApiError(409, "current_stage_missing", "A etapa atual não está no plano da demanda.")
+    effective_action, target_index = resolve_workflow_target(
+        instances,
+        current_index,
+        payload.action,
+        payload.target_stage_id,
+    )
     return_comment = (payload.comment or "").strip()
-    if payload.action == "return" and len(return_comment) < 3:
+    if effective_action == "return" and len(return_comment) < 3:
         raise ApiError(
             422,
             "return_comment_required",
-            "Explique o motivo do retorno para orientar a pessoa responsável pela etapa anterior.",
+            "Explique o motivo do retorno para orientar a pessoa responsável pela etapa escolhida.",
         )
     validate_stage_handoff(
         db,
         demand,
-        require_checklist=payload.action == "advance",
+        require_checklist=effective_action == "advance",
     )
     now = utc_now()
     current = instances[current_index]
     action_labels = {"advance": "avançada", "return": "retornada", "skip": "pulada"}
-    if payload.action == "advance" and current_index == len(instances) - 1:
+    if effective_action == "advance" and target_index is None:
         current.state = "completed"
         current.left_at = now
         current.revision += 1
@@ -1736,19 +1784,12 @@ def apply_workflow_action(
         summary = "Demanda concluída após a última etapa do workflow."
         target: DemandStageInstance | None = None
     else:
-        if payload.action == "return":
-            target_index = current_index - 1
-            if target_index < 0:
-                raise ApiError(422, "workflow_start_reached", "A demanda já está na primeira etapa.")
-        else:
-            target_index = current_index + 1
-            if target_index >= len(instances):
-                raise ApiError(422, "workflow_end_reached", "Não há próxima etapa neste workflow.")
+        assert target_index is not None
         target = move_stage_plan(
             instances,
             current.workflow_stage_id,
             instances[target_index].workflow_stage_id,
-            action=payload.action,
+            action=effective_action,
             moved_at=now,
         )
         demand.current_stage_id = target.workflow_stage_id
@@ -1758,9 +1799,9 @@ def apply_workflow_action(
             demand.status = "IN_PROGRESS"
         target_snapshot = version_stage(version, target.workflow_stage_id)
         target_name = str(target_snapshot.get("name", "nova etapa")) if target_snapshot else "nova etapa"
-        event_kind = f"WORKFLOW_{payload.action.upper()}"
-        summary = f"Demanda {action_labels[payload.action]} para {target_name}."
-        if payload.action == "return":
+        event_kind = f"WORKFLOW_{effective_action.upper()}"
+        summary = f"Demanda {action_labels[effective_action]} para {target_name}."
+        if effective_action == "return":
             db.add(
                 Comment(
                     demand_id=demand.id,
@@ -1774,7 +1815,7 @@ def apply_workflow_action(
         actor_id=principal.profile.id,
         from_stage_id=current.workflow_stage_id,
         to_stage_id=target.workflow_stage_id if target else None,
-        action="COMPLETE" if target is None else payload.action,
+        action="COMPLETE" if target is None else effective_action,
         moved_at=now,
         reason=return_comment or None,
     )
@@ -1782,11 +1823,11 @@ def apply_workflow_action(
     demand.revision += 1
     demand.updated_at = now
     event_payload: dict[str, object] = {
-        "action": payload.action,
+        "action": effective_action,
         "fromStageId": str(current.workflow_stage_id),
         "toStageId": str(target.workflow_stage_id) if target else None,
         "workflowVersion": version.version,
-        "comment": return_comment if payload.action == "return" else None,
+        "comment": return_comment if effective_action == "return" else None,
     }
     db.add(
         DemandUpdate(

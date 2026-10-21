@@ -1097,6 +1097,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .stage-dock-list-item > button { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 11px; align-items: center; width: 100%; padding: 11px; border: 0; border-radius: 8px; text-align: left; background: transparent; }
 .stage-dock-list-item.actionable { background: #f5f9f9; }
 .stage-dock-list-item.current { background: #eaf8f6; }
+.stage-dock-list-item.selected { box-shadow: inset 0 0 0 2px var(--teal-dark); }
 .stage-dock-list-item > button > i { width: 6px; height: 33px; border-radius: 4px; }
 .stage-dock-list strong, .stage-dock-list small { display: block; }
 .stage-dock-list strong { color: #39535d; font-size: .7rem; }
