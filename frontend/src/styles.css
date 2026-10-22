@@ -718,7 +718,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .view-menu > div button { display: flex; gap: 9px; align-items: center; min-height: 38px; padding: 0 11px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; text-align: left; font-size: .65rem; font-weight: 800; }
 .view-menu > div button:hover, .view-menu > div button.active { color: var(--teal-dark); background: var(--surface-hover); }
 .view-icon { width: 12px; height: 12px; opacity: .78; }
-.work-filter-panel { display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--surface-soft); animation: filter-panel-in .16s ease-out; }
+.work-filter-panel { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--surface-soft); animation: filter-panel-in .16s ease-out; }
 .work-filter-panel > label, .assignee-options { display: grid; gap: 6px; align-content: start; min-width: 0; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .work-filter-panel > label > span, .assignee-options > span { color: var(--muted); font-size: .52rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
 .work-filter-panel select { min-width: 0; height: 28px; padding: 0; border: 0; outline: 0; color: var(--ink); background: var(--surface); font: inherit; font-size: .67rem; font-weight: 700; }

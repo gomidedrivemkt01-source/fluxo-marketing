@@ -652,6 +652,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     themeProfiles: [],
   };
   const counts = useMemo(() => profile ? focusCounts(demands, profile.profileId, profile.timezone) : null, [demands, profile]);
+  const stageNames = useMemo(() => [...new Set(stages.filter((item) => item.active).map((item) => item.name))].sort((a, b) => a.localeCompare(b, "pt-BR")), [stages]);
   const visible = useMemo(() => demands.filter((demand) => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
     const matchesAssignee = !assignees.length
@@ -662,7 +663,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
       && (company === "ALL" || demand.primaryCompanyId === company)
       && matchesAssignee
       && (priority === "ALL" || demand.priority === priority)
-      && (stage === "ALL" || demand.stageId === stage)
+      && (stage === "ALL" || demand.stageName === stage)
       && (!needle || `${demand.publicId} ${demand.title} ${demand.companyName ?? ""} ${demand.assigneeName ?? ""}`.toLocaleLowerCase("pt-BR").includes(needle));
   }), [demands, mine, profile, preferences.focusView, status, company, assignees, priority, stage, query]);
   const personalColumns = preferences.personalColumns.length ? preferences.personalColumns : defaultColumns;
@@ -758,7 +759,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
       {!mine && <div className="assignee-options"><span>Responsáveis</span><div><label><input type="checkbox" checked={assignees.includes("UNASSIGNED")} onChange={() => toggleAssignee("UNASSIGNED")} /> Sem responsável</label>{people.map((person) => <label key={person.id}><input type="checkbox" checked={assignees.includes(person.id)} onChange={() => toggleAssignee(person.id)} /> {person.name}</label>)}</div></div>}
       <label><span>Situação</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">Todas</option>{Object.entries(statusNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       <label><span>Prioridade</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">Todas</option>{Object.entries(priorityNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-      <label><span>Etapa</span><select value={stage} onChange={(event) => setStage(event.target.value)}><option value="ALL">Todas</option>{stages.filter((item) => item.active).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      <label><span>Etapa</span><select value={stage} onChange={(event) => setStage(event.target.value)}><option value="ALL">Todas</option>{stageNames.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
       {mine && <div className="saved-views compact-saved-views"><div><strong>Visões salvas</strong><small>Filtros pessoais sincronizados</small></div><div className="saved-view-list">{preferences.savedViews.map((view) => <span className={`saved-view-chip ${activeSavedId === view.id ? "active" : ""}`} key={view.id}><button onClick={() => applySavedView(view)}>{view.name}</button><button onClick={() => removeSavedView(view.id)} aria-label={`Excluir visão ${view.name}`}>×</button></span>)}</div><button onClick={() => setShowSaveView(true)}>+ Salvar visão</button></div>}
       <div className="filter-panel-actions"><button type="button" onClick={clearFilters}>Limpar filtros</button><button type="button" onClick={() => setFiltersOpen(false)}>Aplicar</button></div>
     </div>}
