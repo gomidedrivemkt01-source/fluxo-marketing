@@ -15,6 +15,10 @@ engine = create_engine(
     settings.database_dsn(),
     pool_pre_ping=True,
     pool_recycle=300,
+    pool_size=3,
+    max_overflow=2,
+    pool_timeout=15,
+    pool_use_lifo=True,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

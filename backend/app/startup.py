@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from typing import NoReturn
 
 import psycopg
@@ -14,6 +15,7 @@ from app.core.config import get_settings
 
 ALEMBIC_CONFIG_PATH = "backend/alembic.ini"
 DEFAULT_MIGRATION_TIMEOUT_SECONDS = 180
+DATABASE_CONNECT_ATTEMPTS = 10
 
 
 def _database_dsn() -> str:
@@ -33,15 +35,28 @@ def migration_head() -> str:
 
 
 def database_revision() -> str | None:
-    with psycopg.connect(_database_dsn(), connect_timeout=15) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT to_regclass('public.alembic_version')")
-            relation_row = cursor.fetchone()
-            if relation_row is None or relation_row[0] is None:
-                return None
-            cursor.execute("SELECT version_num FROM public.alembic_version")
-            row = cursor.fetchone()
-            return None if row is None else str(row[0])
+    for attempt in range(1, DATABASE_CONNECT_ATTEMPTS + 1):
+        try:
+            with psycopg.connect(_database_dsn(), connect_timeout=15) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT to_regclass('public.alembic_version')")
+                    relation_row = cursor.fetchone()
+                    if relation_row is None or relation_row[0] is None:
+                        return None
+                    cursor.execute("SELECT version_num FROM public.alembic_version")
+                    row = cursor.fetchone()
+                    return None if row is None else str(row[0])
+        except psycopg.OperationalError:
+            if attempt == DATABASE_CONNECT_ATTEMPTS:
+                raise
+            delay = min(attempt * 2, 10)
+            print(
+                f"Banco temporariamente indisponivel; nova tentativa em {delay}s "
+                f"({attempt}/{DATABASE_CONNECT_ATTEMPTS}).",
+                flush=True,
+            )
+            time.sleep(delay)
+    raise RuntimeError("Nao foi possivel consultar a revisao do banco.")
 
 
 def migration_timeout_seconds() -> int:
