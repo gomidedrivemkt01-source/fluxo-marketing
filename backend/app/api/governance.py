@@ -711,6 +711,14 @@ def valid_external_url(value: Any) -> str | None:
     return value if parsed.scheme in {"http", "https"} and parsed.netloc else None
 
 
+def trello_attachment_size(value: Any) -> int:
+    """Keep external attachments compatible with the positive file-size invariant."""
+    try:
+        return max(1, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 1
+
+
 def import_trello_attachments(
     db: Session,
     *,
@@ -741,7 +749,7 @@ def import_trello_attachments(
             item.original_name = original_name
             item.external_url = external_url
             item.content_type = content_type[:160]
-            item.size_bytes = max(0, int(raw.get("bytes") or 0))
+            item.size_bytes = trello_attachment_size(raw.get("bytes"))
             item.import_batch_id = batch.id
             item.updated_at = utc_now()
             updated += 1
@@ -754,7 +762,7 @@ def import_trello_attachments(
             storage_bucket=None,
             storage_path=None,
             content_type=content_type[:160],
-            size_bytes=max(0, int(raw.get("bytes") or 0)),
+            size_bytes=trello_attachment_size(raw.get("bytes")),
             sha256=hashlib.sha256(external_url.encode()).hexdigest(),
             source_system="trello",
             external_id=external_id,

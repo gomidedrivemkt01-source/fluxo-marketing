@@ -10,6 +10,7 @@ from app.api.errors import ApiError
 from app.api.governance import (
     imported_demand_sources,
     trello_action_description,
+    trello_attachment_size,
     trello_reset_preview,
     valid_external_url,
 )
@@ -293,3 +294,17 @@ def test_describes_trello_stage_change_but_skips_position_only_updates() -> None
 )
 def test_accepts_only_http_external_attachment_urls(value: object, expected: str | None) -> None:
     assert valid_external_url(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (2048, 2048),
+        ("512", 512),
+        (0, 1),
+        (None, 1),
+        ("unknown", 1),
+    ],
+)
+def test_normalizes_trello_attachment_size_to_positive_bytes(value: object, expected: int) -> None:
+    assert trello_attachment_size(value) == expected
