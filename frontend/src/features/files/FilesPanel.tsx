@@ -76,7 +76,8 @@ function previewUrl(demandId: string, fileId: string): string {
 
 export function FilesPanel({ demandId, canManage, compact = false, onFilesChanged }: { demandId: string; canManage: boolean; compact?: boolean; onFilesChanged?: () => void | Promise<void> }) {
   const [files, setFiles] = useState<DemandFile[] | null>(null);
-  const [selectedName, setSelectedName] = useState("");
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState({ completed: 0, total: 0 });
   const [busy, setBusy] = useState("");
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -126,34 +127,57 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
     setViewerIndex((current) => current === null ? null : (current + direction + imageFiles.length) % imageFiles.length);
   }
 
-  function chooseFile(event: ChangeEvent<HTMLInputElement>) {
-    setSelectedName(event.target.files?.[0]?.name ?? "");
+  function chooseFiles(event: ChangeEvent<HTMLInputElement>) {
+    setSelectedFiles(Array.from(event.target.files ?? []));
   }
 
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const file = inputRef.current?.files?.[0];
-    if (!file) return;
+    const pendingFiles = Array.from(inputRef.current?.files ?? []);
+    if (!pendingFiles.length) return;
     const form = event.currentTarget;
-    const body = new FormData();
-    body.append("file", file);
     setBusy("upload");
     setError("");
+    setUploadProgress({ completed: 0, total: pendingFiles.length });
     try {
-      const created = await api<DemandFile>(`/demands/${demandId}/files`, {
-        method: "POST",
-        body,
-      });
-      setFiles((current) => [created, ...(current ?? [])]);
-      await onFilesChanged?.();
+      const created: DemandFile[] = [];
+      const failures: string[] = [];
+      for (const [index, file] of pendingFiles.entries()) {
+        const body = new FormData();
+        body.append("file", file);
+        try {
+          created.push(await api<DemandFile>(`/demands/${demandId}/files`, {
+            method: "POST",
+            body,
+          }));
+        } catch (caught) {
+          failures.push(`${file.name}: ${messageFrom(caught)}`);
+        }
+        setUploadProgress({ completed: index + 1, total: pendingFiles.length });
+      }
+      if (created.length) {
+        setFiles((current) => [...created.reverse(), ...(current ?? [])]);
+        await onFilesChanged?.();
+      }
       form.reset();
-      setSelectedName("");
-    } catch (caught) {
-      setError(messageFrom(caught));
+      setSelectedFiles([]);
+      if (failures.length) setError(`${failures.length} arquivo${failures.length === 1 ? " não foi enviado" : "s não foram enviados"}: ${failures.join(" · ")}`);
     } finally {
       setBusy("");
+      setUploadProgress({ completed: 0, total: 0 });
     }
   }
+
+  const selectedLabel = selectedFiles.length === 0
+    ? "Anexar"
+    : selectedFiles.length === 1
+      ? selectedFiles[0]?.name ?? "1 arquivo selecionado"
+      : `${selectedFiles.length} arquivos selecionados`;
+  const uploadLabel = busy === "upload"
+    ? `Enviando ${Math.min(uploadProgress.completed + 1, uploadProgress.total)} de ${uploadProgress.total}…`
+    : selectedFiles.length > 1
+      ? "Enviar arquivos"
+      : "Enviar arquivo";
 
   async function download(item: DemandFile) {
     setBusy(item.id);
@@ -263,7 +287,7 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
   if (compact) {
     return (
       <><section className="inline-files">
-        <header><div><strong>Arquivos e mídias</strong><span>{files.length ? `${files.length} anexado${files.length === 1 ? "" : "s"}` : "Nenhum anexo"}</span></div>{canManage && <form onSubmit={upload}><label className="inline-file-add"><input ref={inputRef} type="file" accept={acceptedTypes} disabled={busy === "upload"} onChange={chooseFile} required /><span>＋</span>{selectedName || "Anexar"}</label>{selectedName && <button disabled={busy === "upload"}>{busy === "upload" ? "Enviando…" : "Enviar"}</button>}</form>}</header>
+        <header><div><strong>Arquivos e mídias</strong><span>{files.length ? `${files.length} anexado${files.length === 1 ? "" : "s"}` : "Nenhum anexo"}</span></div>{canManage && <form onSubmit={upload}><label className="inline-file-add"><input ref={inputRef} type="file" accept={acceptedTypes} multiple disabled={busy === "upload"} onChange={chooseFiles} required /><span>＋</span>{selectedLabel}</label>{selectedFiles.length > 0 && <button disabled={busy === "upload"}>{busy === "upload" ? `${uploadProgress.completed}/${uploadProgress.total}` : "Enviar"}</button>}</form>}</header>
         {error && <div className="activity-error">{error}</div>}
         {files.length > 0 && <div className="inline-file-grid">{files.slice(0, 8).map((item) => { const image = item.contentType.startsWith("image/"); return <button type="button" key={item.id} onClick={() => image ? openViewer(item) : void download(item)} title={image ? `Visualizar ${item.name}` : `Baixar ${item.name}`}><span>{image ? <img src={previewUrl(demandId, item.id)} alt="" loading="lazy" /> : fileIcon(item.contentType)}</span><small>{item.name}</small></button>; })}</div>}
       </section>{viewer}</>
@@ -289,16 +313,17 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
               type="file"
               name="file"
               accept={acceptedTypes}
+               multiple
               disabled={busy === "upload"}
-              onChange={chooseFile}
+               onChange={chooseFiles}
               required
             />
             <span>＋</span>
-            <strong>{selectedName || "Escolher arquivo"}</strong>
-            <small>PDF, imagens, Office, texto, áudio ou vídeo · até 25 MB</small>
+            <strong>{selectedFiles.length ? selectedLabel : "Escolher arquivos"}</strong>
+            <small>Selecione um ou vários arquivos · até 25 MB por arquivo</small>
           </label>
-          <button className="primary action-primary" disabled={!selectedName || busy === "upload"}>
-            {busy === "upload" ? "Enviando…" : "Enviar arquivo"}
+          <button className="primary action-primary" disabled={!selectedFiles.length || busy === "upload"}>
+            {uploadLabel}
           </button>
         </form>
       )}

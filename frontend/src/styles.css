@@ -117,7 +117,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 
 .workspace { width: min(100%, 1500px); min-width: 0; padding: 38px clamp(26px, 4vw, 64px) 70px; }
 .workspace > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; }
-.workspace > header h1 { margin: 6px 0 0; font: 600 2rem/1.1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -.04em; color: var(--ink); }
+.workspace > header h1 { margin: 0; font: 600 2rem/1.1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -.04em; color: var(--ink); }
 .phase { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border: 1px solid #d5e1e4; border-radius: 8px; background: rgba(255,255,255,.55); }
 .phase span { padding: 5px 8px; border-radius: 4px; color: #0a766f; background: #dff5f1; font-size: .69rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .phase strong { color: #4f6570; font-size: .78rem; }
@@ -1112,6 +1112,7 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 
 /* Barra fixa de etapa */
 .workspace.demand-open { padding-bottom: 125px; }
+.workspace.demand-open > .back-button { margin-top: 0; }
 .demand-stage-dock { position: fixed; z-index: 55; right: 0; bottom: 0; left: 248px; display: grid; grid-template-columns: minmax(270px, 1fr) auto auto; align-items: stretch; min-height: 78px; border-top: 1px solid #cfdadd; background: rgba(255,255,255,.97); box-shadow: 0 -9px 28px rgba(9,38,50,.12); backdrop-filter: blur(14px); transition: left .22s ease; }
 .sidebar-collapsed .demand-stage-dock { left: 84px; }
 .stage-dock-current { display: grid; grid-template-columns: 5px 40px minmax(0, 1fr) 24px; gap: 11px; align-items: center; min-width: 0; padding: 11px 18px; border: 0; text-align: left; background: transparent; }

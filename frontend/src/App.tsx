@@ -539,20 +539,20 @@ function DailyImportModal({ demands, initialImport, onClose, onApplied }: { dema
 
 const priorityNames: Record<string, string> = { LOW: "Baixa", NORMAL: "Normal", HIGH: "Alta", URGENT: "Urgente" };
 
-const pageTitles: Record<WorkspacePage, { eyebrow: string; title: string }> = {
-  overview: { eyebrow: "Operação compartilhada", title: "Início" },
-  "my-work": { eyebrow: "Foco pessoal", title: "Meu trabalho" },
-  demands: { eyebrow: "Operação", title: "Demandas" },
-  calendar: { eyebrow: "Prazos", title: "Calendário" },
-  companies: { eyebrow: "Organização", title: "Empresas" },
-  team: { eyebrow: "Organização", title: "Equipe" },
-  reports: { eyebrow: "Acompanhamento", title: "Relatórios" },
-  intelligence: { eyebrow: "Inteligência · Beta", title: "Dailys e importações" },
-  workflows: { eyebrow: "Administração", title: "Workflows" },
-  categories: { eyebrow: "Administração", title: "Categorias e briefings" },
-  users: { eyebrow: "Administração", title: "Usuários e acessos" },
-  settings: { eyebrow: "Administração", title: "Configurações" },
-  profile: { eyebrow: "Conta", title: "Meu perfil" },
+const pageTitles: Record<WorkspacePage, string> = {
+  overview: "Início",
+  "my-work": "Meu trabalho",
+  demands: "Demandas",
+  calendar: "Calendário",
+  companies: "Empresas",
+  team: "Equipe",
+  reports: "Relatórios",
+  intelligence: "Dailys e importações",
+  workflows: "Workflows",
+  categories: "Categorias e briefings",
+  users: "Usuários e acessos",
+  settings: "Configurações",
+  profile: "Meu perfil",
 };
 
 function dateLabel(value: string | null): string {
@@ -1439,7 +1439,6 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     catch (caught) { setError(messageFrom(caught)); }
   }
   const pending = useMemo(() => users.filter((user) => user.state === "pending_approval"), [users]);
-  const currentTitle = selectedDemand ? { eyebrow: "Demanda", title: selectedDemand.publicId } : pageTitles[page];
   const navigation: { label: string; links: { id: WorkspacePage; icon: string; label: string; badge?: number; beta?: boolean }[] }[] = [
     { label: "Trabalho", links: [{ id: "overview", icon: homeIcon, label: "Início" }, { id: "my-work", icon: myWorkIcon, label: "Meu trabalho" }, { id: "demands", icon: demandsIcon, label: "Demandas" }, { id: "calendar", icon: calendarIcon, label: "Calendário" }] },
     { label: "Organização", links: [{ id: "companies", icon: companiesIcon, label: "Empresas" }, { id: "team", icon: teamIcon, label: "Equipe" }, { id: "reports", icon: reportsIcon, label: "Relatórios" }] },
@@ -1462,7 +1461,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   else content = <GovernanceSettings onReload={loadData} />;
   return <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={themeStyle(profile?.preferences)}>
     <aside className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}><div className="sidebar-head"><Brand /><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}><span aria-hidden="true" /></button></div><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <button key={link.id} className={!selectedDemand && page === link.id ? "active" : ""} onClick={() => go(link.id)} aria-label={sidebarCollapsed ? link.label : undefined} title={sidebarCollapsed ? link.label : undefined}><NavIcon src={link.icon} /><span className="nav-label">{link.label}</span>{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</button>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")} aria-label={sidebarCollapsed ? "Abrir meu perfil" : undefined} title={sidebarCollapsed ? "Meu perfil" : undefined}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair" title="Sair">↗</button></div></aside>
-    <main className={`workspace${selectedDemand ? " demand-open" : ""}`}><header><div><span className="eyebrow dark">{currentTitle.eyebrow}</span><h1>{currentTitle.title}</h1></div>{canCreate && !selectedDemand && <div className="workspace-header-actions"><button className="quick-capture-button" onClick={() => setShowQuickCapture(true)}><ActionIcon src={fastActionIcon} /> Captura rápida <kbd>Q</kbd></button><button className="new-demand-button" onClick={() => setShowCreate(true)}><ActionIcon src={additionalActionIcon} /> Nova demanda</button></div>}</header>{error && <Notice>{error}</Notice>}{content}</main>
+    <main className={`workspace${selectedDemand ? " demand-open" : ""}`}>{!selectedDemand && <header><h1>{pageTitles[page]}</h1>{canCreate && <div className="workspace-header-actions"><button className="quick-capture-button" onClick={() => setShowQuickCapture(true)}><ActionIcon src={fastActionIcon} /> Captura rápida <kbd>Q</kbd></button><button className="new-demand-button" onClick={() => setShowCreate(true)}><ActionIcon src={additionalActionIcon} /> Nova demanda</button></div>}</header>}{error && <Notice>{error}</Notice>}{content}</main>
     <GlobalTimer currentDemand={selectedDemand ?? drawerDemand} canTrack={canCreate} hasStageDock={Boolean(selectedDemand)} hasDrawerFooter={Boolean(drawerDemand)} onOpenDemand={(demandId) => { const target = demands.find((item) => item.id === demandId); if (target) { openDemand(target); setDrawerDemand(null); } }} />
     {drawerDemand && <TaskDrawer key={drawerDemand.id} demand={drawerDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} canDelete={canManage} onClose={() => setDrawerDemand(null)} onOpenFull={(tab) => { openDemand(drawerDemand, tab); setDrawerDemand(null); }} onSaved={(updated) => { setDrawerDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} onRemoved={async () => { setDrawerDemand(null); await loadData(); }} />}
     {showQuickCapture && <QuickCaptureModal onClose={() => setShowQuickCapture(false)} onCreate={quickCreate} />}
