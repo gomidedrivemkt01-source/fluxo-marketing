@@ -6,9 +6,11 @@ from unittest.mock import ANY, MagicMock
 import pytest
 from sqlalchemy.orm import Session
 
+from app.api import demands as demands_api
 from app.api import workspace
 from app.api.demands import demands_out
 from app.api.users import ProfileOut, UserOptionOut
+from app.models import MembershipStatus
 
 
 def test_workspace_bootstrap_combines_common_screen_data(
@@ -107,6 +109,29 @@ def test_workspace_bootstrap_combines_common_screen_data(
         principal=ANY,
         db=ANY,
     )
+
+
+def test_list_demands_does_not_silently_truncate_after_fifty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization_id = uuid.uuid4()
+    principal = SimpleNamespace(
+        membership=SimpleNamespace(
+            organization_id=organization_id,
+            status=MembershipStatus.ACTIVE,
+        ),
+        role=SimpleNamespace(permissions=["demands:read"]),
+    )
+    expected = [SimpleNamespace(id=uuid.uuid4()) for _ in range(75)]
+    db = MagicMock(spec=Session)
+    db.scalars.return_value = iter(expected)
+    monkeypatch.setattr(demands_api, "demands_out", lambda _db, items: items)
+
+    result = demands_api.list_demands(q=None, principal=principal, db=db)
+
+    assert result == expected
+    statement = db.scalars.call_args.args[0]
+    assert statement._limit_clause is None
 
 
 def test_demands_out_uses_fixed_number_of_related_queries() -> None:

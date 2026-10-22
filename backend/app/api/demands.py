@@ -1064,7 +1064,10 @@ def list_demands(
         statement = statement.where(
             or_(Demand.public_id.ilike(pattern), Demand.title.ilike(pattern))
         )
-    demands = list(db.scalars(statement.order_by(Demand.updated_at.desc()).limit(50)))
+    # A mesma consulta abastece o bootstrap e todas as visões operacionais. Um
+    # corte silencioso aqui fazia Kanban, lista e calendário exibirem somente os
+    # 50 cards mais recentes, mesmo quando os demais continuavam ativos no banco.
+    demands = list(db.scalars(statement.order_by(Demand.updated_at.desc())))
     return demands_out(db, demands)
 
 
