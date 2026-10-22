@@ -752,18 +752,19 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .kanban-column > header { display: flex; align-items: center; justify-content: space-between; min-height: 47px; padding: 0 13px; border-bottom: 1px solid #dbe4e7; background: color-mix(in srgb, var(--surface) 92%, var(--app-bg)); }
 .kanban-column > header span, .grouped-list header span { display: flex; gap: 8px; align-items: center; color: #344d58; font-size: .71rem; font-weight: 800; }
 .kanban-column > header b, .grouped-list header b { color: #748790; font-size: .65rem; }
-.kanban-column > div { display: grid; align-content: start; gap: 9px; min-height: 445px; padding: 10px; }
+.kanban-column > div { display: flex; flex-direction: column; align-items: stretch; gap: 9px; min-height: 445px; padding: 10px; }
 .kanban-column > div::-webkit-scrollbar { width: 8px; }
 .kanban-column > div::-webkit-scrollbar-track { background: transparent; }
 .kanban-column > div::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: color-mix(in srgb, var(--teal-dark) 30%, transparent); background-clip: padding-box; }
 .kanban-column > div::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--teal-dark) 48%, transparent); background-clip: padding-box; }
 .column-empty { margin: 0; padding: 24px 12px; border: 1px dashed #cbd7da; border-radius: 7px; color: #98a7ad; text-align: center; font-size: .64rem; }
-.work-card { position: relative; overflow: hidden; border: 1px solid #d8e2e5; border-radius: 8px; background: var(--surface); box-shadow: 0 2px 7px rgba(10,31,47,.045); transition: opacity .16s ease, transform .16s ease, box-shadow .16s ease; }
+.work-card { position: relative; overflow: hidden; flex: 0 0 auto; border: 1px solid #d8e2e5; border-radius: 8px; background: var(--surface); box-shadow: 0 2px 7px rgba(10,31,47,.045); transition: opacity .16s ease, transform .16s ease, box-shadow .16s ease; }
 .work-card[draggable="true"] { cursor: grab; }
 .work-card[draggable="true"]:active { cursor: grabbing; }
 .work-card.dragging { opacity: .48; box-shadow: 0 16px 28px rgba(10,31,47,.16); transform: rotate(1.5deg) scale(.98); }
 .work-card-open { display: flex; flex-direction: column; width: 100%; padding: 13px; border: 0; color: inherit; background: transparent; text-align: left; }
-.work-card-cover { width: calc(100% + 26px); height: clamp(168px, 18vw, 184px); margin: -13px -13px 12px; }
+.work-card-cover { width: calc(100% + 26px); height: 184px; max-height: 184px; margin: -13px -13px 12px; background: #403e3a; }
+.work-card-cover img { width: 100%; height: 100%; object-fit: contain; object-position: center; }
 .work-card-timer { position: absolute; z-index: 2; top: 12px; left: 13px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid color-mix(in srgb, var(--teal) 42%, #d7e3e5); border-radius: 50%; color: #fff; background: var(--teal-dark); box-shadow: 0 5px 13px rgba(8,127,118,.2); transition: box-shadow .16s ease, transform .16s ease, background .16s ease; }
 .work-card-timer:hover { background: var(--teal); box-shadow: 0 7px 17px rgba(8,127,118,.28); transform: translateY(-1px); }
 .work-card-timer:focus-visible { outline: 3px solid color-mix(in srgb, var(--teal) 28%, transparent); outline-offset: 2px; }
