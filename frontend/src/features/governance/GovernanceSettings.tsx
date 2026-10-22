@@ -5,13 +5,20 @@ type Preview = {
   filename: string;
   alreadyImported: boolean;
   board: { id: string; name: string };
-  counts: { lists: number; cards: number; members: number; labels: number; checklists: number; new: number; changed: number; unchanged: number; sourceArchivedOrCompleted: number };
+  counts: { lists: number; cards: number; members: number; labels: number; checklists: number; checklistItems: number; attachments: number; comments: number; historyActions: number; titleDeadlines: number; new: number; changed: number; unchanged: number; sourceArchivedOrCompleted: number };
   listMappings: { sourceId: string; sourceName: string; cards: number; status: string; stageName: string }[];
   memberMappings: { sourceId: string; sourceName: string; profileId: string | null; profileName: string | null }[];
   warnings: string[];
 };
 
 type Batch = { id: string; filename: string; boardName: string; state: string; totalCards: number; createdCards: number; updatedCards: number; unchangedCards: number; archivedCards: number; createdAt: string; revertedAt: string | null };
+type ImportResult = {
+  created: number;
+  updated: number;
+  unchanged: number;
+  archived: number;
+  enrichment: { comments: number; historyEvents: number; attachmentsCreated: number; attachmentsUpdated: number; checklistItemsCreated: number; checklistItemsUpdated: number; deadlinesInferredFromTitles: number };
+};
 type Enrichment = {
   counts: { total?: number; demandsWithChanges?: number; companyChanges?: number; categoryChanges?: number; companyAlreadySet?: number; categoryAlreadySet?: number; companyUnmatched?: number; categoryUnmatched?: number; withoutSnapshot?: number };
   companyMappings: { name: string; cards: number }[];
@@ -116,8 +123,8 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
     setBusy("apply"); setNotice(null);
     const body = new FormData(); body.append("file", file); body.append("updateExisting", String(updateExisting));
     try {
-      const result = await api<{ created: number; updated: number; unchanged: number; archived: number }>("/governance/trello/apply", { method: "POST", body });
-      setNotice({ kind: "success", text: `Importação concluída: ${result.created} criadas, ${result.updated} atualizadas e ${result.unchanged} preservadas.` });
+      const result = await api<ImportResult>("/governance/trello/apply", { method: "POST", body });
+      setNotice({ kind: "success", text: `Importação concluída: ${result.created} criadas, ${result.updated} atualizadas e ${result.unchanged} preservadas. Conteúdo incorporado: ${result.enrichment.comments} comentários, ${result.enrichment.historyEvents} eventos, ${result.enrichment.attachmentsCreated} anexos e ${result.enrichment.checklistItemsCreated} itens de checklist.` });
       setPreview(null); setFile(null); setUpdateExisting(false);
       await Promise.all([load(), onReload()]);
     } catch (error) { setNotice({ kind: "error", text: messageFrom(error) }); }
@@ -208,7 +215,7 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
         <form className="trello-upload" onSubmit={validate}><label><span>Arquivo JSON do quadro</span><input type="file" accept="application/json,.json" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setPreview(null); }} required /></label><button className="primary action-primary compact" disabled={!file || Boolean(busy)}>{busy === "validate" ? "Validando…" : "Validar arquivo"}</button></form>
       </article>
       {preview && <article className="governance-card preview-card"><div className="governance-card-head"><div><span className="governance-step">02</span><h4>{preview.board.name}</h4><p>{preview.filename}</p></div><span className={preview.alreadyImported ? "status-pill warning" : "status-pill ready"}>{preview.alreadyImported ? "Arquivo já importado" : "Pronto para revisão"}</span></div>
-        <div className="governance-metrics"><span><strong>{preview.counts.cards}</strong> cartões</span><span><strong>{preview.counts.new}</strong> novos</span><span><strong>{preview.counts.changed}</strong> alterados</span><span><strong>{preview.counts.unchanged}</strong> sem mudança</span><span><strong>{preview.counts.checklists}</strong> checklists</span></div>
+        <div className="governance-metrics"><span><strong>{preview.counts.cards}</strong> cartões</span><span><strong>{preview.counts.new}</strong> novos</span><span><strong>{preview.counts.changed}</strong> alterados</span><span><strong>{preview.counts.unchanged}</strong> sem mudança</span><span><strong>{preview.counts.comments}</strong> comentários</span><span><strong>{preview.counts.attachments}</strong> anexos</span><span><strong>{preview.counts.checklistItems}</strong> itens de checklist</span><span><strong>{preview.counts.titleDeadlines}</strong> prazos pelo título</span></div>
         {preview.warnings.map((warning) => <div className="inline-warning" key={warning}>{warning}</div>)}
         <div className="mapping-grid"><div><h5>Listas e destino</h5>{preview.listMappings.map((item) => <p key={item.sourceId}><strong>{item.sourceName}</strong><span>{item.cards} cards · {statusNames[item.status] ?? item.status} · {item.stageName}</span></p>)}</div><div><h5>Correspondência de usuários</h5>{preview.memberMappings.map((item) => <p key={item.sourceId}><strong>{item.sourceName}</strong><span>{item.profileName ?? "Sem correspondência — ficará sem responsável"}</span></p>)}</div></div>
         <label className="check governance-update-check"><input type="checkbox" checked={updateExisting} onChange={(event) => setUpdateExisting(event.target.checked)} /><span>Atualizar demandas já vinculadas quando o cartão do Trello tiver mudanças. A versão anterior ficará disponível para reversão.</span></label>

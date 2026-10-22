@@ -168,6 +168,42 @@ def trello_object_created_at(value: str | None) -> datetime | None:
         return None
 
 
+TITLE_DATE_PATTERN = re.compile(
+    r"(?<!\d)(?P<day>0?[1-9]|[12]\d|3[01])\s*[/.-]\s*"
+    r"(?P<month>0?[1-9]|1[0-2])"
+    r"(?:\s*(?:[/.-]|-\s*)\s*(?P<year>(?:20)?\d{2}))?(?!\d)"
+)
+
+
+def trello_deadline_from_title(
+    title: str | None, reference: datetime | None = None
+) -> datetime | None:
+    """Extrai a primeira data DD/MM do título usando o ano do próprio card.
+
+    O quadro histórico usa datas editoriais sem ano. Nesses casos, o ano da
+    última atividade é a referência mais segura. O horário de 20h UTC equivale
+    a 17h em Brasília e evita que a data mude na interface.
+    """
+
+    match = TITLE_DATE_PATTERN.search(title or "")
+    if not match:
+        return None
+    year_text = match.group("year")
+    year = int(year_text) if year_text else (reference or datetime.now(UTC)).year
+    if year < 100:
+        year += 2000
+    try:
+        return datetime(
+            year,
+            int(match.group("month")),
+            int(match.group("day")),
+            20,
+            tzinfo=UTC,
+        )
+    except ValueError:
+        return None
+
+
 def canonical_hash(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -268,13 +304,34 @@ def card_snapshot(
         "shortLink": card.get("shortLink"),
         "url": card.get("url"),
         "attachments": [
-            {"id": item.get("id"), "name": item.get("name"), "url": item.get("url")}
+            trello_attachment_snapshot(item)
             for item in card.get("attachments", [])
             if isinstance(item, dict)
         ],
         "checklists": [
             checklists_by_id[value] for value in checklist_ids if value in checklists_by_id
         ],
+    }
+
+
+def trello_attachment_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+    previews = [value for value in item.get("previews", []) if isinstance(value, dict)]
+    preview = max(
+        previews,
+        key=lambda value: int(value.get("width") or 0) * int(value.get("height") or 0),
+        default=None,
+    )
+    return {
+        "id": item.get("id"),
+        "name": item.get("name") or item.get("fileName"),
+        "fileName": item.get("fileName"),
+        "url": item.get("url"),
+        "previewUrl": preview.get("url") if preview else None,
+        "mimeType": item.get("mimeType"),
+        "bytes": item.get("bytes"),
+        "date": item.get("date"),
+        "idMember": item.get("idMember"),
+        "isUpload": bool(item.get("isUpload")),
     }
 
 

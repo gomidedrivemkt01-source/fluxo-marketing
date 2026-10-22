@@ -238,9 +238,7 @@ class Workflow(Base):
     lifecycle_state: Mapped[str] = mapped_column(
         String(20), default="PUBLISHED", server_default="PUBLISHED"
     )
-    time_basis: Mapped[str] = mapped_column(
-        String(20), default="ELAPSED", server_default="ELAPSED"
-    )
+    time_basis: Mapped[str] = mapped_column(String(20), default="ELAPSED", server_default="ELAPSED")
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
@@ -657,6 +655,12 @@ class DemandTodoItem(Base):
     __tablename__ = "demand_todo_items"
     __table_args__ = (
         Index("ix_demand_todo_items_demand_position", "demand_id", "position"),
+        UniqueConstraint(
+            "demand_id",
+            "source_system",
+            "external_id",
+            name="uq_demand_todo_external",
+        ),
         {"schema": "app"},
     )
 
@@ -676,6 +680,11 @@ class DemandTodoItem(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    source_system: Mapped[str | None] = mapped_column(String(30))
+    external_id: Mapped[str | None] = mapped_column(String(100))
+    import_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.trello_import_batches.id", ondelete="SET NULL")
     )
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -744,7 +753,10 @@ class DailyImportItem(Base):
 
 class DemandUpdate(Base):
     __tablename__ = "demand_updates"
-    __table_args__ = {"schema": "app"}
+    __table_args__ = (
+        UniqueConstraint("source_system", "external_id", name="uq_demand_update_external"),
+        {"schema": "app"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     demand_id: Mapped[uuid.UUID] = mapped_column(
@@ -759,6 +771,11 @@ class DemandUpdate(Base):
     kind: Mapped[str] = mapped_column(String(50))
     summary: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    source_system: Mapped[str | None] = mapped_column(String(30))
+    external_id: Mapped[str | None] = mapped_column(String(100))
+    import_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.trello_import_batches.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
@@ -766,6 +783,7 @@ class Comment(Base):
     __tablename__ = "comments"
     __table_args__ = (
         Index("ix_comments_demand_created", "demand_id", "created_at"),
+        UniqueConstraint("source_system", "external_id", name="uq_comment_external"),
         {"schema": "app"},
     )
 
@@ -777,6 +795,11 @@ class Comment(Base):
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
     )
     content: Mapped[str] = mapped_column(Text)
+    source_system: Mapped[str | None] = mapped_column(String(30))
+    external_id: Mapped[str | None] = mapped_column(String(100))
+    import_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.trello_import_batches.id", ondelete="SET NULL")
+    )
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -827,6 +850,12 @@ class DemandFile(Base):
     __table_args__ = (
         Index("ix_demand_files_demand_created", "demand_id", "created_at"),
         UniqueConstraint("storage_bucket", "storage_path", name="uq_demand_file_storage_path"),
+        UniqueConstraint(
+            "demand_id",
+            "source_system",
+            "external_id",
+            name="uq_demand_file_external",
+        ),
         {"schema": "app"},
     )
 
@@ -841,11 +870,17 @@ class DemandFile(Base):
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
     )
     original_name: Mapped[str] = mapped_column(String(255))
-    storage_bucket: Mapped[str] = mapped_column(String(100))
-    storage_path: Mapped[str] = mapped_column(String(700))
+    storage_bucket: Mapped[str | None] = mapped_column(String(100))
+    storage_path: Mapped[str | None] = mapped_column(String(700))
     content_type: Mapped[str] = mapped_column(String(160))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
+    source_system: Mapped[str | None] = mapped_column(String(30))
+    external_id: Mapped[str | None] = mapped_column(String(100))
+    external_url: Mapped[str | None] = mapped_column(Text)
+    import_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.trello_import_batches.id", ondelete="SET NULL")
+    )
     is_cover: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -955,7 +990,9 @@ class TrelloImportBatch(Base):
 class TrelloCardLink(Base):
     __tablename__ = "trello_card_links"
     __table_args__ = (
-        UniqueConstraint("organization_id", "board_id", "card_id", name="uq_trello_card_org_board_card"),
+        UniqueConstraint(
+            "organization_id", "board_id", "card_id", name="uq_trello_card_org_board_card"
+        ),
         Index("ix_trello_card_link_demand", "demand_id"),
         {"schema": "app"},
     )

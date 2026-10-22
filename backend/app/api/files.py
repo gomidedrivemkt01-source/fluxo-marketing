@@ -70,6 +70,8 @@ class DemandFileOut(BaseModel):
     can_delete: bool = Field(alias="canDelete")
     is_cover: bool = Field(alias="isCover")
     can_set_cover: bool = Field(alias="canSetCover")
+    is_external: bool = Field(alias="isExternal")
+    source_label: str | None = Field(alias="sourceLabel")
     created_at: datetime = Field(alias="createdAt")
 
 
@@ -159,6 +161,8 @@ def _file_out(item: DemandFile, uploader: UserProfile, principal: Principal) -> 
         can_delete=can_delete_file(principal, item),
         is_cover=bool(item.is_cover),
         can_set_cover=item.content_type in COVER_FILE_TYPES,
+        is_external=bool(item.external_url),
+        source_label="Trello" if item.source_system == "trello" else None,
         created_at=item.created_at,
     )
 
@@ -307,9 +311,7 @@ async def upload_file(
     demand = _get_demand(db, demand_id, principal)
     original_name, content_type, safe_name = normalize_upload(file.filename, file.content_type)
     contents, sha256 = await read_upload(file, settings.storage_max_file_size)
-    object_path = (
-        f"{demand.organization_id}/{demand.id}/{uuid.uuid4().hex}/{safe_name}"
-    )
+    object_path = f"{demand.organization_id}/{demand.id}/{uuid.uuid4().hex}/{safe_name}"
 
     await _with_storage_token(
         lambda token: storage.upload(object_path, contents, content_type, token),
@@ -362,7 +364,9 @@ async def upload_file(
                 lambda token: storage.remove(object_path, token), principal, settings, db
             )
         except (ApiError, StorageAuthenticationError):
-            logger.exception("Falha ao remover objeto órfão do Storage", extra={"path": object_path})
+            logger.exception(
+                "Falha ao remover objeto órfão do Storage", extra={"path": object_path}
+            )
         raise
     return _file_out(item, principal.profile, principal)
 
@@ -383,9 +387,19 @@ async def sign_file_download(
     require_permission(principal, "demands:read")
     demand = _get_demand(db, demand_id, principal)
     item = _get_file(db, demand, file_id)
+    if item.external_url:
+        return SignedFileOut(
+            url=item.external_url,
+            expires_at=utc_now() + timedelta(days=3650),
+        )
+    storage_path = item.storage_path
+    if not storage_path:
+        raise ApiError(
+            404, "file_content_not_found", "O conteúdo deste arquivo não está disponível."
+        )
     url = await _with_storage_token(
         lambda token: storage.create_signed_url(
-            item.storage_path,
+            storage_path,
             token,
             settings.storage_signed_url_ttl,
             item.original_name,
@@ -475,9 +489,20 @@ async def preview_image(
     item = _get_file(db, demand, file_id)
     if not item.content_type.startswith("image/"):
         raise ApiError(422, "file_preview_not_supported", "Este arquivo não é uma imagem.")
+    if item.external_url:
+        return RedirectResponse(
+            item.external_url,
+            status_code=307,
+            headers={"Cache-Control": "private, max-age=60"},
+        )
+    storage_path = item.storage_path
+    if not storage_path:
+        raise ApiError(
+            404, "file_content_not_found", "O conteúdo desta imagem não está disponível."
+        )
     if item.content_type in TIFF_FILE_TYPES:
         contents = await _with_storage_token(
-            lambda token: storage.download(item.storage_path, token),
+            lambda token: storage.download(storage_path, token),
             principal,
             settings,
             db,
@@ -489,7 +514,7 @@ async def preview_image(
         )
     url = await _with_storage_token(
         lambda token: storage.create_signed_url(
-            item.storage_path,
+            storage_path,
             token,
             settings.storage_signed_url_ttl,
             None,

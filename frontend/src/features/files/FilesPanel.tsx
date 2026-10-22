@@ -16,6 +16,8 @@ type DemandFile = {
   canDelete: boolean;
   isCover: boolean;
   canSetCover: boolean;
+  isExternal: boolean;
+  sourceLabel: string | null;
   createdAt: string;
 };
 
@@ -316,7 +318,7 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
               {item.contentType.startsWith("image/") ? <button type="button" className="file-icon file-open" onClick={() => openViewer(item)} title={`Visualizar ${item.name}`}><img src={previewUrl(demandId, item.id)} alt="" loading="lazy" /></button> : <span className="file-icon">{fileIcon(item.contentType)}</span>}
               <div className="file-copy">
                 <strong title={item.name}>{item.name}</strong>
-                <span>{fileSize(item.sizeBytes)} · {item.uploaderName} · {fileDate(item.createdAt)}</span>
+                <span>{fileSize(item.sizeBytes)} · {item.uploaderName} · {fileDate(item.createdAt)}{item.sourceLabel ? ` · Origem ${item.sourceLabel}` : ""}</span>
                 <small title={item.sha256}>SHA-256 {item.sha256.slice(0, 16)}…</small>
               </div>
               <div className="file-actions">

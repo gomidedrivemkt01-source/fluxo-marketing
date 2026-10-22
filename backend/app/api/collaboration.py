@@ -133,12 +133,13 @@ def _activity_from_comment(
 
 
 def _activity_from_update(update: DemandUpdate, author: UserProfile) -> ActivityItemOut:
+    raw_content = (update.payload or {}).get("content")
     return ActivityItemOut(
         id=update.id,
         item_type="event",
         kind=update.kind,
         summary=update.summary,
-        content=None,
+        content=str(raw_content) if raw_content else None,
         actor_id=author.id,
         actor_name=author.full_name,
         actor_avatar_url=_avatar_url(author),
@@ -176,9 +177,7 @@ def list_activity(
     if before:
         comments_query = comments_query.where(Comment.created_at < before)
         updates_query = updates_query.where(DemandUpdate.created_at < before)
-    comments = list(
-        db.scalars(comments_query.order_by(Comment.created_at.desc()).limit(limit + 1))
-    )
+    comments = list(db.scalars(comments_query.order_by(Comment.created_at.desc()).limit(limit + 1)))
     updates = list(
         db.scalars(updates_query.order_by(DemandUpdate.created_at.desc()).limit(limit + 1))
     )

@@ -7,7 +7,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError
-from app.api.governance import imported_demand_sources, trello_reset_preview
+from app.api.governance import (
+    imported_demand_sources,
+    trello_action_description,
+    trello_reset_preview,
+    valid_external_url,
+)
 from app.governance import (
     best_named_match,
     best_profile_match,
@@ -17,6 +22,7 @@ from app.governance import (
     status_for_list,
     trello_category_code,
     trello_company_name,
+    trello_deadline_from_title,
     validate_trello_document,
 )
 from app.models import Demand, DemandUpdate
@@ -91,6 +97,29 @@ def test_maps_trello_lists_to_operational_status(name: str, expected: str) -> No
 def test_matches_accents_and_maps_priority() -> None:
     assert best_named_match("João Guimarães", [("one", "Joao Guimaraes")]) == "one"
     assert priority_for_card({}, "URGENTE (PRIORIDADE)", []) == "URGENT"
+
+
+@pytest.mark.parametrize(
+    ("title", "reference", "expected"),
+    [
+        (
+            "🟡 G. OLIVEIRA | BLOG | 04/12 | Tema",
+            datetime(2026, 10, 13, tzinfo=UTC),
+            datetime(2026, 12, 4, 20, tzinfo=UTC),
+        ),
+        (
+            "GOM | REELS | 21/10 - 2026 é ano de testar",
+            datetime(2025, 10, 13, tzinfo=UTC),
+            datetime(2026, 10, 21, 20, tzinfo=UTC),
+        ),
+        ("Card sem data", datetime(2026, 10, 13, tzinfo=UTC), None),
+        ("Data inválida 31/02", datetime(2026, 10, 13, tzinfo=UTC), None),
+    ],
+)
+def test_extracts_trello_deadline_from_title(
+    title: str, reference: datetime, expected: datetime | None
+) -> None:
+    assert trello_deadline_from_title(title, reference) == expected
 
 
 def test_matches_trello_members_by_name_tokens_and_email_username_typo() -> None:
@@ -230,3 +259,37 @@ def test_trello_reset_preview_blocks_physical_files_and_existing_demands() -> No
     assert preview["safeToReset"] is False
     assert preview["counts"]["files"] == 3
     assert preview["counts"]["linkedExistingDemands"] == 2
+
+
+def test_describes_trello_stage_change_but_skips_position_only_updates() -> None:
+    moved = trello_action_description(
+        {
+            "type": "updateCard",
+            "data": {
+                "listBefore": {"name": "Copy"},
+                "listAfter": {"name": "Aprovação"},
+            },
+        }
+    )
+    position_only = trello_action_description({"type": "updateCard", "data": {"old": {"pos": 123}}})
+
+    assert moved == (
+        "TRELLO_STAGE_CHANGED",
+        "Movido no Trello: Copy → Aprovação.",
+        None,
+    )
+    assert position_only is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("https://trello.com/c/example", "https://trello.com/c/example"),
+        ("http://example.com/file.png", "http://example.com/file.png"),
+        ("javascript:alert(1)", None),
+        ("/relative/file.png", None),
+        (None, None),
+    ],
+)
+def test_accepts_only_http_external_attachment_urls(value: object, expected: str | None) -> None:
+    assert valid_external_url(value) == expected

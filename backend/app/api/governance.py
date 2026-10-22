@@ -2,20 +2,25 @@
 
 import hashlib
 import logging
+import mimetypes
 import uuid
 from collections import Counter
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy import update as sql_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.demands import demand_revision_snapshot, ensure_workflow_version
+from app.api.demands import (
+    demand_revision_snapshot,
+    ensure_workflow_version,
+)
 from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
@@ -30,11 +35,13 @@ from app.governance import (
     status_for_list,
     trello_category_code,
     trello_company_name,
+    trello_deadline_from_title,
     trello_object_created_at,
     validate_trello_document,
 )
 from app.models import (
     AuditEvent,
+    Comment,
     Company,
     DailyImportItem,
     DataRetentionPolicy,
@@ -130,7 +137,12 @@ def trello_reset_preview(db: Session, organization_id: uuid.UUID) -> dict[str, A
         ),
         "updates": _count(db, DemandUpdate, DemandUpdate.demand_id.in_(imported_ids)),
         "todoItems": _count(db, DemandTodoItem, DemandTodoItem.demand_id.in_(imported_ids)),
-        "files": _count(db, DemandFile, DemandFile.demand_id.in_(imported_ids)),
+        "files": _count(
+            db,
+            DemandFile,
+            DemandFile.demand_id.in_(imported_ids),
+            or_(DemandFile.source_system.is_(None), DemandFile.source_system != "trello"),
+        ),
         "revisions": _count(
             db,
             DemandRevision,
@@ -140,9 +152,7 @@ def trello_reset_preview(db: Session, organization_id: uuid.UUID) -> dict[str, A
         "dailyLinks": _count(
             db, DailyImportItem, DailyImportItem.target_demand_id.in_(imported_ids)
         ),
-        "cardLinks": _count(
-            db, TrelloCardLink, TrelloCardLink.organization_id == organization_id
-        ),
+        "cardLinks": _count(db, TrelloCardLink, TrelloCardLink.organization_id == organization_id),
         "batches": _count(
             db, TrelloImportBatch, TrelloImportBatch.organization_id == organization_id
         ),
@@ -214,9 +224,7 @@ def reset_trello_imports(
                 applied_at=None,
             )
         )
-    db.execute(
-        delete(TrelloCardLink).where(TrelloCardLink.organization_id == organization_id)
-    )
+    db.execute(delete(TrelloCardLink).where(TrelloCardLink.organization_id == organization_id))
     if demand_ids:
         db.execute(
             delete(DemandRevision).where(
@@ -453,6 +461,25 @@ def import_preview(
         warnings.append(
             "Este mesmo arquivo já possui um lote registrado e não poderá ser aplicado novamente."
         )
+    action_items = [item for item in document.get("actions", []) if isinstance(item, dict)]
+    attachment_count = sum(
+        len(card.get("attachments", []))
+        for card in document["cards"]
+        if isinstance(card.get("attachments", []), list)
+    )
+    checklist_item_count = sum(
+        len(item.get("checkItems", []))
+        for item in checklists.values()
+        if isinstance(item.get("checkItems", []), list)
+    )
+    inferred_deadline_count = sum(
+        1
+        for card in document["cards"]
+        if not card.get("due")
+        and trello_deadline_from_title(
+            str(card.get("name") or ""), parse_source_datetime(card.get("dateLastActivity"))
+        )
+    )
     return {
         "filename": "",
         "documentHash": hashlib.sha256(raw).hexdigest(),
@@ -464,6 +491,11 @@ def import_preview(
             "members": len(members),
             "labels": len(labels),
             "checklists": len(checklists),
+            "checklistItems": checklist_item_count,
+            "attachments": attachment_count,
+            "comments": sum(1 for item in action_items if item.get("type") == "commentCard"),
+            "historyActions": len(action_items),
+            "titleDeadlines": inferred_deadline_count,
             "new": new_cards,
             "changed": changed_cards,
             "unchanged": unchanged_cards,
@@ -565,6 +597,371 @@ def mapped_profile(
         if matched:
             return uuid.UUID(matched)
     return None
+
+
+def mapped_member_profile(
+    member_id: Any, members: dict[str, Any], profiles: list[UserProfile]
+) -> uuid.UUID | None:
+    member = members.get(str(member_id), {})
+    name = str(member.get("fullName") or member.get("username") or "")
+    matched = best_profile_match(
+        name,
+        [(str(item.id), item.full_name, item.email) for item in profiles],
+    )
+    return uuid.UUID(matched) if matched else None
+
+
+def trello_actions_by_card(document: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for action in document.get("actions", []):
+        if not isinstance(action, dict) or not action.get("id"):
+            continue
+        raw_data = action.get("data")
+        data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+        raw_card = data.get("card")
+        card: dict[str, Any] = raw_card if isinstance(raw_card, dict) else {}
+        card_id = card.get("id") or data.get("idCard")
+        if card_id:
+            result.setdefault(str(card_id), []).append(action)
+    for actions in result.values():
+        actions.sort(key=lambda item: str(item.get("date") or ""))
+    return result
+
+
+def trello_action_description(action: dict[str, Any]) -> tuple[str, str, str | None] | None:
+    action_type = str(action.get("type") or "")
+    raw_data = action.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    if action_type == "updateCard":
+        raw_before = data.get("listBefore")
+        raw_after = data.get("listAfter")
+        before: dict[str, Any] | None = raw_before if isinstance(raw_before, dict) else None
+        after: dict[str, Any] | None = raw_after if isinstance(raw_after, dict) else None
+        if before and after:
+            return (
+                "TRELLO_STAGE_CHANGED",
+                f"Movido no Trello: {before.get('name', 'etapa anterior')} → {after.get('name', 'nova etapa')}.",
+                None,
+            )
+        raw_old = data.get("old")
+        old: dict[str, Any] = raw_old if isinstance(raw_old, dict) else {}
+        if "name" in old:
+            return ("TRELLO_CARD_UPDATED", "Título alterado no Trello.", str(old.get("name") or ""))
+        if "desc" in old:
+            return ("TRELLO_CARD_UPDATED", "Descrição alterada no Trello.", None)
+        if "due" in old:
+            return ("TRELLO_CARD_UPDATED", "Prazo alterado no Trello.", None)
+        if "closed" in old:
+            raw_card = data.get("card")
+            card: dict[str, Any] = raw_card if isinstance(raw_card, dict) else {}
+            state = "arquivado" if card.get("closed") else "reaberto"
+            return ("TRELLO_CARD_UPDATED", f"Card {state} no Trello.", None)
+        return None
+    if action_type == "addMemberToCard":
+        raw_member = data.get("member")
+        member: dict[str, Any] = raw_member if isinstance(raw_member, dict) else {}
+        return (
+            "TRELLO_MEMBER_ADDED",
+            f"{member.get('name') or member.get('fullName') or 'Um membro'} foi adicionado no Trello.",
+            None,
+        )
+    if action_type == "removeMemberFromCard":
+        raw_member = data.get("member")
+        member = raw_member if isinstance(raw_member, dict) else {}
+        return (
+            "TRELLO_MEMBER_REMOVED",
+            f"{member.get('name') or member.get('fullName') or 'Um membro'} foi removido no Trello.",
+            None,
+        )
+    if action_type in {"addAttachmentToCard", "deleteAttachmentFromCard"}:
+        raw_attachment = data.get("attachment")
+        attachment: dict[str, Any] = raw_attachment if isinstance(raw_attachment, dict) else {}
+        added = action_type == "addAttachmentToCard"
+        return (
+            "TRELLO_ATTACHMENT_ADDED" if added else "TRELLO_ATTACHMENT_REMOVED",
+            f"Anexo {'adicionado' if added else 'removido'} no Trello: {attachment.get('name') or 'arquivo'}.",
+            str(attachment.get("url") or "") or None,
+        )
+    if action_type == "updateCheckItemStateOnCard":
+        raw_item = data.get("checkItem")
+        check_item: dict[str, Any] = raw_item if isinstance(raw_item, dict) else {}
+        complete = check_item.get("state") == "complete"
+        return (
+            "TRELLO_CHECKLIST_UPDATED",
+            f"Checklist {'concluído' if complete else 'reaberto'} no Trello: {check_item.get('name') or 'item'}.",
+            None,
+        )
+    summaries = {
+        "createCard": "Card criado no Trello.",
+        "copyCard": "Card copiado no Trello.",
+        "moveCardFromBoard": "Card movido de outro quadro do Trello.",
+        "moveCardToBoard": "Card movido para este quadro do Trello.",
+        "deleteCard": "Card excluído no Trello.",
+        "addChecklistToCard": "Checklist adicionado no Trello.",
+    }
+    if summary := summaries.get(action_type):
+        return (f"TRELLO_{action_type.upper()}", summary, None)
+    return None
+
+
+def valid_external_url(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    parsed = urlparse(value)
+    return value if parsed.scheme in {"http", "https"} and parsed.netloc else None
+
+
+def import_trello_attachments(
+    db: Session,
+    *,
+    demand: Demand,
+    attachments: list[dict[str, Any]],
+    members: dict[str, Any],
+    profiles: list[UserProfile],
+    principal: Principal,
+    batch: TrelloImportBatch,
+    is_new_demand: bool,
+) -> tuple[int, int]:
+    existing = (
+        {}
+        if is_new_demand
+        else {
+            item.external_id: item
+            for item in db.scalars(
+                select(DemandFile).where(
+                    DemandFile.demand_id == demand.id,
+                    DemandFile.source_system == "trello",
+                    DemandFile.external_id.is_not(None),
+                )
+            )
+        }
+    )
+    created = updated = 0
+    for raw in attachments:
+        if not isinstance(raw, dict):
+            continue
+        external_url = valid_external_url(raw.get("url"))
+        if not external_url:
+            continue
+        external_id = str(raw.get("id") or hashlib.sha256(external_url.encode()).hexdigest())[:100]
+        original_name = str(raw.get("name") or raw.get("fileName") or "Anexo do Trello")[:255]
+        content_type = str(raw.get("mimeType") or "").strip().lower()
+        if not content_type:
+            content_type = mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+        item = existing.get(external_id)
+        uploader_id = mapped_member_profile(raw.get("idMember"), members, profiles)
+        if item:
+            item.original_name = original_name
+            item.external_url = external_url
+            item.content_type = content_type[:160]
+            item.size_bytes = max(0, int(raw.get("bytes") or 0))
+            item.import_batch_id = batch.id
+            item.updated_at = utc_now()
+            updated += 1
+            continue
+        item = DemandFile(
+            organization_id=demand.organization_id,
+            demand_id=demand.id,
+            uploaded_by=uploader_id or principal.profile.id,
+            original_name=original_name,
+            storage_bucket=None,
+            storage_path=None,
+            content_type=content_type[:160],
+            size_bytes=max(0, int(raw.get("bytes") or 0)),
+            sha256=hashlib.sha256(external_url.encode()).hexdigest(),
+            source_system="trello",
+            external_id=external_id,
+            external_url=external_url,
+            import_batch_id=batch.id,
+            created_at=parse_source_datetime(raw.get("date")) or demand.created_at,
+        )
+        db.add(item)
+        existing[external_id] = item
+        created += 1
+    return created, updated
+
+
+def import_trello_todos(
+    db: Session,
+    *,
+    demand: Demand,
+    checklists: list[dict[str, Any]],
+    principal: Principal,
+    batch: TrelloImportBatch,
+    completed_at: Any,
+    is_new_demand: bool,
+) -> tuple[int, int]:
+    items = (
+        []
+        if is_new_demand
+        else list(
+            db.scalars(
+                select(DemandTodoItem)
+                .where(DemandTodoItem.demand_id == demand.id, DemandTodoItem.deleted_at.is_(None))
+                .order_by(DemandTodoItem.position)
+            )
+        )
+    )
+    existing = {
+        item.external_id: item
+        for item in items
+        if item.source_system == "trello" and item.external_id
+    }
+    legacy: dict[str, list[DemandTodoItem]] = {}
+    for item in items:
+        if not item.source_system:
+            legacy.setdefault(" ".join(item.title.casefold().split()), []).append(item)
+    created = updated = position = 0
+    for checklist in checklists:
+        for raw in checklist.get("checkItems", []):
+            if not isinstance(raw, dict):
+                continue
+            position += 1
+            external_id = str(raw.get("id") or "")[:100]
+            if not external_id:
+                continue
+            title = str(raw.get("name") or "Item importado")[:240]
+            completed = raw.get("state") == "complete"
+            todo_item = existing.get(external_id)
+            if not todo_item:
+                candidates = legacy.get(" ".join(title.casefold().split()), [])
+                if len(candidates) == 1:
+                    todo_item = candidates[0]
+                    todo_item.source_system = "trello"
+                    todo_item.external_id = external_id
+                    existing[external_id] = todo_item
+            if todo_item:
+                todo_item.title = title
+                todo_item.position = position
+                todo_item.completed = completed
+                todo_item.completed_by = principal.profile.id if completed else None
+                todo_item.completed_at = completed_at if completed else None
+                todo_item.import_batch_id = batch.id
+                todo_item.updated_at = utc_now()
+                updated += 1
+                continue
+            todo = DemandTodoItem(
+                organization_id=demand.organization_id,
+                demand_id=demand.id,
+                title=title,
+                position=position,
+                completed=completed,
+                completed_by=principal.profile.id if completed else None,
+                completed_at=completed_at if completed else None,
+                created_by=principal.profile.id,
+                source_system="trello",
+                external_id=external_id,
+                import_batch_id=batch.id,
+            )
+            db.add(todo)
+            existing[external_id] = todo
+            created += 1
+    return created, updated
+
+
+def import_trello_activity(
+    db: Session,
+    *,
+    demand: Demand,
+    actions: list[dict[str, Any]],
+    members: dict[str, Any],
+    profiles: list[UserProfile],
+    principal: Principal,
+    batch: TrelloImportBatch,
+    is_new_demand: bool,
+) -> tuple[int, int]:
+    action_ids = [str(item.get("id")) for item in actions if item.get("id")]
+    if not action_ids:
+        return 0, 0
+    comment_ids = (
+        set()
+        if is_new_demand
+        else set(
+            db.scalars(
+                select(Comment.external_id).where(
+                    Comment.source_system == "trello", Comment.external_id.in_(action_ids)
+                )
+            )
+        )
+    )
+    update_ids = (
+        set()
+        if is_new_demand
+        else set(
+            db.scalars(
+                select(DemandUpdate.external_id).where(
+                    DemandUpdate.source_system == "trello", DemandUpdate.external_id.in_(action_ids)
+                )
+            )
+        )
+    )
+    comments = history = 0
+    for action in actions:
+        action_id = str(action.get("id") or "")
+        if not action_id:
+            continue
+        actor_id = mapped_member_profile(action.get("idMemberCreator"), members, profiles)
+        raw_member = action.get("memberCreator")
+        member: dict[str, Any] = raw_member if isinstance(raw_member, dict) else {}
+        actor_name = str(member.get("fullName") or member.get("username") or "Usuário do Trello")
+        created_at = parse_source_datetime(action.get("date")) or demand.created_at
+        raw_data = action.get("data")
+        data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+        if action.get("type") == "commentCard":
+            if action_id in comment_ids:
+                continue
+            content = str(data.get("text") or "").strip()
+            if not content:
+                continue
+            if not actor_id:
+                content = f"Comentário de {actor_name} no Trello:\n\n{content}"
+            db.add(
+                Comment(
+                    demand_id=demand.id,
+                    author_id=actor_id or principal.profile.id,
+                    content=content,
+                    source_system="trello",
+                    external_id=action_id,
+                    import_batch_id=batch.id,
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+            )
+            comment_ids.add(action_id)
+            comments += 1
+            continue
+        if action_id in update_ids:
+            continue
+        description = trello_action_description(action)
+        if not description:
+            continue
+        kind, summary, event_content = description
+        if not actor_id:
+            summary = f"{actor_name}: {summary}"
+        db.add(
+            DemandUpdate(
+                demand_id=demand.id,
+                created_by=actor_id or principal.profile.id,
+                kind=kind,
+                summary=summary,
+                payload={
+                    "content": event_content,
+                    "trelloAction": {
+                        "id": action_id,
+                        "type": action.get("type"),
+                        "data": data,
+                        "memberName": actor_name,
+                    },
+                },
+                source_system="trello",
+                external_id=action_id,
+                import_batch_id=batch.id,
+                created_at=created_at,
+            )
+        )
+        update_ids.add(action_id)
+        history += 1
+    return comments, history
 
 
 def mapped_category(
@@ -797,7 +1194,10 @@ def apply_trello_enrichment(
     require_admin(principal)
     items, preview = trello_enrichment_plan(db, principal, lock=True)
     if not items:
-        return {**preview, "applied": {"demands": 0, "companies": 0, "categories": 0, "workflows": 0}}
+        return {
+            **preview,
+            "applied": {"demands": 0, "companies": 0, "categories": 0, "workflows": 0},
+        }
     context = import_context(db, principal)
     workflow_cache: dict[uuid.UUID, dict[str, Any]] = {}
     now = utc_now()
@@ -854,7 +1254,9 @@ def apply_trello_enrichment(
                         ),
                         "categoryId": str(demand.category_id) if demand.category_id else None,
                         "workflowId": str(demand.workflow_id) if demand.workflow_id else None,
-                        "stageId": str(demand.current_stage_id) if demand.current_stage_id else None,
+                        "stageId": str(demand.current_stage_id)
+                        if demand.current_stage_id
+                        else None,
                     },
                     "workflowPreserved": bool(item["workflowProtected"]),
                 },
@@ -917,6 +1319,11 @@ async def apply_trello(
             )
         )
     }
+    actions_by_card = trello_actions_by_card(document)
+    linked_demands = [
+        demand for link in links.values() if (demand := db.get(Demand, link.demand_id)) is not None
+    ]
+    _, protected_demands = imported_demand_sources(db, linked_demands)
     new_total = sum(1 for card in document["cards"] if str(card["id"]) not in links)
     public_ids = iter(allocate_public_ids(db, new_total))
     now = utc_now()
@@ -939,6 +1346,10 @@ async def apply_trello(
     changes: list[dict[str, Any]] = []
     workflow_cache: dict[uuid.UUID, dict[str, Any]] = {}
     created = updated = unchanged = archived = 0
+    imported_comments = imported_history = 0
+    created_attachments = updated_attachments = 0
+    created_todos = updated_todos = 0
+    inferred_deadlines = 0
     try:
         for card in document["cards"]:
             card_id = str(card["id"])
@@ -947,12 +1358,8 @@ async def apply_trello(
             )
             source_hash = canonical_hash(source)
             link = links.get(card_id)
-            if link and link.source_hash == source_hash:
-                unchanged += 1
-                continue
-            if link and not update_existing:
-                unchanged += 1
-                continue
+            source_changed = not link or link.source_hash != source_hash
+            update_card = bool(not link or (source_changed and update_existing))
             list_name = str(lists[str(card["idList"])].get("name", ""))
             status = status_for_list(list_name)
             label_names = [
@@ -968,55 +1375,63 @@ async def apply_trello(
             )
             stage = stage_for_list(list_name, status, import_bundle["stages"])
             due = parse_source_datetime(card.get("due"))
+            if not due:
+                due = trello_deadline_from_title(str(card.get("name") or ""), source_updated_at)
+                if due:
+                    inferred_deadlines += 1
             source_completed_old = status == "COMPLETED" and bool(
                 source_updated_at and source_updated_at <= now - timedelta(days=60)
             )
             archived_at = now if card.get("closed") or source_completed_old else None
             if link:
+                is_new_demand = False
                 demand = db.get(Demand, link.demand_id)
                 if not demand or demand.organization_id != organization_id:
                     raise ApiError(
                         409, "trello_link_invalid", f"Vínculo inválido para o cartão {card_id}."
                     )
-                changes.append(
-                    {
-                        "kind": "updated",
-                        "demandId": str(demand.id),
-                        "cardId": card_id,
-                        "before": demand_state(demand),
-                        "previousLink": {
-                            "sourceHash": link.source_hash,
-                            "lastImportId": str(link.last_import_id),
-                            "sourceUpdatedAt": jsonable_encoder(link.source_updated_at),
-                        },
-                    }
-                )
-                updated += 1
-                demand.title = " ".join(str(card["name"]).split())[:300]
-                demand.description = str(card.get("desc") or "") or None
-                if demand.primary_company_id is None:
-                    demand.primary_company_id = company_id
-                if demand.category_id is None:
-                    demand.category_id = category_id
-                demand.current_assignee_id = assignee_id
-                # Reimportações preservam a organização manual do workflow existente.
-                if demand.workflow_id is None:
-                    demand.current_stage_id = stage.id
-                    demand.workflow_id = import_bundle["workflow"].id
-                    demand.workflow_version_id = import_bundle["version"].id
-                demand.status = status
-                demand.priority = priority_for_card(card, list_name, label_names)
-                demand.deadline_at = due
-                demand.archived_at = archived_at
-                demand.deleted_at = None
-                demand.source = "trello_import"
-                demand.revision += 1
-                demand.updated_at = now
-                link.last_import_id = batch.id
-                link.source_hash = source_hash
-                link.source_updated_at = source_updated_at
-                link.updated_at = now
+                if update_card:
+                    changes.append(
+                        {
+                            "kind": "updated",
+                            "demandId": str(demand.id),
+                            "cardId": card_id,
+                            "before": demand_state(demand),
+                            "previousLink": {
+                                "sourceHash": link.source_hash,
+                                "lastImportId": str(link.last_import_id),
+                                "sourceUpdatedAt": jsonable_encoder(link.source_updated_at),
+                            },
+                        }
+                    )
+                    updated += 1
+                    demand.title = " ".join(str(card["name"]).split())[:300]
+                    demand.description = str(card.get("desc") or "") or None
+                    if demand.primary_company_id is None:
+                        demand.primary_company_id = company_id
+                    if demand.category_id is None:
+                        demand.category_id = category_id
+                    if demand.id not in protected_demands:
+                        demand.current_assignee_id = assignee_id
+                        demand.current_stage_id = stage.id
+                        demand.workflow_id = import_bundle["workflow"].id
+                        demand.workflow_version_id = import_bundle["version"].id
+                    demand.status = status
+                    demand.priority = priority_for_card(card, list_name, label_names)
+                    demand.deadline_at = due
+                    demand.archived_at = archived_at
+                    demand.deleted_at = None
+                    demand.source = "trello_import"
+                    demand.revision += 1
+                    demand.updated_at = now
+                    link.last_import_id = batch.id
+                    link.source_hash = source_hash
+                    link.source_updated_at = source_updated_at
+                    link.updated_at = now
+                else:
+                    unchanged += 1
             else:
+                is_new_demand = True
                 demand = Demand(
                     id=uuid.uuid4(),
                     organization_id=organization_id,
@@ -1051,39 +1466,71 @@ async def apply_trello(
                 db.add(link)
                 changes.append({"kind": "created", "demandId": str(demand.id), "cardId": card_id})
                 created += 1
-                position = 0
-                for checklist in source.get("checklists", []):
-                    for check_item in checklist.get("checkItems", []):
-                        position += 1
-                        completed = check_item.get("state") == "complete"
-                        db.add(
-                            DemandTodoItem(
-                                organization_id=organization_id,
-                                demand_id=demand.id,
-                                title=str(check_item.get("name") or "Item importado")[:240],
-                                position=position,
-                                completed=completed,
-                                completed_by=principal.profile.id if completed else None,
-                                completed_at=source_updated_at if completed else None,
-                                created_by=principal.profile.id,
-                            )
-                        )
-            if archived_at:
-                archived += 1
-            db.add(
-                DemandUpdate(
-                    demand_id=demand.id,
-                    created_by=principal.profile.id,
-                    kind="trello_import",
-                    summary=f"Cartão importado do Trello: {document['name']}",
-                    payload={"trello": source, "batchId": str(batch.id)},
-                )
+            attachment_counts = import_trello_attachments(
+                db,
+                demand=demand,
+                attachments=source.get("attachments", []),
+                members=members,
+                profiles=context["profiles"],
+                principal=principal,
+                batch=batch,
+                is_new_demand=is_new_demand,
             )
+            created_attachments += attachment_counts[0]
+            updated_attachments += attachment_counts[1]
+            todo_counts = import_trello_todos(
+                db,
+                demand=demand,
+                checklists=source.get("checklists", []),
+                principal=principal,
+                batch=batch,
+                completed_at=source_updated_at,
+                is_new_demand=is_new_demand,
+            )
+            created_todos += todo_counts[0]
+            updated_todos += todo_counts[1]
+            activity_counts = import_trello_activity(
+                db,
+                demand=demand,
+                actions=actions_by_card.get(card_id, []),
+                members=members,
+                profiles=context["profiles"],
+                principal=principal,
+                batch=batch,
+                is_new_demand=is_new_demand,
+            )
+            imported_comments += activity_counts[0]
+            imported_history += activity_counts[1]
+            if update_card and archived_at:
+                archived += 1
+            if update_card:
+                db.add(
+                    DemandUpdate(
+                        demand_id=demand.id,
+                        created_by=principal.profile.id,
+                        kind="trello_import",
+                        summary=f"Cartão importado do Trello: {document['name']}",
+                        payload={"trello": source, "batchId": str(batch.id)},
+                    )
+                )
         batch.created_cards = created
         batch.updated_cards = updated
         batch.unchanged_cards = unchanged
         batch.archived_cards = archived
-        batch.summary_json = {"preview": preview, "updateExisting": update_existing}
+        enrichment = {
+            "comments": imported_comments,
+            "historyEvents": imported_history,
+            "attachmentsCreated": created_attachments,
+            "attachmentsUpdated": updated_attachments,
+            "checklistItemsCreated": created_todos,
+            "checklistItemsUpdated": updated_todos,
+            "deadlinesInferredFromTitles": inferred_deadlines,
+        }
+        batch.summary_json = {
+            "preview": preview,
+            "updateExisting": update_existing,
+            "enrichment": enrichment,
+        }
         batch.changes_json = changes
         db.add(
             AuditEvent(
@@ -1097,6 +1544,7 @@ async def apply_trello(
                     "updated": updated,
                     "unchanged": unchanged,
                     "archived": archived,
+                    **enrichment,
                 },
             )
         )
@@ -1138,6 +1586,15 @@ async def apply_trello(
         "updated": updated,
         "unchanged": unchanged,
         "archived": archived,
+        "enrichment": {
+            "comments": imported_comments,
+            "historyEvents": imported_history,
+            "attachmentsCreated": created_attachments,
+            "attachmentsUpdated": updated_attachments,
+            "checklistItemsCreated": created_todos,
+            "checklistItemsUpdated": updated_todos,
+            "deadlinesInferredFromTitles": inferred_deadlines,
+        },
     }
 
 
