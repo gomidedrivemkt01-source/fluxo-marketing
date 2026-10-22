@@ -53,7 +53,6 @@ type PersonalColumn = { id: string; name: string; color: string };
 type InterfaceColors = { sidebar: string; background: string; surface: string; text: string; primary: string; accent: string; highlight: string };
 type InterfaceTheme = { id: string; name: string; colors: InterfaceColors };
 type ViewPreferences = { demandView: "kanban" | "list"; showEmptyStages: boolean; stageOrder: string[]; focusView: FocusView; savedViews: SavedView[]; personalColumns: PersonalColumn[]; personalPlacements: Record<string, string>; activeThemeId: string; themeProfiles: InterfaceTheme[] };
-type BoardView = { profileId: string; name: string; personalColumns: PersonalColumn[]; personalPlacements: Record<string, string> };
 type DemandDetailTab = "overview" | "briefing" | "checklist" | "workflow" | "activity" | "time";
 type Demand = {
   id: string;
@@ -610,52 +609,163 @@ function PersonalColumnsModal({ preferences, onClose, onSave }: { preferences: V
   return <div className="modal-backdrop"><section className="form-modal compact-modal personal-columns-modal" role="dialog" aria-modal="true"><header className="modal-head"><div><span className="eyebrow dark">Área de trabalho pessoal</span><h2>Minhas colunas</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header><form className="modal-form" onSubmit={submit}>{error && <Notice>{error}</Notice>}<p className="form-intro">Estas colunas organizam apenas a sua visão. O workflow compartilhado de cada demanda continua igual.</p><div className="personal-column-editor">{columns.map((column, index) => <div key={column.id}><input type="color" value={column.color} onChange={(event) => setColumns((items) => items.map((item) => item.id === column.id ? { ...item, color: event.target.value } : item))} aria-label={`Cor de ${column.name}`} /><input value={column.name} minLength={2} maxLength={40} onChange={(event) => setColumns((items) => items.map((item) => item.id === column.id ? { ...item, name: event.target.value } : item))} required /><button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" disabled={index === columns.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" disabled={columns.length === 1} onClick={() => setColumns((items) => items.filter((item) => item.id !== column.id))}>×</button></div>)}</div><button className="secondary compact add-personal-column" type="button" disabled={columns.length >= 12} onClick={() => setColumns((items) => [...items, { id: crypto.randomUUID(), name: `Nova coluna ${items.length + 1}`, color: "#64748B" }])}>+ Adicionar coluna</button><footer className="form-actions"><button className="secondary compact" type="button" onClick={onClose}>Cancelar</button><button className="primary action-primary">Salvar colunas</button></footer></form></section></div>;
 }
 
-function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit, onOpen, onMoveStage, onPreferenceChange, onQuickCreate, onCalendar }: {
-  demands: Demand[]; stages: WorkflowStage[]; people: Person[]; companies: Company[]; profile: Profile | null; mine: boolean; canEdit: boolean;
-  onOpen: (demand: Demand) => void; onMoveStage: (demand: Demand, stageId: string) => void; onPreferenceChange: (preferences: ViewPreferences) => void; onQuickCreate: (title: string, deadlineAt: string | null) => Promise<void>; onCalendar: () => void;
+function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit, onOpen, onPreferenceChange, onCalendar }: {
+  demands: Demand[];
+  stages: WorkflowStage[];
+  people: Person[];
+  companies: Company[];
+  profile: Profile | null;
+  mine: boolean;
+  canEdit: boolean;
+  onOpen: (demand: Demand) => void;
+  onPreferenceChange: (preferences: ViewPreferences) => void;
+  onCalendar: () => void;
 }) {
-  const defaultColumns: PersonalColumn[] = [{ id: "inbox", name: "Entrada", color: "#64748B" }, { id: "planned", name: "Planejado", color: "#2563EB" }, { id: "doing", name: "Em andamento", color: "#0F766E" }, { id: "review", name: "Revisar", color: "#D97706" }, { id: "done", name: "Concluído", color: "#15803D" }];
-  const [query, setQuery] = useState(""); const [status, setStatus] = useState("ALL"); const [company, setCompany] = useState("ALL"); const [assignees, setAssignees] = useState<string[]>([]); const [priority, setPriority] = useState("ALL");
-  const [quickBusy, setQuickBusy] = useState(false); const [quickError, setQuickError] = useState(""); const [showSaveView, setShowSaveView] = useState(false); const [showColumns, setShowColumns] = useState(false); const [remoteBoard, setRemoteBoard] = useState<BoardView | null>(null);
-  const [draggedDemandId, setDraggedDemandId] = useState(""); const [dragTargetId, setDragTargetId] = useState(""); const [droppedColumnId, setDroppedColumnId] = useState("");
-  const preferences = profile?.preferences ?? { demandView: "kanban" as const, showEmptyStages: true, stageOrder: [], focusView: "all" as const, savedViews: [], personalColumns: defaultColumns, personalPlacements: {}, activeThemeId: platformTheme.id, themeProfiles: [] };
-  const singleAssigneeId = assignees.length === 1 && assignees[0] !== "UNASSIGNED" ? assignees[0] : null;
-  useEffect(() => {
-    if (mine || !singleAssigneeId) { setRemoteBoard(null); return; }
-    let live = true; api<BoardView>(`/users/${singleAssigneeId}/board-view`).then((data) => { if (live) setRemoteBoard(data); }).catch(() => { if (live) setRemoteBoard(null); });
-    return () => { live = false; };
-  }, [mine, singleAssigneeId]);
+  const defaultColumns: PersonalColumn[] = [
+    { id: "inbox", name: "Entrada", color: "#64748B" },
+    { id: "planned", name: "Planejado", color: "#2563EB" },
+    { id: "doing", name: "Em andamento", color: "#0F766E" },
+    { id: "review", name: "Revisar", color: "#D97706" },
+    { id: "done", name: "Concluído", color: "#15803D" },
+  ];
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("ALL");
+  const [company, setCompany] = useState("ALL");
+  const [assignees, setAssignees] = useState<string[]>([]);
+  const [priority, setPriority] = useState("ALL");
+  const [stage, setStage] = useState("ALL");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [showSaveView, setShowSaveView] = useState(false);
+  const [showColumns, setShowColumns] = useState(false);
+  const [draggedDemandId, setDraggedDemandId] = useState("");
+  const [dragTargetId, setDragTargetId] = useState("");
+  const [droppedColumnId, setDroppedColumnId] = useState("");
+  const preferences = profile?.preferences ?? {
+    demandView: "kanban" as const,
+    showEmptyStages: true,
+    stageOrder: [],
+    focusView: "all" as const,
+    savedViews: [],
+    personalColumns: defaultColumns,
+    personalPlacements: {},
+    activeThemeId: platformTheme.id,
+    themeProfiles: [],
+  };
   const counts = useMemo(() => profile ? focusCounts(demands, profile.profileId, profile.timezone) : null, [demands, profile]);
-  const orderedStages = useMemo(() => { const order = new Map(preferences.stageOrder.map((id, index) => [id, index])); return [...stages].sort((a, b) => (order.get(a.id) ?? a.position + stages.length) - (order.get(b.id) ?? b.position + stages.length)); }, [stages, preferences.stageOrder]);
-  const visible = useMemo(() => demands.filter((demand) => { const needle = query.trim().toLocaleLowerCase("pt-BR"); const matchesAssignee = !assignees.length || (assignees.includes("UNASSIGNED") && !demand.assigneeId) || Boolean(demand.assigneeId && assignees.includes(demand.assigneeId)); return (!mine || Boolean(profile && matchesFocus(demand, preferences.focusView, profile.profileId, profile.timezone))) && (status === "ALL" || demand.status === status) && (company === "ALL" || demand.primaryCompanyId === company) && matchesAssignee && (priority === "ALL" || demand.priority === priority) && (!needle || `${demand.publicId} ${demand.title} ${demand.companyName ?? ""} ${demand.assigneeName ?? ""}`.toLocaleLowerCase("pt-BR").includes(needle)); }), [demands, mine, profile, preferences.focusView, status, company, assignees, priority, query]);
-  const personalMode = mine || Boolean(singleAssigneeId);
-  const kanbanActive = preferences.demandView === "kanban" && assignees.length <= 1;
-  const boardOwner = mine ? (profile ? { profileId: profile.profileId, name: profile.name, personalColumns: preferences.personalColumns, personalPlacements: preferences.personalPlacements } : null) : remoteBoard;
-  const personalColumns = boardOwner?.personalColumns?.length ? boardOwner.personalColumns : defaultColumns; const placements = boardOwner?.personalPlacements ?? {};
-  const countFor = (stageId: string) => visible.filter((demand) => demand.stageId === stageId).length; const shownStages = orderedStages.filter((stage) => preferences.showEmptyStages || countFor(stage.id) > 0);
+  const visible = useMemo(() => demands.filter((demand) => {
+    const needle = query.trim().toLocaleLowerCase("pt-BR");
+    const matchesAssignee = !assignees.length
+      || (assignees.includes("UNASSIGNED") && !demand.assigneeId)
+      || Boolean(demand.assigneeId && assignees.includes(demand.assigneeId));
+    return (!mine || Boolean(profile && matchesFocus(demand, preferences.focusView, profile.profileId, profile.timezone)))
+      && (status === "ALL" || demand.status === status)
+      && (company === "ALL" || demand.primaryCompanyId === company)
+      && matchesAssignee
+      && (priority === "ALL" || demand.priority === priority)
+      && (stage === "ALL" || demand.stageId === stage)
+      && (!needle || `${demand.publicId} ${demand.title} ${demand.companyName ?? ""} ${demand.assigneeName ?? ""}`.toLocaleLowerCase("pt-BR").includes(needle));
+  }), [demands, mine, profile, preferences.focusView, status, company, assignees, priority, stage, query]);
+  const personalColumns = preferences.personalColumns.length ? preferences.personalColumns : defaultColumns;
+  const placements = preferences.personalPlacements;
   const currentFilters: SavedViewFilters = { query, companyId: company, status, priority, focusView: preferences.focusView };
-  const activeSavedId = preferences.savedViews.find((view) => view.query === query.trim() && view.companyId === company && view.status === status && view.priority === priority && view.focusView === preferences.focusView)?.id;
-  function beginDrag(event: React.DragEvent<HTMLElement>, demandId: string) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", demandId); setDraggedDemandId(demandId); }
+  const activeSavedId = stage === "ALL" ? preferences.savedViews.find((view) => view.query === query.trim() && view.companyId === company && view.status === status && view.priority === priority && view.focusView === preferences.focusView)?.id : undefined;
+  const activeFilterCount = (company !== "ALL" ? 1 : 0) + (status !== "ALL" ? 1 : 0) + (priority !== "ALL" ? 1 : 0) + (stage !== "ALL" ? 1 : 0) + assignees.length;
+  const currentFocus = focusOptions.find((item) => item.id === preferences.focusView) ?? focusOptions[0]!;
+  const galleryActive = !mine && preferences.demandView === "kanban";
+  const personalKanbanActive = mine && preferences.demandView === "kanban";
+
+  function beginDrag(event: React.DragEvent<HTMLElement>, demandId: string) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", demandId);
+    setDraggedDemandId(demandId);
+  }
   function finishDrag() { setDraggedDemandId(""); setDragTargetId(""); }
-  function celebrateDrop(columnId: string) { setDroppedColumnId(columnId); window.setTimeout(() => setDroppedColumnId((current) => current === columnId ? "" : current), 520); }
-  function dropStage(event: React.DragEvent, stageId: string) { event.preventDefault(); const demand = demands.find((item) => item.id === event.dataTransfer.getData("text/plain")); setDragTargetId(""); setDraggedDemandId(""); if (demand && demand.stageId !== stageId) { onMoveStage(demand, stageId); celebrateDrop(stageId); } }
-  function dropPersonal(event: React.DragEvent, columnId: string) { event.preventDefault(); setDragTargetId(""); setDraggedDemandId(""); if (!mine) return; const demandId = event.dataTransfer.getData("text/plain"); if (demandId) { onPreferenceChange({ ...preferences, personalPlacements: { ...preferences.personalPlacements, [demandId]: columnId } }); celebrateDrop(columnId); } }
-  async function quickCreate(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setQuickBusy(true); setQuickError(""); const form = event.currentTarget; const data = new FormData(form); try { await onQuickCreate(String(data.get("title") || ""), quickDeadline(String(data.get("schedule") || "none"))); form.reset(); } catch (caught) { setQuickError(messageFrom(caught)); } finally { setQuickBusy(false); } }
-  function applySavedView(view: SavedView) { setQuery(view.query); setCompany(view.companyId); setStatus(view.status); setPriority(view.priority); onPreferenceChange({ ...preferences, focusView: view.focusView }); }
-  function clearFilters() { setQuery(""); setCompany("ALL"); setStatus("ALL"); setPriority("ALL"); setAssignees([]); if (mine) onPreferenceChange({ ...preferences, focusView: "all" }); }
-  function saveCurrentView(name: string) { if (preferences.savedViews.length >= 12) throw new Error("Você pode manter até 12 visões salvas."); if (preferences.savedViews.some((view) => view.name.toLocaleLowerCase("pt-BR") === name.trim().toLocaleLowerCase("pt-BR"))) throw new Error("Já existe uma visão com esse nome."); onPreferenceChange({ ...preferences, savedViews: [...preferences.savedViews, buildSavedView(crypto.randomUUID(), name, currentFilters)] }); setShowSaveView(false); }
-  function removeSavedView(id: string) { onPreferenceChange({ ...preferences, savedViews: preferences.savedViews.filter((view) => view.id !== id) }); }
-  function toggleAssignee(id: string) { setAssignees((items) => items.includes(id) ? items.filter((value) => value !== id) : [...items, id]); }
-  function startTimer(demandId: string) { window.dispatchEvent(new CustomEvent("fluxo:timer-start-request", { detail: { demandId } })); }
+  function celebrateDrop(columnId: string) {
+    setDroppedColumnId(columnId);
+    window.setTimeout(() => setDroppedColumnId((current) => current === columnId ? "" : current), 520);
+  }
+  function dropPersonal(event: React.DragEvent, columnId: string) {
+    event.preventDefault();
+    setDragTargetId("");
+    setDraggedDemandId("");
+    const demandId = event.dataTransfer.getData("text/plain");
+    if (demandId) {
+      onPreferenceChange({ ...preferences, personalPlacements: { ...preferences.personalPlacements, [demandId]: columnId } });
+      celebrateDrop(columnId);
+    }
+  }
+  function applySavedView(view: SavedView) {
+    setQuery(view.query);
+    setCompany(view.companyId);
+    setStatus(view.status);
+    setPriority(view.priority);
+    setStage("ALL");
+    onPreferenceChange({ ...preferences, focusView: view.focusView });
+  }
+  function clearFilters() {
+    setQuery("");
+    setCompany("ALL");
+    setStatus("ALL");
+    setPriority("ALL");
+    setStage("ALL");
+    setAssignees([]);
+    if (mine) onPreferenceChange({ ...preferences, focusView: "all" });
+  }
+  function saveCurrentView(name: string) {
+    if (preferences.savedViews.length >= 12) throw new Error("Você pode manter até 12 visões salvas.");
+    if (preferences.savedViews.some((view) => view.name.toLocaleLowerCase("pt-BR") === name.trim().toLocaleLowerCase("pt-BR"))) throw new Error("Já existe uma visão com esse nome.");
+    onPreferenceChange({ ...preferences, savedViews: [...preferences.savedViews, buildSavedView(crypto.randomUUID(), name, currentFilters)] });
+    setShowSaveView(false);
+  }
+  function removeSavedView(id: string) {
+    onPreferenceChange({ ...preferences, savedViews: preferences.savedViews.filter((view) => view.id !== id) });
+  }
+  function toggleAssignee(id: string) {
+    setAssignees((items) => items.includes(id) ? items.filter((value) => value !== id) : [...items, id]);
+  }
+  function startTimer(demandId: string) {
+    window.dispatchEvent(new CustomEvent("fluxo:timer-start-request", { detail: { demandId } }));
+  }
+  function closeViewMenu(event: React.MouseEvent<HTMLButtonElement>) {
+    event.currentTarget.closest("details")?.removeAttribute("open");
+  }
+
   const flatList = <div className="flat-demand-list">{visible.map((demand) => <button key={demand.id} onClick={() => onOpen(demand)}><span className="demand-id">{demand.publicId}</span><strong>{demand.title}</strong><span>{demand.assigneeName ?? "Sem responsável"}</span><span>{demand.stageName ?? "Sem etapa"}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span></button>)}</div>;
-  return <section className={`work-control${kanbanActive ? " kanban-active" : ""}`}>
-    {mine && <div className="focus-dashboard"><div className="focus-tabs" role="group" aria-label="Foco do meu trabalho">{focusOptions.map((item) => <button key={item.id} className={preferences.focusView === item.id ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, focusView: item.id })}><span><ThemeIcon src={item.icon} className="focus-icon" /></span><strong>{item.label}</strong><b>{counts?.[item.id] ?? 0}</b></button>)}</div>{canEdit && <form className="quick-add" onSubmit={quickCreate}><div><span>Captura rápida</span><strong>Adicionar ao meu trabalho</strong></div><input name="title" minLength={2} maxLength={300} placeholder="Digite o título da nova demanda" required /><select name="schedule"><option value="none">Sem prazo</option><option value="today">Hoje · 17h</option><option value="tomorrow">Amanhã · 17h</option></select><button disabled={quickBusy}>{quickBusy ? "Criando…" : "+ Adicionar"}</button></form>}{quickError && <div className="quick-error"><Notice>{quickError}</Notice></div>}</div>}
-    <div className="work-filterbar"><label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar demanda, código, empresa ou pessoa" /></label><label><span>Empresa</span><select value={company} onChange={(event) => setCompany(event.target.value)}><option value="ALL">Todas</option>{companies.map((item) => <option value={item.id} key={item.id}>{item.shortName}</option>)}</select></label>{!mine && <details className="assignee-filter"><summary><span>Responsáveis</span><strong>{assignees.length ? `${assignees.length} selecionado(s)` : "Todos"}</strong></summary><div><button onClick={() => setAssignees([])}>Limpar seleção</button><label><input type="checkbox" checked={assignees.includes("UNASSIGNED")} onChange={() => toggleAssignee("UNASSIGNED")} /><span>Sem responsável</span></label>{people.map((person) => <label key={person.id}><input type="checkbox" checked={assignees.includes(person.id)} onChange={() => toggleAssignee(person.id)} /><span>{person.name}</span></label>)}</div></details>}<label><span>Situação</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">Todas</option>{Object.entries(statusNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label><span>Prioridade</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">Todas</option>{Object.entries(priorityNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>
-    {mine && <div className="saved-views"><div><strong>Visões salvas</strong><small>Filtros pessoais sincronizados</small></div><div className="saved-view-list">{preferences.savedViews.map((view) => <span className={`saved-view-chip ${activeSavedId === view.id ? "active" : ""}`} key={view.id}><button onClick={() => applySavedView(view)}>{view.name}</button><button onClick={() => removeSavedView(view.id)}>×</button></span>)}</div><div className="saved-view-actions"><button onClick={clearFilters}>Limpar</button><button onClick={() => setShowSaveView(true)}>+ Salvar filtros</button></div></div>}
-    <div className="work-viewbar"><div><strong>{personalMode ? `Área de trabalho · ${boardOwner?.name ?? "carregando"}` : "Controle de demandas"}</strong><span>{visible.length} {visible.length === 1 ? "demanda" : "demandas"}</span></div><div className="view-switch" role="group" aria-label="Formato de visualização"><button className={preferences.demandView === "list" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "list" })}><ThemeIcon src={listViewIcon} className="view-icon" />Lista</button><button className={preferences.demandView === "kanban" ? "active" : ""} onClick={() => onPreferenceChange({ ...preferences, demandView: "kanban" })}><ThemeIcon src={kanbanViewIcon} className="view-icon" />Kanban</button><button onClick={onCalendar}><ThemeIcon src={calendarIcon} className="view-icon" />Calendário</button></div>{mine ? <button className="personal-columns-button" onClick={() => setShowColumns(true)}>⚙ Minhas colunas</button> : assignees.length > 1 ? <span className="multi-user-note">Lista conjunta sem colunas pessoais</span> : <label className="empty-toggle"><input type="checkbox" checked={preferences.showEmptyStages} onChange={(event) => onPreferenceChange({ ...preferences, showEmptyStages: event.target.checked })} /> Exibir vazias</label>}</div>
-    {personalMode ? <div className="scope-note"><strong>Organização pessoal</strong><span>{mine ? "Mova os cards entre suas colunas sem alterar o workflow compartilhado." : "Você está vendo as colunas configuradas pelo responsável selecionado."}</span></div> : assignees.length > 1 ? <div className="scope-note"><strong>Visão combinada</strong><span>Ao selecionar mais de uma pessoa, as demandas aparecem em uma lista única para não misturar organizações pessoais.</span></div> : <div className="stage-strip">{orderedStages.map((stage) => <span key={stage.id}><i style={{ background: stage.color }} />{stage.name}<b>{countFor(stage.id)}</b></span>)}</div>}
-    {!visible.length ? <div className="empty-state"><span>⌕</span><h3>Nenhuma demanda encontrada</h3><p>Ajuste os filtros ou atribua uma demanda a este usuário.</p></div> : assignees.length > 1 ? flatList : personalMode ? preferences.demandView === "kanban" ? <div className="kanban-board personal-kanban">{personalColumns.map((column) => { const items = visible.filter((demand) => (placements[demand.id] ?? personalColumns[0]?.id) === column.id); const animated = `${dragTargetId === column.id ? " drag-over" : ""}${droppedColumnId === column.id ? " drop-complete" : ""}`; return <section className={`kanban-column${animated}`} key={column.id} onDragEnter={() => { if (mine && draggedDemandId) setDragTargetId(column.id); }} onDragOver={(event) => { if (mine) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => dropPersonal(event, column.id)}><header><span><i style={{ background: column.color }} />{column.name}</span><b>{items.length}</b></header><div>{items.map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={mine} canTrack={canEdit} dragging={draggedDemandId === demand.id} onDragStart={(event) => beginDrag(event, demand.id)} onDragEnd={finishDrag} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}{!items.length && <p className="column-empty">{mine ? "Solte uma demanda aqui" : "Coluna vazia"}</p>}</div></section>; })}</div> : <div className="grouped-list personal-list">{personalColumns.map((column) => { const items = visible.filter((demand) => (placements[demand.id] ?? personalColumns[0]?.id) === column.id); return <section key={column.id}><header><span><i style={{ background: column.color }} />{column.name}</span><b>{items.length}</b></header>{items.map((demand) => <button key={demand.id} onClick={() => onOpen(demand)}><span className="demand-id">{demand.publicId}</span><strong>{demand.title}</strong><span>{demand.companyName ?? "Sem empresa"}</span><span>{demand.stageName ?? "Sem etapa"}</span><span>{dateLabel(demand.deadlineAt)}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span></button>)}</section>; })}</div> : preferences.demandView === "kanban" ? <div className="kanban-board">{shownStages.map((stage) => { const items = visible.filter((demand) => demand.stageId === stage.id); const animated = `${dragTargetId === stage.id ? " drag-over" : ""}${droppedColumnId === stage.id ? " drop-complete" : ""}`; return <section className={`kanban-column${animated}`} key={stage.id} onDragEnter={() => { if (canEdit && draggedDemandId) setDragTargetId(stage.id); }} onDragOver={(event) => { if (canEdit) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => canEdit && dropStage(event, stage.id)}><header><span><i style={{ background: stage.color }} />{stage.name}</span><b>{items.length}</b></header><div>{items.map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={canEdit} canTrack={canEdit} dragging={draggedDemandId === demand.id} onDragStart={(event) => beginDrag(event, demand.id)} onDragEnd={finishDrag} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}</div></section>; })}</div> : flatList}
-    {showSaveView && <SaveViewModal filters={currentFilters} onClose={() => setShowSaveView(false)} onSave={saveCurrentView} />}{showColumns && <PersonalColumnsModal preferences={preferences} onClose={() => setShowColumns(false)} onSave={onPreferenceChange} />}
+  const gallery = <div className="demand-gallery">{visible.map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={false} canTrack={canEdit} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}</div>;
+  const personalBoard = preferences.demandView === "kanban"
+    ? <div className="kanban-board personal-kanban">{personalColumns.map((column) => {
+      const items = visible.filter((demand) => (placements[demand.id] ?? personalColumns[0]?.id) === column.id);
+      const animated = `${dragTargetId === column.id ? " drag-over" : ""}${droppedColumnId === column.id ? " drop-complete" : ""}`;
+      return <section className={`kanban-column${animated}`} key={column.id} onDragEnter={() => { if (draggedDemandId) setDragTargetId(column.id); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => dropPersonal(event, column.id)}><header><span><i style={{ background: column.color }} />{column.name}</span><b>{items.length}</b></header><div>{items.map((demand) => <WorkCard key={demand.id} demand={demand} canEdit canTrack={canEdit} dragging={draggedDemandId === demand.id} onDragStart={(event) => beginDrag(event, demand.id)} onDragEnd={finishDrag} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}{!items.length && <p className="column-empty">Solte uma demanda aqui</p>}</div></section>;
+    })}</div>
+    : <div className="grouped-list personal-list">{personalColumns.map((column) => {
+      const items = visible.filter((demand) => (placements[demand.id] ?? personalColumns[0]?.id) === column.id);
+      return <section key={column.id}><header><span><i style={{ background: column.color }} />{column.name}</span><b>{items.length}</b></header>{items.map((demand) => <button key={demand.id} onClick={() => onOpen(demand)}><span className="demand-id">{demand.publicId}</span><strong>{demand.title}</strong><span>{demand.companyName ?? "Sem empresa"}</span><span>{demand.stageName ?? "Sem etapa"}</span><span>{dateLabel(demand.deadlineAt)}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span></button>)}</section>;
+    })}</div>;
+
+  return <section className={`work-control${galleryActive ? " gallery-active" : ""}${personalKanbanActive ? " personal-kanban-active" : ""}`}>
+    <div className="work-toolbar">
+      <div className="work-toolbar-heading"><strong>{mine ? `Área de trabalho · ${profile?.name ?? ""}` : "Controle de demandas"}</strong><span>{visible.length} {visible.length === 1 ? "demanda" : "demandas"}</span></div>
+      <label className="work-search"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar demanda, código, empresa ou pessoa" /></label>
+      <div className="work-toolbar-actions">
+        {mine && <label className="compact-focus"><span>Foco</span><select value={preferences.focusView} onChange={(event) => onPreferenceChange({ ...preferences, focusView: event.target.value as FocusView })}>{focusOptions.map((item) => <option value={item.id} key={item.id}>{item.label} · {counts?.[item.id] ?? 0}</option>)}</select><ThemeIcon src={currentFocus.icon} className="focus-icon" /></label>}
+        <button className={`filter-toggle${filtersOpen ? " active" : ""}`} type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}><span aria-hidden="true">≡</span> Filtros{activeFilterCount > 0 && <b>{activeFilterCount}</b>}</button>
+        <details className="view-menu"><summary><ThemeIcon src={preferences.demandView === "list" ? listViewIcon : kanbanViewIcon} className="view-icon" /><span>{preferences.demandView === "list" ? "Lista" : mine ? "Kanban" : "Galeria"}</span></summary><div><button className={preferences.demandView === "kanban" ? "active" : ""} onClick={(event) => { onPreferenceChange({ ...preferences, demandView: "kanban" }); closeViewMenu(event); }}><ThemeIcon src={kanbanViewIcon} className="view-icon" />{mine ? "Kanban" : "Galeria"}</button><button className={preferences.demandView === "list" ? "active" : ""} onClick={(event) => { onPreferenceChange({ ...preferences, demandView: "list" }); closeViewMenu(event); }}><ThemeIcon src={listViewIcon} className="view-icon" />Lista</button><button onClick={(event) => { closeViewMenu(event); onCalendar(); }}><ThemeIcon src={calendarIcon} className="view-icon" />Calendário</button>{mine && <button onClick={(event) => { closeViewMenu(event); setShowColumns(true); }}>⚙ Minhas colunas</button>}</div></details>
+      </div>
+    </div>
+    {filtersOpen && <div className="work-filter-panel">
+      <label><span>Empresa</span><select value={company} onChange={(event) => setCompany(event.target.value)}><option value="ALL">Todas</option>{companies.map((item) => <option value={item.id} key={item.id}>{item.shortName}</option>)}</select></label>
+      {!mine && <div className="assignee-options"><span>Responsáveis</span><div><label><input type="checkbox" checked={assignees.includes("UNASSIGNED")} onChange={() => toggleAssignee("UNASSIGNED")} /> Sem responsável</label>{people.map((person) => <label key={person.id}><input type="checkbox" checked={assignees.includes(person.id)} onChange={() => toggleAssignee(person.id)} /> {person.name}</label>)}</div></div>}
+      <label><span>Situação</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">Todas</option>{Object.entries(statusNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      <label><span>Prioridade</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">Todas</option>{Object.entries(priorityNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      <label><span>Etapa</span><select value={stage} onChange={(event) => setStage(event.target.value)}><option value="ALL">Todas</option>{stages.filter((item) => item.active).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      {mine && <div className="saved-views compact-saved-views"><div><strong>Visões salvas</strong><small>Filtros pessoais sincronizados</small></div><div className="saved-view-list">{preferences.savedViews.map((view) => <span className={`saved-view-chip ${activeSavedId === view.id ? "active" : ""}`} key={view.id}><button onClick={() => applySavedView(view)}>{view.name}</button><button onClick={() => removeSavedView(view.id)} aria-label={`Excluir visão ${view.name}`}>×</button></span>)}</div><button onClick={() => setShowSaveView(true)}>+ Salvar visão</button></div>}
+      <div className="filter-panel-actions"><button type="button" onClick={clearFilters}>Limpar filtros</button><button type="button" onClick={() => setFiltersOpen(false)}>Aplicar</button></div>
+    </div>}
+    {mine && preferences.demandView === "kanban" && <div className="scope-note"><strong>Organização pessoal</strong><span>Mova os cards entre suas colunas sem alterar o workflow compartilhado.</span></div>}
+    <div className="work-results">{!visible.length ? <div className="empty-state"><span>⌕</span><h3>Nenhuma demanda encontrada</h3><p>Ajuste os filtros para ampliar o resultado.</p></div> : mine ? personalBoard : preferences.demandView === "kanban" ? gallery : flatList}</div>
+    {showSaveView && <SaveViewModal filters={currentFilters} onClose={() => setShowSaveView(false)} onSave={saveCurrentView} />}
+    {showColumns && <PersonalColumnsModal preferences={preferences} onClose={() => setShowColumns(false)} onSave={onPreferenceChange} />}
   </section>;
 }
 function toInputDate(value: string | null): string {
@@ -1448,7 +1558,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   let content: React.ReactNode;
   if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} workflows={publishedWorkflows} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} canDelete={canManage} initialTab={selectedDemandTab} onBack={() => { setSelectedDemand(null); go(page === "overview" || page === "calendar" || page === "my-work" || page === "reports" ? page : "demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} onRemoved={async () => { setSelectedDemand(null); await loadData(); }} />;
   else if (page === "overview") content = <PersonalAgenda demands={demands} profile={profile} canCreate={canCreate} onOpen={(demand) => openDemand(demand)} onCreate={() => setShowCreate(true)} />;
-  else if (page === "demands" || page === "my-work") content = <WorkBoard demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onMoveStage={(demand, stageId) => void moveDemand(demand, stageId)} onPreferenceChange={(preferences) => void savePreferences(preferences)} onQuickCreate={quickCreate} onCalendar={() => go("calendar")} />;
+  else if (page === "demands" || page === "my-work") content = <WorkBoard demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onPreferenceChange={(preferences) => void savePreferences(preferences)} onCalendar={() => go("calendar")} />;
   else if (page === "calendar") content = <CalendarWorkspace demands={demands} companies={companies} people={people} onOpen={(demand) => openDemand(demand)} />;
   else if (page === "companies") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Cadastros ativos</span><h3>Empresas atendidas</h3></div>{canManage && <button className="small-button" onClick={() => setCatalogModal({ kind: "company" })}>+ Nova empresa</button>}</div>{companies.length ? <div className="entity-cards">{companies.map((company) => <article key={company.id}><i style={{ background: company.color }} /><div><strong>{company.name}</strong><span>{company.shortName} · {company.code}</span><p>{company.description || "Sem descrição cadastrada."}</p></div>{canManage && <div className="entity-actions"><button className="table-action" onClick={() => setCatalogModal({ kind: "company", item: company })}>Editar</button><button className="table-action danger-text" disabled={removingCompany === company.id} onClick={() => void removeCompany(company)}>{removingCompany === company.id ? "Excluindo…" : "Excluir"}</button></div>}</article>)}</div> : <div className="empty-state"><span>▦</span><h3>Nenhuma empresa cadastrada</h3></div>}</section>;
   else if (page === "team") content = <><ComingSection icon="○" title="Diretório da equipe" text="A estrutura visual está preparada para cargos, capacidade e distribuição de trabalho." items={["Perfil e foto individual", "Cargo e papel de acesso", "Capacidade por período"]} />{canManage && users.length > 0 && <section className="panel full"><div className="panel-head"><div><span className="eyebrow dark">Pessoas cadastradas</span><h3>Equipe atual</h3></div><span className="count">{users.length}</span></div><div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{user.role ? roleNames[user.role] : "A definir"}</td></tr>)}</tbody></table></div></section>}</>;
