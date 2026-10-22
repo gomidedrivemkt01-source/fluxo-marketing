@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api, messageFrom } from "../../api";
+import pauseActionIcon from "../../assets/actions/pause.svg";
+import playActionIcon from "../../assets/actions/play.svg";
+import { ActionIcon } from "../../components/ActionIcon";
 
 type TimerEntry = {
   id: string;
@@ -133,7 +136,7 @@ export function GlobalTimer({
         onClick={() => active ? void change(active.timer.state === "RUNNING" ? "pause" : "resume") : void start()}
         aria-label={active?.timer.state === "RUNNING" ? "Pausar timer" : active ? "Continuar timer" : "Iniciar timer"}
       >
-        <span>{active?.timer.state === "RUNNING" ? "Ⅱ" : "▶"}</span>
+        <ActionIcon src={active?.timer.state === "RUNNING" ? pauseActionIcon : playActionIcon} />
       </button>
       <div className="global-timer-copy">
         <strong>{clockLabel(active?.timer ?? null, now)}</strong>

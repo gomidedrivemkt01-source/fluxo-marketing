@@ -1,6 +1,8 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import { api, messageFrom } from "../../api";
+import playActionIcon from "../../assets/actions/play.svg";
+import { ActionIcon } from "../../components/ActionIcon";
 
 type DemandFile = {
   id: string;
@@ -58,9 +60,9 @@ function fileSize(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function fileIcon(contentType: string): string {
+function fileIcon(contentType: string) {
   if (contentType.startsWith("image/")) return "▧";
-  if (contentType.startsWith("video/")) return "▶";
+  if (contentType.startsWith("video/")) return <ActionIcon src={playActionIcon} className="file-play-icon" />;
   if (contentType.startsWith("audio/")) return "♪";
   if (contentType === "application/pdf") return "PDF";
   return "DOC";
