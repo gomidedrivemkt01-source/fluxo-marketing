@@ -4,7 +4,7 @@ import hashlib
 import logging
 import mimetypes
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -720,22 +720,9 @@ def import_trello_attachments(
     profiles: list[UserProfile],
     principal: Principal,
     batch: TrelloImportBatch,
-    is_new_demand: bool,
+    existing_items: list[DemandFile],
 ) -> tuple[int, int]:
-    existing = (
-        {}
-        if is_new_demand
-        else {
-            item.external_id: item
-            for item in db.scalars(
-                select(DemandFile).where(
-                    DemandFile.demand_id == demand.id,
-                    DemandFile.source_system == "trello",
-                    DemandFile.external_id.is_not(None),
-                )
-            )
-        }
-    )
+    existing = {item.external_id: item for item in existing_items if item.external_id}
     created = updated = 0
     for raw in attachments:
         if not isinstance(raw, dict):
@@ -789,19 +776,9 @@ def import_trello_todos(
     principal: Principal,
     batch: TrelloImportBatch,
     completed_at: Any,
-    is_new_demand: bool,
+    existing_items: list[DemandTodoItem],
 ) -> tuple[int, int]:
-    items = (
-        []
-        if is_new_demand
-        else list(
-            db.scalars(
-                select(DemandTodoItem)
-                .where(DemandTodoItem.demand_id == demand.id, DemandTodoItem.deleted_at.is_(None))
-                .order_by(DemandTodoItem.position)
-            )
-        )
-    )
+    items = existing_items
     existing = {
         item.external_id: item
         for item in items
@@ -868,33 +845,11 @@ def import_trello_activity(
     profiles: list[UserProfile],
     principal: Principal,
     batch: TrelloImportBatch,
-    is_new_demand: bool,
+    comment_ids: set[str],
+    update_ids: set[str],
 ) -> tuple[int, int]:
-    action_ids = [str(item.get("id")) for item in actions if item.get("id")]
-    if not action_ids:
+    if not actions:
         return 0, 0
-    comment_ids = (
-        set()
-        if is_new_demand
-        else set(
-            db.scalars(
-                select(Comment.external_id).where(
-                    Comment.source_system == "trello", Comment.external_id.in_(action_ids)
-                )
-            )
-        )
-    )
-    update_ids = (
-        set()
-        if is_new_demand
-        else set(
-            db.scalars(
-                select(DemandUpdate.external_id).where(
-                    DemandUpdate.source_system == "trello", DemandUpdate.external_id.in_(action_ids)
-                )
-            )
-        )
-    )
     comments = history = 0
     for action in actions:
         action_id = str(action.get("id") or "")
@@ -1324,6 +1279,59 @@ async def apply_trello(
         demand for link in links.values() if (demand := db.get(Demand, link.demand_id)) is not None
     ]
     _, protected_demands = imported_demand_sources(db, linked_demands)
+    linked_demand_ids = [demand.id for demand in linked_demands]
+    files_by_demand: defaultdict[uuid.UUID, list[DemandFile]] = defaultdict(list)
+    todos_by_demand: defaultdict[uuid.UUID, list[DemandTodoItem]] = defaultdict(list)
+    if linked_demand_ids:
+        for file_item in db.scalars(
+            select(DemandFile).where(
+                DemandFile.demand_id.in_(linked_demand_ids),
+                DemandFile.source_system == "trello",
+                DemandFile.external_id.is_not(None),
+            )
+        ):
+            files_by_demand[file_item.demand_id].append(file_item)
+        for todo_item in db.scalars(
+            select(DemandTodoItem)
+            .where(
+                DemandTodoItem.demand_id.in_(linked_demand_ids),
+                DemandTodoItem.deleted_at.is_(None),
+            )
+            .order_by(DemandTodoItem.demand_id, DemandTodoItem.position)
+        ):
+            todos_by_demand[todo_item.demand_id].append(todo_item)
+    action_ids = [
+        str(action["id"])
+        for actions in actions_by_card.values()
+        for action in actions
+        if action.get("id")
+    ]
+    existing_comment_ids = (
+        {
+            str(external_id)
+            for external_id in db.scalars(
+                select(Comment.external_id).where(
+                    Comment.source_system == "trello", Comment.external_id.in_(action_ids)
+                )
+            )
+            if external_id
+        }
+        if action_ids
+        else set()
+    )
+    existing_update_ids = (
+        {
+            str(external_id)
+            for external_id in db.scalars(
+                select(DemandUpdate.external_id).where(
+                    DemandUpdate.source_system == "trello", DemandUpdate.external_id.in_(action_ids)
+                )
+            )
+            if external_id
+        }
+        if action_ids
+        else set()
+    )
     new_total = sum(1 for card in document["cards"] if str(card["id"]) not in links)
     public_ids = iter(allocate_public_ids(db, new_total))
     now = utc_now()
@@ -1384,7 +1392,6 @@ async def apply_trello(
             )
             archived_at = now if card.get("closed") or source_completed_old else None
             if link:
-                is_new_demand = False
                 demand = db.get(Demand, link.demand_id)
                 if not demand or demand.organization_id != organization_id:
                     raise ApiError(
@@ -1431,7 +1438,6 @@ async def apply_trello(
                 else:
                     unchanged += 1
             else:
-                is_new_demand = True
                 demand = Demand(
                     id=uuid.uuid4(),
                     organization_id=organization_id,
@@ -1474,7 +1480,7 @@ async def apply_trello(
                 profiles=context["profiles"],
                 principal=principal,
                 batch=batch,
-                is_new_demand=is_new_demand,
+                existing_items=files_by_demand[demand.id],
             )
             created_attachments += attachment_counts[0]
             updated_attachments += attachment_counts[1]
@@ -1485,7 +1491,7 @@ async def apply_trello(
                 principal=principal,
                 batch=batch,
                 completed_at=source_updated_at,
-                is_new_demand=is_new_demand,
+                existing_items=todos_by_demand[demand.id],
             )
             created_todos += todo_counts[0]
             updated_todos += todo_counts[1]
@@ -1497,7 +1503,8 @@ async def apply_trello(
                 profiles=context["profiles"],
                 principal=principal,
                 batch=batch,
-                is_new_demand=is_new_demand,
+                comment_ids=existing_comment_ids,
+                update_ids=existing_update_ids,
             )
             imported_comments += activity_counts[0]
             imported_history += activity_counts[1]
