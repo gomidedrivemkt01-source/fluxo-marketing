@@ -20,6 +20,19 @@ describe("messageFrom", () => {
 });
 
 describe("api", () => {
+  it("retries a GET once after a temporary network failure", async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", request);
+
+    await expect(api<{ ok: boolean }>("/workspace/pages/demands")).resolves.toEqual({ ok: true });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("notifies the app when an authenticated request finds an expired session", async () => {
     const browserWindow = new EventTarget();
     const expired = vi.fn();

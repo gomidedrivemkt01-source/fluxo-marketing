@@ -775,7 +775,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   }
 
   const flatList = <div className="flat-demand-list">{visible.map((demand) => <button key={demand.id} onClick={() => onOpen(demand)}><span className="demand-id">{demand.publicId}</span><strong>{demand.title}</strong><span>{demand.assigneeName ?? "Sem responsável"}</span><span>{demand.stageName ?? "Sem etapa"}</span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span></button>)}</div>;
-  const gallery = <div className="demand-gallery">{visible.slice(0, visibleLimit).map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={false} canTrack={canEdit} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}{visibleLimit < visible.length && <div className="gallery-load-sentinel" ref={loadMoreRef} aria-label="Carregando mais demandas"><span className="loader" /></div>}</div>;
+  const gallery = <div className="demand-gallery">{visible.slice(0, visibleLimit).map((demand) => <WorkCard key={demand.id} demand={demand} canEdit={false} canTrack={canEdit} onOpen={() => onOpen(demand)} onTimerStart={() => startTimer(demand.id)} />)}{visibleLimit < visible.length && <div className="gallery-load-sentinel" ref={loadMoreRef}><span>Exibindo {visibleLimit} de {visible.length}</span><button type="button" className="secondary compact" onClick={() => setVisibleLimit((limit) => Math.min(limit + 48, visible.length))}>Carregar mais demandas</button></div>}</div>;
   const personalBoard = preferences.demandView === "kanban"
     ? <div className="kanban-board personal-kanban">{personalColumns.map((column) => {
       const items = visible.filter((demand) => (placements[demand.id] ?? personalColumns[0]?.id) === column.id);
@@ -1281,6 +1281,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   const [jobRoles, setJobRoles] = useState<JobRole[]>([]); const [roleAssignments, setRoleAssignments] = useState<JobRoleAssignment[]>([]);
   const [selectedDemandTab, setSelectedDemandTab] = useState<DemandDetailTab>("overview"); const [showQuickCapture, setShowQuickCapture] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
+  const [pageLoadError, setPageLoadError] = useState("");
   const loadedPages = useRef(new Set<WorkspacePage>());
   const routeRequest = useRef(0);
   const publishedWorkflows = workflows.filter((workflow) => workflow.lifecycleState === "PUBLISHED");
@@ -1317,13 +1318,16 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     setProfile(data.profile);
   }
   async function loadRouteData(target: WorkspacePage, force = false, foreground = true) {
-    if (!force && loadedPages.current.has(target)) { if (foreground) setPageLoading(false); return; }
+    if (!force && loadedPages.current.has(target)) { if (foreground) { setPageLoading(false); setPageLoadError(""); } return; }
     const request = foreground ? ++routeRequest.current : routeRequest.current;
-    if (foreground) setPageLoading(true);
+    if (foreground) { setPageLoading(true); setPageLoadError(""); }
     try {
       const data = await api<WorkspacePageData>(`/workspace/pages/${target}`);
       applyWorkspaceData(data);
       loadedPages.current.add(target);
+    } catch (caught) {
+      if (foreground && request === routeRequest.current) setPageLoadError(messageFrom(caught));
+      throw caught;
     } finally {
       if (foreground && request === routeRequest.current) setPageLoading(false);
     }
@@ -1355,7 +1359,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     try { await loadRouteData("demands", false, false); setShowCreate(true); }
     catch (caught) { setError(messageFrom(caught)); }
   }
-  useEffect(() => { setError(""); void loadRouteData(page).catch((caught) => { setPageLoading(false); setError(messageFrom(caught)); }); }, [page]);
+  useEffect(() => { setError(""); void loadRouteData(page).catch(() => undefined); }, [page]);
   useEffect(() => { void loadPageData(page).catch((caught) => setError(messageFrom(caught))); }, [page, session.role]);
   useEffect(() => { window.localStorage.setItem("fluxo.sidebar-collapsed", String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => {
@@ -1415,6 +1419,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   let content: React.ReactNode;
   if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} workflows={publishedWorkflows} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} canDelete={canManage} initialTab={selectedDemandTab} onBack={() => { setSelectedDemand(null); go(page === "overview" || page === "calendar" || page === "my-work" || page === "reports" ? page : "demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} onRemoved={async () => { setSelectedDemand(null); await loadData(); }} />;
   else if (pageLoading) content = <section className="panel feature-loading route-loading"><span className="loader" /><p>Carregando {pageTitles[page].toLocaleLowerCase("pt-BR")}…</p></section>;
+  else if (pageLoadError) content = <section className="panel route-load-error"><h3>Não foi possível carregar esta página</h3><p>{pageLoadError}</p><button className="primary compact" type="button" onClick={() => void loadRouteData(page, true).catch(() => undefined)}>Tentar novamente</button></section>;
   else if (page === "overview") content = <PersonalAgenda demands={demands} profile={profile} canCreate={canCreate} onOpen={(demand) => openDemand(demand)} onCreate={() => void openCreateDemand()} />;
   else if (page === "demands" || page === "my-work") content = <WorkBoard demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onPreferenceChange={(preferences) => void savePreferences(preferences)} onCalendar={() => go("calendar")} />;
   else if (page === "calendar") content = <CalendarRoute demands={demands} companies={companies} people={people} onOpen={(demand) => openDemand(demand)} />;

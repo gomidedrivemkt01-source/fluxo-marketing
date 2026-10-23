@@ -735,9 +735,13 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .demand-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 14px; align-content: start; align-items: start; padding: 16px 18px 26px; }
 .demand-gallery .work-card { width: 100%; min-width: 0; }
 .demand-gallery .work-card, .flat-demand-list > button, .personal-kanban .work-card { content-visibility: auto; contain-intrinsic-size: 320px; }
-.gallery-load-sentinel { display: grid; grid-column: 1 / -1; place-items: center; min-height: 72px; }
+.gallery-load-sentinel { display: flex; grid-column: 1 / -1; align-items: center; justify-content: center; gap: 12px; min-height: 72px; color: var(--muted); font-size: .78rem; }
+.gallery-load-sentinel button { min-height: 36px; }
 .route-loading { display: grid; place-items: center; min-height: 320px; color: var(--muted); }
 .route-loading p { margin: 0; font-size: .8rem; }
+.route-load-error { display: grid; place-items: center; align-content: center; gap: 10px; min-height: 320px; text-align: center; }
+.route-load-error h3, .route-load-error p { margin: 0; }
+.route-load-error p { max-width: 520px; color: var(--muted); }
 .work-results > .flat-demand-list { margin: 16px 18px 24px; }
 .work-results > .empty-state { margin: 18px; }
 @keyframes filter-panel-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
