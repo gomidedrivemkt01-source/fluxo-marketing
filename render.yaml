@@ -18,7 +18,7 @@ services:
       - key: APP_DATABASE_HOST
         value: aws-0-sa-east-1.pooler.supabase.com
       - key: APP_DATABASE_PORT
-        value: "5432"
+        value: "6543"
       - key: APP_DATABASE_NAME
         value: postgres
       - key: APP_DATABASE_USER

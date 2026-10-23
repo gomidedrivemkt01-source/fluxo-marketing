@@ -37,7 +37,11 @@ def migration_head() -> str:
 def database_revision() -> str | None:
     for attempt in range(1, DATABASE_CONNECT_ATTEMPTS + 1):
         try:
-            with psycopg.connect(_database_dsn(), connect_timeout=15) as connection:
+            with psycopg.connect(
+                _database_dsn(),
+                connect_timeout=15,
+                prepare_threshold=None,
+            ) as connection:
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT to_regclass('public.alembic_version')")
                     relation_row = cursor.fetchone()
