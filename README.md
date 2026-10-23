@@ -46,6 +46,21 @@ Pré-requisitos: Node.js 24+, Python 3.12+ e Docker Desktop com Compose.
 
 Abra `http://localhost:5173`. O Vite encaminha `/api` para a API local.
 
+### Execução integral com Docker
+
+O mesmo container multi-stage usado em produção compila o frontend, instala o backend,
+confirma as migrations e publica a aplicação na porta `8000`. Com um `.env` válido na raiz:
+
+1. Execute `docker compose -f infra/compose.yaml up --build`.
+2. Aguarde os serviços `db` e `app` ficarem saudáveis.
+3. Abra `http://localhost:8000`.
+
+O Compose substitui apenas a conexão local com PostgreSQL. Supabase Auth e Storage continuam
+usando as variáveis do `.env`. O `.dockerignore` impede o envio de segredos, histórico Git,
+dependências locais e caches para o contexto de build. Para migrar para outro provedor de
+containers, publique a imagem de `infra/Dockerfile`, exponha a porta `8000`, configure as
+variáveis `APP_*` e aponte o health check para `/health`.
+
 ## Configuração do Supabase Auth
 
 - Authentication > Providers > Email: habilitar e-mail/senha e confirmação de e-mail.
