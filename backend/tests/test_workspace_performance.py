@@ -111,6 +111,96 @@ def test_workspace_bootstrap_combines_common_screen_data(
     )
 
 
+def test_workspace_reports_page_does_not_load_demands_or_catalogs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = ProfileOut(
+        profileId=uuid.uuid4(),
+        name="Admin",
+        email="admin@example.com",
+        timezone="America/Sao_Paulo",
+        role="admin",
+        revision=1,
+        avatarUrl=None,
+        preferences={},
+    )
+    people = [UserOptionOut(id=profile.profile_id, name=profile.name, avatarUrl=None)]
+    monkeypatch.setattr(workspace, "get_my_profile", MagicMock(return_value=profile))
+    monkeypatch.setattr(workspace, "list_user_options", MagicMock(return_value=people))
+    demands_mock = MagicMock(return_value=[])
+    companies_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(workspace, "list_demands", demands_mock)
+    monkeypatch.setattr(workspace, "list_companies", companies_mock)
+
+    result = workspace.workspace_page("reports", MagicMock(), MagicMock(spec=Session))
+
+    assert result.profile.email == "admin@example.com"
+    assert result.people == people
+    assert result.demands is None
+    assert result.companies is None
+    demands_mock.assert_not_called()
+    companies_mock.assert_not_called()
+
+
+def test_workspace_demands_page_loads_operational_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = ProfileOut(
+        profileId=uuid.uuid4(),
+        name="Admin",
+        email="admin@example.com",
+        timezone="America/Sao_Paulo",
+        role="admin",
+        revision=1,
+        avatarUrl=None,
+        preferences={},
+    )
+    monkeypatch.setattr(workspace, "get_my_profile", MagicMock(return_value=profile))
+    catalog_mock = MagicMock(return_value=([], [], [], [], []))
+    demands_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(workspace, "_catalog_data", catalog_mock)
+    monkeypatch.setattr(workspace, "list_demands", demands_mock)
+    principal = MagicMock()
+    db = MagicMock(spec=Session)
+
+    result = workspace.workspace_page("demands", principal, db)
+
+    assert result.demands == []
+    assert result.companies == []
+    catalog_mock.assert_called_once_with(principal, db)
+    demands_mock.assert_called_once_with(q=None, principal=principal, db=db)
+
+
+def test_workspace_overview_loads_only_profile_and_demands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = ProfileOut(
+        profileId=uuid.uuid4(),
+        name="Colaborador",
+        email="colaborador@example.com",
+        timezone="America/Sao_Paulo",
+        role="collaborator",
+        revision=1,
+        avatarUrl=None,
+        preferences={},
+    )
+    monkeypatch.setattr(workspace, "get_my_profile", MagicMock(return_value=profile))
+    demands_mock = MagicMock(return_value=[])
+    catalog_mock = MagicMock(return_value=([], [], [], [], []))
+    monkeypatch.setattr(workspace, "list_demands", demands_mock)
+    monkeypatch.setattr(workspace, "_catalog_data", catalog_mock)
+    principal = MagicMock()
+    db = MagicMock(spec=Session)
+
+    result = workspace.workspace_page("overview", principal, db)
+
+    assert result.demands == []
+    assert result.companies is None
+    assert result.categories is None
+    demands_mock.assert_called_once_with(q=None, principal=principal, db=db)
+    catalog_mock.assert_not_called()
+
+
 def test_list_demands_does_not_silently_truncate_after_fifty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -122,16 +212,44 @@ def test_list_demands_does_not_silently_truncate_after_fifty(
         ),
         role=SimpleNamespace(permissions=["demands:read"]),
     )
-    expected = [SimpleNamespace(id=uuid.uuid4()) for _ in range(75)]
+    now = datetime.now(UTC)
+    creator = SimpleNamespace(id=uuid.uuid4(), full_name="Criador")
+    expected = [
+        SimpleNamespace(
+            id=uuid.uuid4(),
+            public_id=f"DMD-2026-{index:06d}",
+            title=f"Demanda {index}",
+            description=None,
+            primary_company_id=None,
+            category_id=None,
+            current_assignee_id=None,
+            created_by=creator.id,
+            current_stage_id=None,
+            workflow_id=None,
+            workflow_version_id=None,
+            status="WAITING_EXECUTION",
+            priority="NORMAL",
+            deadline_at=None,
+            forecast_at=None,
+            expected_effort_minutes=None,
+            revision=1,
+            created_at=now,
+        )
+        for index in range(75)
+    ]
     db = MagicMock(spec=Session)
-    db.scalars.return_value = iter(expected)
-    monkeypatch.setattr(demands_api, "demands_out", lambda _db, items: items)
+    db.execute.return_value.all.return_value = [
+        (item, None, None, None, creator, None, None, None, None)
+        for item in expected
+    ]
 
     result = demands_api.list_demands(q=None, principal=principal, db=db)
 
-    assert result == expected
-    statement = db.scalars.call_args.args[0]
+    assert len(result) == 75
+    assert result[-1].title == "Demanda 74"
+    statement = db.execute.call_args.args[0]
     assert statement._limit_clause is None
+    assert db.execute.call_count == 1
 
 
 def test_demands_out_uses_fixed_number_of_related_queries() -> None:

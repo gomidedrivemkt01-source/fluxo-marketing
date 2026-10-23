@@ -8,5 +8,14 @@ export default defineConfig({
     strictPort: true,
     proxy: { "/api": "http://127.0.0.1:8000" },
   },
-  build: { sourcemap: false },
+  build: {
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/react") || id.includes("node_modules/react-dom")) return "react-vendor";
+        },
+      },
+    },
+  },
 });

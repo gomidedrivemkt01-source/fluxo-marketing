@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.api.access import require_any_permission, require_permission
 from app.api.errors import ApiError
@@ -1054,21 +1054,83 @@ def list_demands(
     db: Session = Depends(get_db),
 ) -> list[DemandOut]:
     require_permission(principal, "demands:read")
-    statement = select(Demand).where(
-        Demand.organization_id == principal.membership.organization_id,
-        Demand.deleted_at.is_(None),
-        Demand.archived_at.is_(None),
+    assignee = aliased(UserProfile, name="demand_assignee")
+    creator = aliased(UserProfile, name="demand_creator")
+    cover_image_id = (
+        select(DemandFile.id)
+        .where(
+            DemandFile.demand_id == Demand.id,
+            DemandFile.deleted_at.is_(None),
+            DemandFile.content_type.like("image/%"),
+        )
+        .order_by(
+            DemandFile.is_cover.desc(),
+            DemandFile.created_at.asc(),
+            DemandFile.id.asc(),
+        )
+        .limit(1)
+        .correlate(Demand)
+        .scalar_subquery()
+        .label("cover_image_id")
+    )
+    statement = (
+        select(
+            Demand,
+            Company,
+            DemandCategory,
+            assignee,
+            creator,
+            WorkflowStage,
+            Workflow,
+            WorkflowVersion,
+            cover_image_id,
+        )
+        .outerjoin(Company, Company.id == Demand.primary_company_id)
+        .outerjoin(DemandCategory, DemandCategory.id == Demand.category_id)
+        .outerjoin(assignee, assignee.id == Demand.current_assignee_id)
+        .join(creator, creator.id == Demand.created_by)
+        .outerjoin(WorkflowStage, WorkflowStage.id == Demand.current_stage_id)
+        .outerjoin(Workflow, Workflow.id == Demand.workflow_id)
+        .outerjoin(WorkflowVersion, WorkflowVersion.id == Demand.workflow_version_id)
+        .where(
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+            Demand.archived_at.is_(None),
+        )
     )
     if q and q.strip():
         pattern = f"%{q.strip()}%"
         statement = statement.where(
             or_(Demand.public_id.ilike(pattern), Demand.title.ilike(pattern))
         )
-    # A mesma consulta abastece o bootstrap e todas as visões operacionais. Um
-    # corte silencioso aqui fazia Kanban, lista e calendário exibirem somente os
-    # 50 cards mais recentes, mesmo quando os demais continuavam ativos no banco.
-    demands = list(db.scalars(statement.order_by(Demand.updated_at.desc())))
-    return demands_out(db, demands)
+    # Todas as relações usadas pelos cards são resolvidas na mesma ida ao banco.
+    # Isso é relevante em produção, onde cada round-trip ao PostgreSQL remoto
+    # custa mais do que montar os objetos localmente.
+    rows = db.execute(statement.order_by(Demand.updated_at.desc())).all()
+    return [
+        _demand_out_from_related(
+            demand,
+            company=company,
+            category=category,
+            assignee=assigned_profile,
+            creator=created_profile,
+            stage=stage,
+            workflow=workflow,
+            version=version,
+            cover_image_id=cover_id,
+        )
+        for (
+            demand,
+            company,
+            category,
+            assigned_profile,
+            created_profile,
+            stage,
+            workflow,
+            version,
+            cover_id,
+        ) in rows
+    ]
 
 
 @router.post(
