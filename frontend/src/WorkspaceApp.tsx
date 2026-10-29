@@ -42,7 +42,6 @@ const ReportsRoute = lazy(loadReportsRoute);
 const WorkflowRoute = lazy(loadWorkflowRoute);
 const GovernanceSettingsRoute = lazy(loadGovernanceSettingsRoute);
 
-type Page = "login" | "register" | "verify-signup" | "forgot" | "verify-recovery" | "reset";
 export type Company = { id: string; name: string; shortName: string; code: string; color: string; description: string | null; active: boolean; revision: number };
 export type Category = { id: string; name: string; code: string; color: string; defaultWorkflowId: string | null; active: boolean; revision: number };
 type User = { id: string; profileId: string; name: string; email: string; state: string; role: string | null; revision: number; avatarUrl: string | null };
@@ -271,155 +270,6 @@ function PasswordField({ label, ...props }: Omit<React.InputHTMLAttributes<HTMLI
 
 function Notice({ kind = "error", children }: { kind?: "error" | "success"; children: React.ReactNode }) {
   return <div className={`notice ${kind}`} role={kind === "error" ? "alert" : "status"}>{children}</div>;
-}
-
-function AuthShell({ children, eyebrow, title, text }: { children: React.ReactNode; eyebrow: string; title: string; text: string }) {
-  return (
-    <main className="auth-page">
-      <section className="auth-story">
-        <Brand />
-        <div className="story-copy">
-          <span className="eyebrow">Operação de Marketing</span>
-          <h1>O trabalho visível.<br />O fluxo sob controle.</h1>
-          <p>Demandas, responsáveis e decisões em um histórico compartilhado pela equipe.</p>
-        </div>
-        <div className="story-footer"><span>Ambiente interno</span><span>•</span><span>Acesso individual</span></div>
-      </section>
-      <section className="auth-panel">
-        <div className="auth-card">
-          <span className="eyebrow dark">{eyebrow}</span>
-          <h2>{title}</h2>
-          <p className="helper">{text}</p>
-          {children}
-        </div>
-        <p className="security-note"><span aria-hidden="true">◇</span> Sua sessão é protegida e registrada.</p>
-      </section>
-    </main>
-  );
-}
-
-function Login({ onSession, go }: { onSession: (session: Session) => void; go: (page: Page) => void }) {
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
-    const data = new FormData(event.currentTarget);
-    try {
-      onSession(await api<Session>("/auth/login", { method: "POST", body: JSON.stringify({ email: data.get("email"), password: data.get("password") }) }));
-    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
-  }
-  return <AuthShell eyebrow="Bem-vindo" title="Entre na sua conta" text="Use o e-mail e a senha cadastrados para acessar seu espaço de trabalho.">
-    <form onSubmit={submit} className="form-stack">
-      {error && <Notice>{error}</Notice>}
-      <Field label="E-mail" name="email" type="email" autoComplete="email" placeholder="nome@empresa.com" required />
-      <PasswordField label="Senha" name="password" autoComplete="current-password" placeholder="Sua senha" required />
-      <button className="link-button align-right" type="button" onClick={() => go("forgot")}>Esqueci minha senha</button>
-      <button className="primary" disabled={busy}>{busy ? "Entrando…" : "Entrar"}</button>
-    </form>
-    <p className="switch-copy">Ainda não tem acesso? <button className="link-button" onClick={() => go("register")}>Criar cadastro</button></p>
-  </AuthShell>;
-}
-
-function Register({ continueWith, go }: { continueWith: (email: string) => void; go: (page: Page) => void }) {
-  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
-    const data = new FormData(event.currentTarget);
-    const password = String(data.get("password"));
-    if (password !== data.get("confirmPassword")) { setError("As senhas precisam ser iguais."); setBusy(false); return; }
-    try {
-      await api("/auth/register", { method: "POST", body: JSON.stringify({ name: data.get("name"), email: data.get("email"), password, privacyNoticeVersion: "draft-1" }) });
-      continueWith(String(data.get("email")));
-    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
-  }
-  return <AuthShell eyebrow="Novo acesso" title="Crie seu cadastro" text="Após confirmar o e-mail, um administrador libera seu acesso à equipe.">
-    <form onSubmit={submit} className="form-stack">
-      {error && <Notice>{error}</Notice>}
-      <Field label="Nome completo" name="name" autoComplete="name" required />
-      <Field label="E-mail" name="email" type="email" autoComplete="email" required />
-      <PasswordField label="Senha" name="password" autoComplete="new-password" minLength={12} required />
-      <PasswordField label="Confirme a senha" name="confirmPassword" autoComplete="new-password" minLength={12} required />
-      <label className="check"><input name="privacy" type="checkbox" required /><span>Li o aviso de privacidade e entendo o uso dos dados para gestão interna.</span></label>
-      <button className="primary" disabled={busy}>{busy ? "Enviando código…" : "Continuar"}</button>
-    </form>
-    <p className="switch-copy">Já possui cadastro? <button className="link-button" onClick={() => go("login")}>Entrar</button></p>
-  </AuthShell>;
-}
-
-function Verify({ email, purpose, onSignup, onRecovery, go }: { email: string; purpose: "signup" | "recovery"; onSignup: (session: Session) => void; onRecovery: (token: string) => void; go: (page: Page) => void }) {
-  const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
-    const data = new FormData(event.currentTarget);
-    try {
-      const result = await api<Session | { recoveryToken: string }>("/auth/verify-email", { method: "POST", body: JSON.stringify({ email, code: data.get("code"), purpose }) });
-      if ("recoveryToken" in result) onRecovery(result.recoveryToken); else onSignup(result);
-    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
-  }
-  async function resend() {
-    setBusy(true); setError(""); setNotice("");
-    try {
-      const path = purpose === "signup" ? "/auth/resend-signup" : "/auth/forgot-password";
-      const result = await api<{ message: string }>(path, { method: "POST", body: JSON.stringify({ email }) });
-      setNotice(result.message);
-    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
-  }
-  return <AuthShell eyebrow="Confirmação" title="Digite o código" text={`Enviamos um código numérico para ${email}. Ele expira em poucos minutos.`}>
-    <form onSubmit={submit} className="form-stack">
-      {error && <Notice>{error}</Notice>}
-      {notice && <Notice kind="success">{notice}</Notice>}
-      <Field label="Código de 6 a 8 números" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6,8}" minLength={6} maxLength={8} className="code-input" required />
-      <button className="primary" disabled={busy}>{busy ? "Confirmando…" : "Confirmar código"}</button>
-      <button className="secondary" type="button" disabled={busy} onClick={() => void resend()}>Reenviar código</button>
-      <button className="secondary" type="button" onClick={() => go(purpose === "signup" ? "register" : "forgot")}>Voltar</button>
-    </form>
-  </AuthShell>;
-}
-
-function Forgot({ continueWith, go }: { continueWith: (email: string) => void; go: (page: Page) => void }) {
-  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
-    const data = new FormData(event.currentTarget);
-    try {
-      await api("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email: data.get("email") }) });
-      continueWith(String(data.get("email")));
-    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
-  }
-  return <AuthShell eyebrow="Recuperação" title="Recupere seu acesso" text="Informe seu e-mail. Se houver uma conta, enviaremos um código de recuperação.">
-    <form onSubmit={submit} className="form-stack">
-      {error && <Notice>{error}</Notice>}
-      <Field label="E-mail" name="email" type="email" autoComplete="email" required />
-      <button className="primary" disabled={busy}>{busy ? "Enviando…" : "Enviar código"}</button>
-      <button className="secondary" type="button" onClick={() => go("login")}>Voltar ao login</button>
-    </form>
-  </AuthShell>;
-}
-
-function Reset({ recoveryToken, go }: { recoveryToken: string; go: (page: Page) => void }) {
-  const [error, setError] = useState(""); const [success, setSuccess] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
-    const data = new FormData(event.currentTarget); const password = String(data.get("password"));
-    if (password !== data.get("confirmPassword")) { setError("As senhas precisam ser iguais."); setBusy(false); return; }
-    try {
-      const result = await api<{ message: string }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ recoveryToken, password }) });
-      setSuccess(result.message);
-    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
-  }
-  return <AuthShell eyebrow="Nova senha" title="Defina uma nova senha" text="Use uma frase longa e exclusiva, com pelo menos 12 caracteres.">
-    {success ? <><Notice kind="success">{success}</Notice><button className="primary" onClick={() => go("login")}>Ir para o login</button></> :
-      <form onSubmit={submit} className="form-stack">
-        {error && <Notice>{error}</Notice>}
-        <PasswordField label="Nova senha" name="password" minLength={12} autoComplete="new-password" required />
-        <PasswordField label="Confirme a nova senha" name="confirmPassword" minLength={12} autoComplete="new-password" required />
-        <button className="primary" disabled={busy}>{busy ? "Salvando…" : "Alterar senha"}</button>
-      </form>}
-  </AuthShell>;
-}
-
-function Pending({ session, logout }: { session: Session; logout: () => void }) {
-  return <main className="waiting-page"><div className="waiting-card"><Brand /><div className="waiting-icon">⌛</div><span className="eyebrow dark">Cadastro confirmado</span><h1>Acesso aguardando liberação</h1><p>Seu e-mail foi validado. Um administrador precisa incluir <strong>{session.email}</strong> na equipe antes do primeiro acesso.</p><div className="waiting-steps"><span className="done">1</span><b>E-mail confirmado</b><i /><span>2</span><b>Liberação administrativa</b></div><button className="secondary" onClick={logout}>Sair</button></div></main>;
 }
 
 function proposalValue(proposal: DailyProposal): string {
@@ -1044,7 +894,19 @@ function ProfilePage({ profile, session, onUpdated }: { profile: Profile | null;
     try { await api("/users/me/avatar", { method: "DELETE" }); onUpdated({ ...current, avatarUrl: null, revision: current.revision + 1 }); setSuccess("Foto removida."); }
     catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
-  return <><div className="profile-layout"><section className="panel profile-card"><AvatarView name={profile.name} url={profile.avatarUrl} size="large" /><h3>{profile.name}</h3><p>{profile.email}</p><span>{session.role ? roleNames[session.role] : "Sem perfil"}</span><label className="small-button upload-avatar">Alterar foto<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void upload(file); }} /></label>{profile.avatarUrl && <button className="link-button" disabled={busy} onClick={() => void removeAvatar()}>Remover foto</button>}<button className="secondary compact edit-interface-button" onClick={() => setShowTheme(true)}>Editar interface</button><small>Foto: JPG, PNG ou WebP, até 2 MB.</small></section><section className="panel profile-form"><div className="panel-head"><div><span className="eyebrow dark">Dados pessoais</span><h3>Informações do perfil</h3></div></div><form className="modal-form" onSubmit={save}>{error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}<Field label="Nome completo" name="name" defaultValue={profile.name} required /><Field label="E-mail" value={profile.email} disabled /><label className="field"><span>Fuso horário</span><select name="timezone" defaultValue={profile.timezone}><option value="America/Sao_Paulo">Brasília — São Paulo</option><option value="America/Manaus">Manaus</option><option value="America/Rio_Branco">Rio Branco</option></select></label><div className="profile-note"><strong>Perfil de acesso</strong><span>{session.role ? roleNames[session.role] : "Sem perfil"}</span><small>Alterações de permissão são feitas por um administrador.</small></div><footer className="form-actions"><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar alterações"}</button></footer></form></section></div>{showTheme && <InterfaceThemeModal preferences={profile.preferences} onClose={() => setShowTheme(false)} onSave={saveTheme} />}</>;
+  return <><div className="profile-layout"><section className="panel profile-card"><AvatarView name={profile.name} url={profile.avatarUrl} size="large" /><h3>{profile.name}</h3><p>{profile.email}</p><span>{session.role ? roleNames[session.role] : "Sem perfil"}</span><label className="small-button upload-avatar">Alterar foto<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void upload(file); }} /></label>{profile.avatarUrl && <button className="link-button" disabled={busy} onClick={() => void removeAvatar()}>Remover foto</button>}<button className="secondary compact edit-interface-button" onClick={() => setShowTheme(true)}>Editar interface</button><small>Foto: JPG, PNG ou WebP, até 2 MB.</small></section><section className="panel profile-form"><div className="panel-head"><div><span className="eyebrow dark">Dados pessoais</span><h3>Informações do perfil</h3></div></div><form className="modal-form" onSubmit={save}>{error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}<Field label="Nome completo" name="name" defaultValue={profile.name} required /><Field label="E-mail" value={profile.email} disabled /><label className="field"><span>Fuso horário</span><select name="timezone" defaultValue={profile.timezone}><option value="America/Sao_Paulo">Brasília — São Paulo</option><option value="America/Manaus">Manaus</option><option value="America/Rio_Branco">Rio Branco</option></select></label><div className="profile-note"><strong>Perfil de acesso</strong><span>{session.role ? roleNames[session.role] : "Sem perfil"}</span><small>Alterações de permissão são feitas por um administrador.</small></div><footer className="form-actions"><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar alterações"}</button></footer></form></section><section className="panel profile-form profile-password"><div className="panel-head"><div><span className="eyebrow dark">Segurança</span><h3>Alterar senha</h3></div></div><ChangePasswordForm /></section></div>{showTheme && <InterfaceThemeModal preferences={profile.preferences} onClose={() => setShowTheme(false)} onSave={saveTheme} />}</>;
+}
+
+function ChangePasswordForm() {
+  const [error, setError] = useState(""); const [success, setSuccess] = useState(""); const [busy, setBusy] = useState(false);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); setSuccess("");
+    const form = event.currentTarget; const data = new FormData(form); const password = String(data.get("password"));
+    if (password !== data.get("confirmPassword")) { setError("As senhas precisam ser iguais."); setBusy(false); return; }
+    try { await api<Session>("/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword: data.get("currentPassword"), password }) }); form.reset(); setSuccess("Senha alterada. As outras sessões foram encerradas."); }
+    catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
+  }
+  return <form className="modal-form" onSubmit={submit}>{error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}<PasswordField label="Senha atual" name="currentPassword" autoComplete="current-password" required /><PasswordField label="Nova senha" name="password" minLength={12} maxLength={72} autoComplete="new-password" required /><PasswordField label="Confirme a nova senha" name="confirmPassword" minLength={12} maxLength={72} autoComplete="new-password" required /><footer className="form-actions"><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Alterar senha"}</button></footer></form>;
 }
 
 function BriefingPanel({ demand, canEdit, onSaved }: { demand: Demand; canEdit: boolean; onSaved: (demand: Demand) => void }) {
@@ -1276,7 +1138,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   const canOpenPage = (value: WorkspacePage) => (canManage || !adminPages.includes(value)) && (session.role === "admin" || !adminOnlyPages.includes(value));
   const initialPage = pageFromLocation();
   const [page, setPage] = useState<WorkspacePage>(canOpenPage(initialPage) ? initialPage : "overview");
-  const [companies, setCompanies] = useState<Company[]>([]); const [categories, setCategories] = useState<Category[]>([]); const [workflows, setWorkflows] = useState<Workflow[]>([]); const [managedWorkflows, setManagedWorkflows] = useState<Workflow[]>([]); const [stages, setStages] = useState<WorkflowStage[]>([]); const [workflowStages, setWorkflowStages] = useState<WorkflowStage[]>([]); const [people, setPeople] = useState<Person[]>([]); const [users, setUsers] = useState<User[]>([]); const [demands, setDemands] = useState<Demand[]>([]); const [imports, setImports] = useState<DailyImport[]>([]); const [profile, setProfile] = useState<Profile | null>(null); const [error, setError] = useState(""); const [showImport, setShowImport] = useState(false); const [showCreate, setShowCreate] = useState(false); const [resumeImport, setResumeImport] = useState<DailyImport | null>(null); const [catalogModal, setCatalogModal] = useState<{ kind: "company" | "category"; item?: Company | Category | null } | null>(null); const [briefingCategory, setBriefingCategory] = useState<Category | null>(null); const [selectedDemand, setSelectedDemand] = useState<Demand | null>(null); const [drawerDemand, setDrawerDemand] = useState<Demand | null>(null); const [approvalRoles, setApprovalRoles] = useState<Record<string, string>>({}); const [accessRoles, setAccessRoles] = useState<Record<string, string>>({}); const [approvingUser, setApprovingUser] = useState(""); const [savingUser, setSavingUser] = useState(""); const [removingCompany, setRemovingCompany] = useState("");
+  const [companies, setCompanies] = useState<Company[]>([]); const [categories, setCategories] = useState<Category[]>([]); const [workflows, setWorkflows] = useState<Workflow[]>([]); const [managedWorkflows, setManagedWorkflows] = useState<Workflow[]>([]); const [stages, setStages] = useState<WorkflowStage[]>([]); const [workflowStages, setWorkflowStages] = useState<WorkflowStage[]>([]); const [people, setPeople] = useState<Person[]>([]); const [users, setUsers] = useState<User[]>([]); const [demands, setDemands] = useState<Demand[]>([]); const [imports, setImports] = useState<DailyImport[]>([]); const [profile, setProfile] = useState<Profile | null>(null); const [error, setError] = useState(""); const [showImport, setShowImport] = useState(false); const [showCreate, setShowCreate] = useState(false); const [resumeImport, setResumeImport] = useState<DailyImport | null>(null); const [catalogModal, setCatalogModal] = useState<{ kind: "company" | "category"; item?: Company | Category | null } | null>(null); const [briefingCategory, setBriefingCategory] = useState<Category | null>(null); const [selectedDemand, setSelectedDemand] = useState<Demand | null>(null); const [drawerDemand, setDrawerDemand] = useState<Demand | null>(null); const [approvalRoles, setApprovalRoles] = useState<Record<string, string>>({}); const [accessRoles, setAccessRoles] = useState<Record<string, string>>({}); const [approvingUser, setApprovingUser] = useState(""); const [savingUser, setSavingUser] = useState(""); const [temporaryPassword, setTemporaryPassword] = useState<{ name: string; password: string } | null>(null); const [removingCompany, setRemovingCompany] = useState("");
   const [jobRoles, setJobRoles] = useState<JobRole[]>([]); const [roleAssignments, setRoleAssignments] = useState<JobRoleAssignment[]>([]);
   const [selectedDemandTab, setSelectedDemandTab] = useState<DemandDetailTab>("overview"); const [showQuickCapture, setShowQuickCapture] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
@@ -1385,6 +1247,12 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     return () => window.removeEventListener("keydown", listener);
   }, [canCreate, showQuickCapture, showCreate, showImport, catalogModal, briefingCategory, drawerDemand]);
   async function approveUser(user: User) { setApprovingUser(user.id); setError(""); try { await api(`/users/${user.id}/approve`, { method: "POST", body: JSON.stringify({ role: approvalRoles[user.id] ?? "collaborator", expectedRevision: user.revision }) }); await loadData(); } catch (caught) { setError(messageFrom(caught)); } finally { setApprovingUser(""); } }
+  async function resetUserPassword(user: User) {
+    if (!window.confirm(`Gerar uma senha temporária para ${user.name}? As sessões abertas dessa pessoa serão encerradas.`)) return;
+    setSavingUser(user.id); setError(""); setTemporaryPassword(null);
+    try { const result = await api<{ temporaryPassword: string }>(`/users/${user.id}/reset-password`, { method: "POST" }); setTemporaryPassword({ name: user.name, password: result.temporaryPassword }); }
+    catch (caught) { setError(messageFrom(caught)); } finally { setSavingUser(""); }
+  }
   async function updateUserAccess(user: User, state: "active" | "suspended") { setSavingUser(user.id); setError(""); try { await api(`/users/${user.id}`, { method: "PUT", body: JSON.stringify({ role: accessRoles[user.id] ?? user.role ?? "collaborator", state, expectedRevision: user.revision }) }); await loadData(); } catch (caught) { setError(messageFrom(caught)); } finally { setSavingUser(""); } }
   async function removeCompany(company: Company) {
     if (!window.confirm(`Excluir “${company.name}” dos cadastros ativos? Cards e relatórios históricos continuarão preservados.`)) return;
@@ -1427,7 +1295,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   else if (page === "reports") content = <ReportsRoute canViewTeam={canManage} people={people} onOpen={(demandId) => void openReportDemand(demandId)} />;
   else if (page === "intelligence") content = <section className="panel page-panel"><div className="intelligence-hero"><div><span className="beta-chip">Beta</span><h3>Importação assistida de Dailys</h3><p>Envie um JSON analisado e escolha, item por item, qual card receberá a informação. Nenhuma alteração é aplicada sem sua revisão.</p></div>{canManage && <button className="primary action-primary" onClick={() => { setResumeImport(null); setShowImport(true); }}>Importar JSON</button>}</div>{imports.length ? <div className="table-wrap"><table><thead><tr><th>Relatório</th><th>Progresso</th><th>Situação</th><th>Ação</th></tr></thead><tbody>{imports.map((item) => <tr key={item.id}><td><strong>{item.sourceLabel}</strong><small className="table-subtitle">{item.filename}</small></td><td>{item.reviewedItems} de {item.totalItems}</td><td><span className={`import-state ${item.state}`}>{item.state === "applied" ? "Aplicada" : "Em revisão"}</span></td><td>{item.state === "reviewing" ? <button className="table-action" onClick={() => { setResumeImport(item); setShowImport(true); }}>Continuar revisão</button> : "Concluída"}</td></tr>)}</tbody></table></div> : <div className="empty-state"><span>◇</span><h3>Nenhuma importação realizada</h3><p>Este recurso complementa o trabalho manual quando houver um relatório estruturado.</p></div>}</section>;
   else if (page === "categories") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Estrutura de entrada</span><h3>Categorias, briefings e workflows</h3></div><button className="small-button" onClick={() => setCatalogModal({ kind: "category" })}>+ Nova categoria</button></div><div className="category-table">{categories.map((category) => <article key={category.id}><i style={{ background: category.color }} /><span><strong>{category.name}</strong><small>{category.code} · {workflows.find((workflow) => workflow.id === category.defaultWorkflowId)?.name ?? "Sem workflow padrão"}</small></span><div><button onClick={() => setBriefingCategory(category)}>Briefing</button><button onClick={() => setCatalogModal({ kind: "category", item: category })}>Editar</button></div></article>)}</div><div className="scope-note"><strong>Entrada padronizada</strong><span>Cada categoria combina seu briefing e workflow padrão. Um card ainda pode usar outro workflow quando necessário.</span></div></section>;
-  else if (page === "users") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Controle de acesso</span><h3>Usuários</h3><p className="panel-help">Administradores podem alterar o perfil ou suspender o acesso. A suspensão encerra as sessões abertas.</p></div><span className="count">{users.length}</span></div>{users.length ? <div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th><th>Ação</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><span className="user-cell"><AvatarView name={user.name} url={user.avatarUrl} /><strong>{user.name}</strong></span></td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{session.role === "admin" ? <select className="role-select" value={user.state === "pending_approval" ? approvalRoles[user.id] ?? "collaborator" : accessRoles[user.id] ?? user.role ?? "collaborator"} onChange={(event) => user.state === "pending_approval" ? setApprovalRoles((values) => ({ ...values, [user.id]: event.target.value })) : setAccessRoles((values) => ({ ...values, [user.id]: event.target.value }))}><option value="collaborator">Colaborador</option><option value="coordinator">Coordenador</option><option value="viewer">Visualizador</option><option value="admin">Administrador</option></select> : user.role ? roleNames[user.role] : "Definir"}</td><td>{user.state === "pending_approval" && session.role === "admin" ? <button className="table-action" disabled={approvingUser === user.id} onClick={() => void approveUser(user)}>{approvingUser === user.id ? "Liberando…" : "Liberar acesso"}</button> : session.role === "admin" ? <div className="access-actions"><button className="table-action" disabled={savingUser === user.id} onClick={() => void updateUserAccess(user, user.state === "suspended" ? "suspended" : "active")}>{savingUser === user.id ? "Salvando…" : "Salvar perfil"}</button><button className={user.state === "suspended" ? "access-restore" : "access-remove"} disabled={savingUser === user.id} onClick={() => void updateUserAccess(user, user.state === "suspended" ? "active" : "suspended")}>{user.state === "suspended" ? "Reativar" : "Remover acesso"}</button></div> : "—"}</td></tr>)}</tbody></table></div> : <div className="empty-state"><p>Nenhum usuário cadastrado.</p></div>}</section>;
+  else if (page === "users") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Controle de acesso</span><h3>Usuários</h3><p className="panel-help">Administradores podem alterar o perfil, suspender o acesso ou gerar uma senha temporária. A suspensão encerra as sessões abertas.</p></div><span className="count">{users.length}</span></div>{temporaryPassword && <Notice kind="success">Senha temporária de <strong>{temporaryPassword.name}</strong>: <code className="temporary-password">{temporaryPassword.password}</code>. Ela não será exibida novamente; entregue-a por um canal seguro. No próximo login, a pessoa precisará definir uma nova senha. <button className="link-button" onClick={() => setTemporaryPassword(null)}>Ocultar</button></Notice>}{users.length ? <div className="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Situação</th><th>Perfil</th><th>Ação</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><span className="user-cell"><AvatarView name={user.name} url={user.avatarUrl} /><strong>{user.name}</strong></span></td><td>{user.email}</td><td><span className={`state ${user.state}`}>{user.state === "active" ? "Ativo" : user.state === "suspended" ? "Suspenso" : "Pendente"}</span></td><td>{session.role === "admin" ? <select className="role-select" value={user.state === "pending_approval" ? approvalRoles[user.id] ?? "collaborator" : accessRoles[user.id] ?? user.role ?? "collaborator"} onChange={(event) => user.state === "pending_approval" ? setApprovalRoles((values) => ({ ...values, [user.id]: event.target.value })) : setAccessRoles((values) => ({ ...values, [user.id]: event.target.value }))}><option value="collaborator">Colaborador</option><option value="coordinator">Coordenador</option><option value="viewer">Visualizador</option><option value="admin">Administrador</option></select> : user.role ? roleNames[user.role] : "Definir"}</td><td>{user.state === "pending_approval" && session.role === "admin" ? <button className="table-action" disabled={approvingUser === user.id} onClick={() => void approveUser(user)}>{approvingUser === user.id ? "Liberando…" : "Liberar acesso"}</button> : session.role === "admin" ? <div className="access-actions"><button className="table-action" disabled={savingUser === user.id} onClick={() => void updateUserAccess(user, user.state === "suspended" ? "suspended" : "active")}>{savingUser === user.id ? "Salvando…" : "Salvar perfil"}</button><button className={user.state === "suspended" ? "access-restore" : "access-remove"} disabled={savingUser === user.id} onClick={() => void updateUserAccess(user, user.state === "suspended" ? "active" : "suspended")}>{user.state === "suspended" ? "Reativar" : "Remover acesso"}</button>{user.profileId !== profile?.profileId && <button className="table-action" disabled={savingUser === user.id} onClick={() => void resetUserPassword(user)}>Redefinir senha</button>}</div> : "—"}</td></tr>)}</tbody></table></div> : <div className="empty-state"><p>Nenhum usuário cadastrado.</p></div>}</section>;
   else if (page === "profile") content = <ProfilePage profile={profile} session={session} onUpdated={(updated) => { setProfile(updated); onSession({ ...session, name: updated.name }); }} />;
   else if (page === "workflows") content = <WorkflowRoute workflows={managedWorkflows.length ? managedWorkflows : workflows} stages={workflowStages} demands={demands} categories={categories} people={people} roles={jobRoles} roleAssignments={roleAssignments} canPrepare={session.role === "admin"} onReload={loadData} />;
   else content = <GovernanceSettingsRoute onReload={loadData} />;

@@ -60,6 +60,24 @@ class PermissionRole(Base):
     system_role: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
 
+class AuthAccount(Base):
+    __tablename__ = "auth_users"
+    __table_args__ = {"schema": "app"}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(320))
+    password_hash: Mapped[str] = mapped_column(Text)
+    user_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
     __table_args__ = {"schema": "app"}
@@ -929,8 +947,8 @@ class AppSession(Base):
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="CASCADE"), index=True
     )
     token_hash: Mapped[str] = mapped_column(String(64))
-    access_token_ciphertext: Mapped[str] = mapped_column(Text)
-    refresh_token_ciphertext: Mapped[str] = mapped_column(Text)
+    access_token_ciphertext: Mapped[str | None] = mapped_column(Text)
+    refresh_token_ciphertext: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     idle_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

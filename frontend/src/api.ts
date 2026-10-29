@@ -3,6 +3,7 @@ export type Session = {
   name: string;
   email: string;
   role: "admin" | "coordinator" | "collaborator" | "viewer" | null;
+  mustChangePassword: boolean;
 };
 
 export type ApiError = { code: string; message: string; requestId?: string };

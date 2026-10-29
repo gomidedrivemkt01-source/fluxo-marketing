@@ -7,19 +7,17 @@ from app.auth.dependencies import (
     get_session_service,
     require_csrf,
 )
+from app.auth.local import LocalAuthGateway
 from app.auth.schemas import (
-    EmailRequest,
+    ChangePasswordRequest,
     LoginRequest,
     MessageResponse,
-    RecoveryResponse,
     RegisterRequest,
-    ResetPasswordRequest,
     SessionResponse,
-    VerifyRequest,
 )
 from app.auth.service import CSRF_COOKIE, SESSION_COOKIE, Principal, SessionIssue, SessionService
-from app.auth.supabase import SupabaseAuthGateway
 from app.core.config import Settings, get_settings
+from app.models import AuditEvent
 
 router = APIRouter(prefix="/auth", tags=["Autenticação"])
 
@@ -51,21 +49,26 @@ def _clear_session_cookies(response: Response, settings: Settings) -> None:
     response.delete_cookie(CSRF_COOKIE, path="/", secure=settings.cookie_secure, samesite="lax")
 
 
-def _session_response(principal: Principal) -> SessionResponse:
+def _session_response(principal: Principal, gateway: LocalAuthGateway) -> SessionResponse:
+    account = gateway.get(principal.profile.auth_user_id)
     return SessionResponse(
         state=principal.membership.status.value,
         name=principal.profile.full_name,
         email=principal.profile.email,
         role=principal.role.code if principal.role else None,
+        mustChangePassword=bool(account and account.must_change_password),
     )
 
 
-@router.post("/register", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
-async def register(
+@router.post("/register", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+def register(
     payload: RegisterRequest,
-    gateway: SupabaseAuthGateway = Depends(get_auth_gateway),
-) -> MessageResponse:
-    await gateway.register(
+    response: Response,
+    gateway: LocalAuthGateway = Depends(get_auth_gateway),
+    sessions: SessionService = Depends(get_session_service),
+    settings: Settings = Depends(get_settings),
+) -> SessionResponse:
+    user = gateway.register(
         str(payload.email).lower(),
         payload.password,
         {
@@ -73,87 +76,63 @@ async def register(
             "privacy_notice_version": payload.privacy_notice_version,
         },
     )
-    return MessageResponse(message="Enviamos um código para confirmar o e-mail.")
-
-
-@router.post("/verify-email", response_model=SessionResponse | RecoveryResponse)
-async def verify_email(
-    payload: VerifyRequest,
-    response: Response,
-    gateway: SupabaseAuthGateway = Depends(get_auth_gateway),
-    sessions: SessionService = Depends(get_session_service),
-    settings: Settings = Depends(get_settings),
-) -> SessionResponse | RecoveryResponse:
-    tokens = await gateway.verify(str(payload.email).lower(), payload.code, payload.purpose)
-    if payload.purpose == "recovery":
-        return RecoveryResponse(recoveryToken=sessions.recovery_token(tokens.access_token))
     profile, membership = sessions.ensure_identity(
-        tokens,
-        privacy_notice_version=str(tokens.user.metadata.get("privacy_notice_version") or ""),
+        user, privacy_notice_version=payload.privacy_notice_version
     )
-    issued = sessions.issue(tokens, profile, membership)
+    issued = sessions.issue(profile, membership)
     _set_session_cookies(response, issued, settings)
-    return _session_response(issued.principal)
-
-
-@router.post("/resend-signup", response_model=MessageResponse, status_code=202)
-async def resend_signup(
-    payload: EmailRequest,
-    gateway: SupabaseAuthGateway = Depends(get_auth_gateway),
-) -> MessageResponse:
-    try:
-        await gateway.resend_signup_code(str(payload.email).lower())
-    except ApiError as exc:
-        if exc.status_code == 429:
-            raise
-    return MessageResponse(message="Se o cadastro existir, enviaremos um novo código.")
+    return _session_response(issued.principal, gateway)
 
 
 @router.post("/login", response_model=SessionResponse)
-async def login(
+def login(
     payload: LoginRequest,
     response: Response,
-    gateway: SupabaseAuthGateway = Depends(get_auth_gateway),
+    gateway: LocalAuthGateway = Depends(get_auth_gateway),
     sessions: SessionService = Depends(get_session_service),
     settings: Settings = Depends(get_settings),
 ) -> SessionResponse:
-    tokens = await gateway.login(str(payload.email).lower(), payload.password)
-    profile, membership = sessions.ensure_identity(tokens, record_verification=False)
-    issued = sessions.issue(tokens, profile, membership)
+    user = gateway.login(str(payload.email).lower(), payload.password)
+    profile, membership = sessions.ensure_identity(user, record_registration=False)
+    issued = sessions.issue(profile, membership)
     _set_session_cookies(response, issued, settings)
-    return _session_response(issued.principal)
+    return _session_response(issued.principal, gateway)
 
 
-@router.post("/forgot-password", response_model=MessageResponse, status_code=202)
-async def forgot_password(
-    payload: EmailRequest,
-    gateway: SupabaseAuthGateway = Depends(get_auth_gateway),
-) -> MessageResponse:
-    try:
-        await gateway.request_recovery(str(payload.email).lower())
-    except Exception:
-        # Mantém resposta uniforme para não revelar se uma conta existe.
-        pass
-    return MessageResponse(message="Se a conta existir, enviaremos um código de recuperação.")
-
-
-@router.post("/reset-password", response_model=MessageResponse)
-async def reset_password(
-    payload: ResetPasswordRequest,
-    gateway: SupabaseAuthGateway = Depends(get_auth_gateway),
+@router.post(
+    "/change-password", response_model=SessionResponse, dependencies=[Depends(require_csrf)]
+)
+def change_password(
+    payload: ChangePasswordRequest,
+    principal: Principal = Depends(get_principal),
+    gateway: LocalAuthGateway = Depends(get_auth_gateway),
     sessions: SessionService = Depends(get_session_service),
-) -> MessageResponse:
-    access_token = sessions.consume_recovery_token(payload.recovery_token)
-    user = await gateway.reset_password(access_token, payload.password)
-    profile = sessions.profile_by_auth_user_id(user.id)
-    if profile:
-        sessions.revoke_profile_sessions(profile.id)
-    return MessageResponse(message="Senha alterada. Faça login novamente.")
+) -> SessionResponse:
+    auth_user_id = principal.profile.auth_user_id
+    if not gateway.verify_password(auth_user_id, payload.current_password):
+        raise ApiError(400, "invalid_current_password", "A senha atual não confere.")
+    if payload.current_password == payload.password:
+        raise ApiError(422, "password_unchanged", "Escolha uma senha diferente da atual.")
+    gateway.set_password(auth_user_id, payload.password)
+    sessions.revoke_other_sessions(principal)
+    sessions.db.add(
+        AuditEvent(
+            organization_id=principal.membership.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="PASSWORD_CHANGED",
+            metadata_json={},
+        )
+    )
+    sessions.db.commit()
+    return _session_response(principal, gateway)
 
 
 @router.get("/session", response_model=SessionResponse)
-def current_session(principal: Principal = Depends(get_principal)) -> SessionResponse:
-    return _session_response(principal)
+def current_session(
+    principal: Principal = Depends(get_principal),
+    gateway: LocalAuthGateway = Depends(get_auth_gateway),
+) -> SessionResponse:
+    return _session_response(principal, gateway)
 
 
 @router.post("/logout", response_model=MessageResponse, dependencies=[Depends(require_csrf)])

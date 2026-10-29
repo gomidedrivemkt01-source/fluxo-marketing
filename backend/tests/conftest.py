@@ -8,5 +8,3 @@ os.environ.setdefault("APP_SESSION_SECRET", "test-session-secret-with-at-least-3
 os.environ.setdefault(
     "APP_TOKEN_ENCRYPTION_KEY", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 )
-os.environ.setdefault("APP_SUPABASE_URL", "https://example.supabase.co")
-os.environ.setdefault("APP_SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")

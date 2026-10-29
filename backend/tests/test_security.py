@@ -40,8 +40,6 @@ def test_database_dsn_encodes_separate_secret_fields() -> None:
         database_password="p@ss:word/with symbols",
         session_secret="session-secret-with-more-than-thirty-two-characters",
         token_encryption_key="encryption-secret-with-more-than-thirty-two-characters",
-        supabase_url="https://example.supabase.co",
-        supabase_publishable_key="test-key",
     )
     assert settings.database_dsn() == (
         "postgresql+psycopg://postgres.project:p%40ss%3Aword%2Fwith%20symbols@"

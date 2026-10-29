@@ -4,16 +4,14 @@ from fastapi import Cookie, Depends, Header
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError
+from app.auth.local import LocalAuthGateway
 from app.auth.service import CSRF_COOKIE, SESSION_COOKIE, Principal, SessionService
-from app.auth.supabase import SupabaseAuthGateway
 from app.core.config import Settings, get_settings
 from app.database import get_db
 
 
-def get_auth_gateway(settings: Settings = Depends(get_settings)) -> SupabaseAuthGateway:
-    return SupabaseAuthGateway(
-        str(settings.supabase_url), settings.supabase_publishable_key.get_secret_value()
-    )
+def get_auth_gateway(db: Session = Depends(get_db)) -> LocalAuthGateway:
+    return LocalAuthGateway(db)
 
 
 def get_session_service(

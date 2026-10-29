@@ -13,8 +13,6 @@ def _settings(email: str | None) -> Settings:
         bootstrap_admin_email=email,
         session_secret="session-secret-with-more-than-thirty-two-characters",
         token_encryption_key="encryption-secret-with-more-than-thirty-two-characters",
-        supabase_url="https://example.supabase.co",
-        supabase_publishable_key="test-key",
     )
 
 

@@ -7,7 +7,7 @@ from app.api.users import (
     PreferencesUpdate,
     validate_theme_selection,
 )
-from app.auth.schemas import RegisterRequest, VerifyRequest
+from app.auth.schemas import ChangePasswordRequest, RegisterRequest
 
 
 def test_register_requires_long_password() -> None:
@@ -20,15 +20,11 @@ def test_register_requires_long_password() -> None:
         )
 
 
-def test_verification_code_accepts_six_to_eight_digits() -> None:
-    six_digits = VerifyRequest(email="pessoa@example.com", code="123456", purpose="signup")
-    eight_digits = VerifyRequest(email="pessoa@example.com", code="12345678", purpose="signup")
-    assert six_digits.code == "123456"
-    assert eight_digits.code == "12345678"
+def test_new_passwords_respect_bcrypt_limit() -> None:
     with pytest.raises(ValidationError):
-        VerifyRequest(email="pessoa@example.com", code="12345", purpose="signup")
-    with pytest.raises(ValidationError):
-        VerifyRequest(email="pessoa@example.com", code="12345x", purpose="signup")
+        ChangePasswordRequest(currentPassword="atual", password="x" * 73)
+    accepted = ChangePasswordRequest(currentPassword="atual", password="x" * 72)
+    assert accepted.current_password == "atual"
 
 
 def test_preferences_accept_focus_views() -> None:

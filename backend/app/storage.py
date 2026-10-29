@@ -1,140 +1,101 @@
-import logging
-from typing import Any
-from urllib.parse import quote, urlencode
+"""Armazenamento dos anexos em disco local (volume Docker).
 
-import httpx
+A autorização acontece na API antes de qualquer operação; o download usa um link
+assinado e de curta duração servido pela própria aplicação.
+"""
+
+import json
+import os
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+import anyio
 
 from app.api.errors import ApiError
+from app.core.security import TokenCipher
 
-logger = logging.getLogger(__name__)
-
-
-class StorageAuthenticationError(Exception):
-    """The Supabase user token must be refreshed before retrying."""
+SIGNED_FILES_PATH = "/api/v1/files/signed"
 
 
-class SupabaseStorageGateway:
-    def __init__(self, base_url: str, publishable_key: str, bucket: str) -> None:
-        self._root = f"{base_url.rstrip('/')}/storage/v1"
-        self._publishable_key = publishable_key
+@dataclass(frozen=True, slots=True)
+class SignedObject:
+    path: Path
+    content_type: str
+    download_name: str | None
+
+
+class LocalStorageGateway:
+    def __init__(self, root: Path, bucket: str, signing_key: str) -> None:
+        self._root = (root / bucket).resolve()
+        self._cipher = TokenCipher(signing_key)
         self.bucket = bucket
 
-    def _headers(self, access_token: str, **extra: str) -> dict[str, str]:
-        return {
-            "apikey": self._publishable_key,
-            "Authorization": f"Bearer {access_token}",
-            **extra,
-        }
+    def _object_path(self, path: str) -> Path:
+        target = (self._root / path).resolve()
+        if not path or not target.is_relative_to(self._root) or target == self._root:
+            raise ApiError(400, "file_path_invalid", "Caminho de arquivo inválido.")
+        return target
 
     @staticmethod
-    def _error_details(response: httpx.Response) -> tuple[str, str]:
-        try:
-            payload = response.json()
-        except ValueError:
-            return "", ""
-        if not isinstance(payload, dict):
-            return "", ""
-        code = str(payload.get("code") or payload.get("errorCode") or "")
-        message = str(payload.get("message") or payload.get("error") or "")
-        return code, message
-
-    @classmethod
-    def _raise_for_status(cls, response: httpx.Response) -> None:
-        if response.status_code < 400:
-            return
-        code, raw_message = cls._error_details(response)
-        normalized_code = code.lower()
-        message = raw_message.lower()
-        expired_claim = (
-            normalized_code == "accessdenied" and "claim timestamp check failed" in message
-        )
-        if (
-            response.status_code == 401
-            or normalized_code in {"invalidjwt", "expiredtoken"}
-            or expired_claim
-        ):
-            raise StorageAuthenticationError
-        if response.status_code == 404:
-            raise ApiError(404, "file_object_not_found", "O arquivo não está disponível.")
-        if response.status_code == 409 or "already exists" in message:
+    def _write_new(target: Path, data: bytes) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
             raise ApiError(409, "file_object_conflict", "Já existe um arquivo neste caminho.")
-        if response.status_code == 413:
-            raise ApiError(413, "file_too_large", "O arquivo excede o limite permitido.")
-        if response.status_code == 403:
-            raise ApiError(403, "file_storage_denied", "O Storage recusou o acesso ao arquivo.")
-        logger.warning(
-            "Supabase Storage respondeu status=%s code=%s message=%s",
-            response.status_code,
-            code or "-",
-            raw_message[:500] or "-",
-        )
-        raise ApiError(502, "file_storage_failed", "O Storage não conseguiu processar o arquivo.")
-
-    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        descriptor, temporary = tempfile.mkstemp(dir=target.parent, prefix=".upload-")
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-                response = await client.request(method, url, **kwargs)
-        except httpx.RequestError as exc:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.link(temporary, target)
+        except FileExistsError as exc:
+            raise ApiError(
+                409, "file_object_conflict", "Já existe um arquivo neste caminho."
+            ) from exc
+        finally:
+            os.unlink(temporary)
+
+    async def upload(self, path: str, data: bytes, content_type: str) -> None:
+        target = self._object_path(path)
+        try:
+            await anyio.to_thread.run_sync(self._write_new, target, data)
+        except OSError as exc:
             raise ApiError(
                 503, "file_storage_unavailable", "O serviço de arquivos está indisponível."
             ) from exc
-        self._raise_for_status(response)
-        return response
 
-    def _object_url(self, path: str) -> str:
-        return f"{self._root}/object/{quote(self.bucket, safe='')}/{quote(path, safe='/')}"
+    async def remove(self, path: str) -> None:
+        target = self._object_path(path)
+        await anyio.to_thread.run_sync(lambda: target.unlink(missing_ok=True))
 
-    async def upload(
+    async def download(self, path: str) -> bytes:
+        target = self._object_path(path)
+        try:
+            return await anyio.to_thread.run_sync(target.read_bytes)
+        except FileNotFoundError as exc:
+            raise ApiError(404, "file_object_not_found", "O arquivo não está disponível.") from exc
+
+    def create_signed_url(
         self,
         path: str,
-        data: bytes,
         content_type: str,
-        access_token: str,
-    ) -> None:
-        await self._request(
-            "POST",
-            self._object_url(path),
-            headers=self._headers(
-                access_token,
-                **{"Content-Type": content_type},
-            ),
-            content=data,
-        )
-
-    async def remove(self, path: str, access_token: str) -> None:
-        await self._request(
-            "DELETE",
-            f"{self._root}/object/{quote(self.bucket, safe='')}",
-            headers=self._headers(access_token, **{"Content-Type": "application/json"}),
-            json={"prefixes": [path]},
-        )
-
-    async def download(self, path: str, access_token: str) -> bytes:
-        response = await self._request(
-            "GET",
-            self._object_url(path),
-            headers=self._headers(access_token),
-        )
-        return response.content
-
-    async def create_signed_url(
-        self,
-        path: str,
-        access_token: str,
-        expires_in: int,
         download_name: str | None,
     ) -> str:
-        response = await self._request(
-            "POST",
-            f"{self._root}/object/sign/{quote(self.bucket, safe='')}/{quote(path, safe='/')}",
-            headers=self._headers(access_token, **{"Content-Type": "application/json"}),
-            json={"expiresIn": expires_in},
+        self._object_path(path)
+        token = self._cipher.encrypt(
+            json.dumps({"path": path, "type": content_type, "name": download_name})
         )
-        payload = response.json()
-        signed_path = str(payload.get("signedURL") or payload.get("signedUrl") or "")
-        if not signed_path:
-            raise ApiError(502, "file_sign_failed", "Não foi possível preparar o download.")
-        if download_name is None:
-            return f"{self._root}{signed_path}"
-        separator = "&" if "?" in signed_path else "?"
-        return f"{self._root}{signed_path}{separator}{urlencode({'download': download_name})}"
+        return f"{SIGNED_FILES_PATH}/{token}"
+
+    def resolve_signed(self, token: str, expires_in: int) -> SignedObject:
+        try:
+            payload = json.loads(self._cipher.decrypt(token, ttl=expires_in))
+        except ValueError as exc:
+            raise ApiError(
+                403, "file_link_expired", "O link do arquivo expirou. Abra-o novamente."
+            ) from exc
+        target = self._object_path(str(payload["path"]))
+        if not target.is_file():
+            raise ApiError(404, "file_object_not_found", "O arquivo não está disponível.")
+        return SignedObject(target, str(payload["type"]), payload.get("name"))

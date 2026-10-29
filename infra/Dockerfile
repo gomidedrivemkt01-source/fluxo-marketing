@@ -14,5 +14,6 @@ COPY backend/migrations ./backend/migrations
 COPY backend/alembic.ini ./backend/alembic.ini
 RUN python -m pip install --no-cache-dir ./backend
 COPY --from=frontend /src/frontend/dist ./frontend/dist
+RUN mkdir -p /app/storage
 EXPOSE 8000
 CMD ["python", "-m", "app.startup"]

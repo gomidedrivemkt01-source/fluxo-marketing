@@ -32,48 +32,51 @@ Cada lote guarda as alterações necessárias para reversão. Demandas criadas p
 
 A política inicial verifica a cada 60 dias as demandas concluídas sem alteração há pelo menos 60 dias. A ação apenas preenche `archived_at`: não remove demandas, tempos, comentários ou dados de performance. O administrador pode revisar a quantidade elegível, executar o arquivamento manualmente e restaurar itens depois.
 
-## Execução local
+## Implantação (Docker)
 
-Pré-requisitos: Node.js 24+, Python 3.12+ e Docker Desktop com Compose.
+A plataforma roda com três serviços em `docker-compose.yml`: `app` (frontend + API na porta 8000),
+`db` (PostgreSQL 17) e `backup` (dump diário do banco e dos anexos em `backups/`).
+Não há dependência de Supabase nem de servidor de e-mail.
 
-1. Copie `.env.example` para `.env` e preencha as configurações do projeto de homologação.
-2. Inicie o PostgreSQL: `docker compose -f infra/compose.yaml up -d db`.
-3. Crie o ambiente Python e instale o backend: `python -m venv .venv`, `.venv\Scripts\python -m pip install -e backend[dev]`.
-4. Aplique as migrations: `.venv\Scripts\alembic -c backend/alembic.ini upgrade head`.
-5. Instale o frontend: `npm --prefix frontend install`.
-6. Inicie a API: `.venv\Scripts\uvicorn app.main:app --app-dir backend --reload --port 8000`.
-7. Inicie a interface: `npm --prefix frontend run dev`.
+```bash
+cp .env.example .env   # preencha DB_SENHA e os dois segredos (openssl rand -base64 48)
+docker compose up -d --build
+docker compose ps
+curl http://localhost:8000/health
+```
 
-Abra `http://localhost:5173`. O Vite encaminha `/api` para a API local.
+As migrations são aplicadas automaticamente antes de a API iniciar. Para atualizar:
 
-### Execução integral com Docker
+```bash
+git pull --ff-only
+docker compose up -d --build app
+```
 
-O mesmo container multi-stage usado em produção compila o frontend, instala o backend,
-confirma as migrations e publica a aplicação na porta `8000`. Com um `.env` válido na raiz:
+Backup manual imediato: `docker compose exec backup /bin/sh /backup.sh agora`.
+As instruções de restauração estão no cabeçalho de `scripts/backup.sh`.
 
-1. Execute `docker compose -f infra/compose.yaml up --build`.
-2. Aguarde os serviços `db` e `app` ficarem saudáveis.
-3. Abra `http://localhost:8000`.
+A instalação atual usa HTTP na rede interna (`APP_ALLOW_INSECURE_HTTP=true`,
+`APP_COOKIE_SECURE=false`). Ao colocar HTTPS na frente, inverta os dois valores.
 
-O Compose substitui apenas a conexão local com PostgreSQL. Supabase Auth e Storage continuam
-usando as variáveis do `.env`. O `.dockerignore` impede o envio de segredos, histórico Git,
-dependências locais e caches para o contexto de build. Para migrar para outro provedor de
-containers, publique a imagem de `infra/Dockerfile`, exponha a porta `8000`, configure as
-variáveis `APP_*` e aponte o health check para `/health`.
+### Desenvolvimento local
 
-## Configuração do Supabase Auth
+1. `docker compose up -d db` e um `.env` com `APP_DATABASE_URL` apontando para ele.
+2. `python -m venv .venv` e `pip install -e "backend[dev]"`.
+3. `alembic -c backend/alembic.ini upgrade head`.
+4. `uvicorn app.main:app --app-dir backend --reload --port 8000` e `npm --prefix frontend run dev`.
 
-- Authentication > Providers > Email: habilitar e-mail/senha e confirmação de e-mail.
-- Desabilitar Google, outros provedores sociais e sign-in anônimo.
-- Authentication > Email > SMTP: usar o SMTP autorizado.
-- Templates de confirmação e recuperação: usar `{{ .Token }}` para mostrar o código numérico.
-- Site URL e Redirect URLs: cadastrar somente as origens de homologação e produção.
+## Acesso sem e-mail
 
-O backend usa apenas a URL do projeto e a chave publicável para os fluxos do usuário. Credenciais administrativas não são expostas ao frontend.
+- **Cadastro:** a pessoa cria a conta e fica pendente até um administrador liberar o acesso em **Usuários**.
+- **Esqueci a senha:** um administrador usa **Redefinir senha** em **Usuários**. A plataforma gera uma
+  senha temporária exibida uma única vez e encerra as sessões da pessoa; no login seguinte ela é obrigada
+  a definir uma senha nova.
+- **Troca de senha:** disponível em **Perfil**; encerra as demais sessões.
+- Senhas usam bcrypt. Após 10 tentativas erradas, a conta fica bloqueada por 15 minutos.
 
 ## Primeiro administrador
 
-Configure `APP_BOOTSTRAP_ADMIN_EMAIL` no ambiente de produção. Depois de cadastrar esse endereço e confirmar o código recebido, a plataforma o promove automaticamente como o primeiro administrador. A promoção só ocorre quando ainda não existe administrador ativo e fica registrada na auditoria.
+Em uma instalação nova, configure `APP_BOOTSTRAP_ADMIN_EMAIL`. Ao se cadastrar com esse endereço, a plataforma o promove automaticamente como o primeiro administrador. A promoção só ocorre quando ainda não existe administrador ativo e fica registrada na auditoria.
 
 Como alternativa operacional, após aplicar as migrations e verificar a identidade, execute `python -m app.scripts.bootstrap_admin --email administrador@empresa.com`. O comando se recusa a criar um segundo bootstrap se já houver administrador ativo.
 
@@ -81,11 +84,20 @@ Depois disso, o administrador libera novos cadastros pela área **Usuários**, e
 
 ## Arquivos privados
 
-A migration cria o bucket privado `demand-files` no Supabase Storage e aplica políticas que verificam o usuário, a organização e a demanda. O backend envia e assina arquivos com o token do próprio usuário; nenhuma chave administrativa do Storage é necessária.
+Os anexos ficam no volume Docker `arquivos` (`/app/storage/demand-files`), no mesmo caminho
+`organização/demanda/…` registrado em `app.demand_files`. A API confere a permissão sobre a demanda
+antes de qualquer operação, e o download usa um link assinado que expira em
+`APP_STORAGE_SIGNED_URL_TTL` segundos (120 por padrão).
 
-O limite inicial é de 25 MB por arquivo. São aceitos PDF, imagens, documentos do Microsoft 365, texto, CSV, áudio e vídeo nos formatos configurados na migration. A remoção é lógica e interrompe novos downloads; links assinados expiram em 120 segundos. Os metadados, a soma SHA-256, os eventos da demanda e a auditoria permanecem no PostgreSQL.
+O limite inicial é de 25 MB por arquivo (`APP_STORAGE_MAX_FILE_SIZE`). A remoção é lógica e interrompe
+novos downloads. Os metadados, a soma SHA-256, os eventos da demanda e a auditoria permanecem no PostgreSQL.
 
-Os valores podem ser ajustados por `APP_STORAGE_BUCKET`, `APP_STORAGE_MAX_FILE_SIZE` e `APP_STORAGE_SIGNED_URL_TTL`. O limite configurado na aplicação deve permanecer alinhado ao limite do bucket.
+## Migração do Supabase
+
+Os dados vieram do export do projeto Supabase `fluxo-marketing-operacoes` (29/10/2026).
+`scripts/supabase_export_to_sql.py` converte o `data.sql` do export: carrega o schema `app` e transforma
+os usuários confirmados de `auth.users` em `app.auth_users`, preservando ids e hashes bcrypt (as senhas
+continuam as mesmas). Os binários do bucket `demand-files` foram copiados para o volume `arquivos`.
 
 ## Formato da Daily
 
@@ -93,9 +105,8 @@ Use o schema `2.0` descrito em `../outputs/daily-import-v2.schema.json`. O arqui
 
 ## Segurança operacional
 
-- Segredos ficam apenas nas variáveis do serviço.
-- O bucket de demandas permanece privado e libera downloads somente por URLs assinadas de curta duração.
-- O schema operacional não deve ser exposto pela Data API.
-- A conexão de runtime não deve ser dona das tabelas nem possuir `BYPASSRLS`.
+- Segredos ficam apenas no `.env` (fora do Git, permissão restrita).
+- Os anexos só saem da API por links assinados de curta duração.
+- O PostgreSQL não publica porta no host; só a aplicação acessa o banco.
 - Nunca usar dados reais nos ambientes de desenvolvimento e CI.
-- Backups de PostgreSQL e Storage são processos separados.
+- O export original do Supabase fica em `migracao/` (fora do Git) e contém dados pessoais e hashes de senha.

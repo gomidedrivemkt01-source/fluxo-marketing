@@ -8,9 +8,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError
-from app.auth.supabase import AuthTokens
+from app.auth.local import AuthUser
 from app.core.config import Settings
-from app.core.security import TokenCipher, hash_session_token, new_session_token
+from app.core.security import hash_session_token, new_session_token
 from app.models import (
     AppSession,
     AuditEvent,
@@ -74,7 +74,6 @@ class SessionService:
     def __init__(self, db: Session, settings: Settings) -> None:
         self.db = db
         self.settings = settings
-        self.cipher = TokenCipher(settings.token_encryption_key.get_secret_value())
 
     def _ensure_organization(self) -> Organization:
         organization = self.db.scalar(select(Organization).where(Organization.slug == "marketing"))
@@ -115,21 +114,21 @@ class SessionService:
 
     def ensure_identity(
         self,
-        tokens: AuthTokens,
+        user: AuthUser,
         *,
         fallback_name: str = "Usuário",
         privacy_notice_version: str | None = None,
-        record_verification: bool = True,
+        record_registration: bool = True,
     ) -> tuple[UserProfile, Membership]:
-        auth_user_id = uuid.UUID(tokens.user.id)
+        auth_user_id = uuid.UUID(user.id)
         profile = self.db.scalar(
             select(UserProfile).where(UserProfile.auth_user_id == auth_user_id)
         )
         if not profile:
             profile = UserProfile(
                 auth_user_id=auth_user_id,
-                email=tokens.user.email,
-                full_name=str(tokens.user.metadata.get("full_name") or fallback_name)[:160],
+                email=user.email,
+                full_name=str(user.metadata.get("full_name") or fallback_name)[:160],
             )
             self.db.add(profile)
             self.db.flush()
@@ -167,12 +166,12 @@ class SessionService:
                     self.db.add(
                         PrivacyAcknowledgement(user_profile_id=profile.id, notice_id=notice.id)
                     )
-        if record_verification:
+        if record_registration:
             self.db.add(
                 AuditEvent(
                     organization_id=organization.id,
                     actor_user_id=profile.id,
-                    event_type="EMAIL_VERIFIED",
+                    event_type="ACCOUNT_REGISTERED",
                     metadata_json={"authUserId": str(auth_user_id)},
                 )
             )
@@ -230,9 +229,7 @@ class SessionService:
             )
         )
 
-    def issue(
-        self, tokens: AuthTokens, profile: UserProfile, membership: Membership
-    ) -> SessionIssue:
+    def issue(self, profile: UserProfile, membership: Membership) -> SessionIssue:
         now = utc_now()
         raw_token = new_session_token()
         csrf_token = secrets.token_urlsafe(32)
@@ -241,8 +238,6 @@ class SessionService:
             token_hash=hash_session_token(
                 raw_token, self.settings.session_secret.get_secret_value()
             ),
-            access_token_ciphertext=self.cipher.encrypt(tokens.access_token),
-            refresh_token_ciphertext=self.cipher.encrypt(tokens.refresh_token),
             expires_at=now + timedelta(days=7),
             idle_expires_at=now + timedelta(hours=24),
             last_seen_at=now,
@@ -318,19 +313,16 @@ class SessionService:
         )
         self.db.commit()
 
-    def profile_by_auth_user_id(self, auth_user_id: str) -> UserProfile | None:
-        return self.db.scalar(
-            select(UserProfile).where(UserProfile.auth_user_id == uuid.UUID(auth_user_id))
+    def revoke_other_sessions(self, principal: Principal) -> None:
+        self.db.execute(
+            update(AppSession)
+            .where(
+                AppSession.user_profile_id == principal.profile.id,
+                AppSession.id != principal.session.id,
+                AppSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=utc_now())
         )
-
-    def recovery_token(self, access_token: str) -> str:
-        return self.cipher.encrypt(access_token)
-
-    def consume_recovery_token(self, token: str) -> str:
-        try:
-            return self.cipher.decrypt(token, ttl=600)
-        except ValueError as exc:
-            raise ApiError(400, "recovery_expired", "O código de recuperação expirou.") from exc
 
 
 def commit_or_conflict(db: Session) -> None:

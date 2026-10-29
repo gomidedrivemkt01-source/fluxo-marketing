@@ -5,7 +5,6 @@ import mimetypes
 import re
 import unicodedata
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,20 +14,19 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import FileResponse, RedirectResponse, Response
 
 from app.api.access import require_any_permission, require_permission
 from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
-from app.auth.supabase import SupabaseAuthGateway
 from app.core.config import Settings, get_settings
-from app.core.security import TokenCipher
 from app.database import get_db
 from app.models import AuditEvent, Demand, DemandFile, DemandUpdate, UserProfile, utc_now
-from app.storage import StorageAuthenticationError, SupabaseStorageGateway
+from app.storage import LocalStorageGateway
 
 router = APIRouter(prefix="/demands", tags=["Arquivos"])
+signed_router = APIRouter(prefix="/files", tags=["Arquivos"])
 logger = logging.getLogger(__name__)
 
 ALLOWED_FILE_TYPES: dict[str, set[str]] = {
@@ -90,11 +88,11 @@ class SignedFileOut(BaseModel):
     expires_at: datetime = Field(alias="expiresAt")
 
 
-def get_storage_gateway(settings: Settings = Depends(get_settings)) -> SupabaseStorageGateway:
-    return SupabaseStorageGateway(
-        str(settings.supabase_url),
-        settings.supabase_publishable_key.get_secret_value(),
+def get_storage_gateway(settings: Settings = Depends(get_settings)) -> LocalStorageGateway:
+    return LocalStorageGateway(
+        settings.storage_dir,
         settings.storage_bucket,
+        settings.token_encryption_key.get_secret_value(),
     )
 
 
@@ -243,39 +241,6 @@ async def read_upload(upload: UploadFile, max_size: int) -> tuple[bytes, str]:
     return b"".join(chunks), digest.hexdigest()
 
 
-async def _with_storage_token[T](
-    operation: Callable[[str], Awaitable[T]],
-    principal: Principal,
-    settings: Settings,
-    db: Session,
-) -> T:
-    cipher = TokenCipher(settings.token_encryption_key.get_secret_value())
-    try:
-        access_token = cipher.decrypt(principal.session.access_token_ciphertext)
-    except ValueError as exc:
-        raise ApiError(401, "session_token_invalid", "Faça login novamente.") from exc
-    try:
-        return await operation(access_token)
-    except StorageAuthenticationError:
-        try:
-            refresh_token = cipher.decrypt(principal.session.refresh_token_ciphertext)
-        except ValueError as exc:
-            raise ApiError(401, "session_token_invalid", "Faça login novamente.") from exc
-        auth = SupabaseAuthGateway(
-            str(settings.supabase_url), settings.supabase_publishable_key.get_secret_value()
-        )
-        tokens = await auth.refresh(refresh_token)
-        if uuid.UUID(tokens.user.id) != principal.profile.auth_user_id:
-            raise ApiError(401, "session_identity_changed", "Faça login novamente.") from None
-        principal.session.access_token_ciphertext = cipher.encrypt(tokens.access_token)
-        principal.session.refresh_token_ciphertext = cipher.encrypt(tokens.refresh_token)
-        db.commit()
-        try:
-            return await operation(tokens.access_token)
-        except StorageAuthenticationError as exc:
-            raise ApiError(401, "session_token_invalid", "Faça login novamente.") from exc
-
-
 @router.get("/{demand_id}/files", response_model=list[DemandFileOut])
 def list_files(
     demand_id: uuid.UUID,
@@ -305,7 +270,7 @@ async def upload_file(
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    storage: SupabaseStorageGateway = Depends(get_storage_gateway),
+    storage: LocalStorageGateway = Depends(get_storage_gateway),
 ) -> DemandFileOut:
     require_any_permission(principal, "demands:write", "demands:work")
     demand = _get_demand(db, demand_id, principal)
@@ -313,12 +278,7 @@ async def upload_file(
     contents, sha256 = await read_upload(file, settings.storage_max_file_size)
     object_path = f"{demand.organization_id}/{demand.id}/{uuid.uuid4().hex}/{safe_name}"
 
-    await _with_storage_token(
-        lambda token: storage.upload(object_path, contents, content_type, token),
-        principal,
-        settings,
-        db,
-    )
+    await storage.upload(object_path, contents, content_type)
 
     item = DemandFile(
         organization_id=demand.organization_id,
@@ -360,10 +320,8 @@ async def upload_file(
     except SQLAlchemyError:
         db.rollback()
         try:
-            await _with_storage_token(
-                lambda token: storage.remove(object_path, token), principal, settings, db
-            )
-        except (ApiError, StorageAuthenticationError):
+            await storage.remove(object_path)
+        except (ApiError, OSError):
             logger.exception(
                 "Falha ao remover objeto órfão do Storage", extra={"path": object_path}
             )
@@ -382,7 +340,7 @@ async def sign_file_download(
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    storage: SupabaseStorageGateway = Depends(get_storage_gateway),
+    storage: LocalStorageGateway = Depends(get_storage_gateway),
 ) -> SignedFileOut:
     require_permission(principal, "demands:read")
     demand = _get_demand(db, demand_id, principal)
@@ -397,17 +355,7 @@ async def sign_file_download(
         raise ApiError(
             404, "file_content_not_found", "O conteúdo deste arquivo não está disponível."
         )
-    url = await _with_storage_token(
-        lambda token: storage.create_signed_url(
-            storage_path,
-            token,
-            settings.storage_signed_url_ttl,
-            item.original_name,
-        ),
-        principal,
-        settings,
-        db,
-    )
+    url = storage.create_signed_url(storage_path, item.content_type, item.original_name)
     return SignedFileOut(
         url=url,
         expires_at=utc_now() + timedelta(seconds=settings.storage_signed_url_ttl),
@@ -482,7 +430,7 @@ async def preview_image(
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    storage: SupabaseStorageGateway = Depends(get_storage_gateway),
+    storage: LocalStorageGateway = Depends(get_storage_gateway),
 ) -> Response:
     require_permission(principal, "demands:read")
     demand = _get_demand(db, demand_id, principal)
@@ -501,28 +449,13 @@ async def preview_image(
             404, "file_content_not_found", "O conteúdo desta imagem não está disponível."
         )
     if item.content_type in TIFF_FILE_TYPES:
-        contents = await _with_storage_token(
-            lambda token: storage.download(storage_path, token),
-            principal,
-            settings,
-            db,
-        )
+        contents = await storage.download(storage_path)
         return Response(
             tiff_preview(contents),
             media_type="image/png",
             headers={"Cache-Control": "private, max-age=60"},
         )
-    url = await _with_storage_token(
-        lambda token: storage.create_signed_url(
-            storage_path,
-            token,
-            settings.storage_signed_url_ttl,
-            None,
-        ),
-        principal,
-        settings,
-        db,
-    )
+    url = storage.create_signed_url(storage_path, item.content_type, None)
     return RedirectResponse(
         url,
         status_code=307,
@@ -572,3 +505,19 @@ def delete_file(
         )
     )
     db.commit()
+
+
+@signed_router.get("/signed/{token}", response_class=FileResponse)
+def serve_signed_file(
+    token: str,
+    settings: Settings = Depends(get_settings),
+    storage: LocalStorageGateway = Depends(get_storage_gateway),
+) -> FileResponse:
+    signed = storage.resolve_signed(token, settings.storage_signed_url_ttl)
+    return FileResponse(
+        signed.path,
+        media_type=signed.content_type,
+        filename=signed.download_name,
+        content_disposition_type="attachment" if signed.download_name else "inline",
+        headers={"Cache-Control": "private, max-age=60"},
+    )

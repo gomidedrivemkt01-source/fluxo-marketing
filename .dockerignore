@@ -15,3 +15,5 @@ backend/.venv
 pytest-cache-files-*
 docs
 *.log
+migracao
+backups

@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.api.access import require_active, require_permission
 from app.api.errors import ApiError
-from app.auth.dependencies import get_principal, require_csrf
+from app.auth.dependencies import get_auth_gateway, get_principal, require_csrf
+from app.auth.local import LocalAuthGateway, new_temporary_password
 from app.auth.service import Principal
 from app.database import get_db
 from app.models import (
@@ -57,6 +58,10 @@ class MembershipUpdateRequest(BaseModel):
     role: str = Field(pattern=r"^(admin|coordinator|collaborator|viewer)$")
     state: Literal["active", "suspended"]
     expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class TemporaryPasswordOut(BaseModel):
+    temporary_password: str = Field(alias="temporaryPassword")
 
 
 class ProfileOut(BaseModel):
@@ -717,3 +722,51 @@ def update_user_access(
             else None
         ),
     )
+
+
+@router.post(
+    "/{membership_id}/reset-password",
+    response_model=TemporaryPasswordOut,
+    dependencies=[Depends(require_csrf)],
+)
+def reset_user_password(
+    membership_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+    gateway: LocalAuthGateway = Depends(get_auth_gateway),
+) -> TemporaryPasswordOut:
+    """Gera uma senha temporária, já que a plataforma não envia e-mails de recuperação."""
+    require_permission(principal, "users:manage")
+    if not principal.role or principal.role.code != "admin":
+        raise ApiError(403, "admin_required", "Somente administradores podem redefinir senhas.")
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.id == membership_id,
+            Membership.organization_id == principal.membership.organization_id,
+        )
+    )
+    if not membership:
+        raise ApiError(404, "user_not_found", "Usuário não encontrado.")
+    if membership.id == principal.membership.id:
+        raise ApiError(
+            409, "self_password_reset", "Use a troca de senha do seu perfil para alterar a sua."
+        )
+    profile = db.get(UserProfile, membership.user_profile_id)
+    assert profile is not None
+    temporary_password = new_temporary_password()
+    gateway.set_password(profile.auth_user_id, temporary_password, must_change=True)
+    db.execute(
+        update(AppSession)
+        .where(AppSession.user_profile_id == profile.id, AppSession.revoked_at.is_(None))
+        .values(revoked_at=utc_now())
+    )
+    db.add(
+        AuditEvent(
+            organization_id=membership.organization_id,
+            actor_user_id=principal.profile.id,
+            event_type="PASSWORD_RESET_BY_ADMIN",
+            metadata_json={"membershipId": str(membership.id)},
+        )
+    )
+    db.commit()
+    return TemporaryPasswordOut(temporaryPassword=temporary_password)

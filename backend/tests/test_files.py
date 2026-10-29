@@ -40,32 +40,29 @@ class FakeStorage:
     bucket = "demand-files"
 
     def __init__(self) -> None:
-        self.uploaded: tuple[str, bytes, str, str] | None = None
-        self.signed: tuple[str, str, int, str] | None = None
-        self.downloaded: tuple[str, str] | None = None
+        self.uploaded: tuple[str, bytes, str] | None = None
+        self.signed: tuple[str, str, str | None] | None = None
+        self.downloaded: str | None = None
         self.download_contents = b""
 
-    async def upload(
-        self, path: str, data: bytes, content_type: str, access_token: str
-    ) -> None:
-        self.uploaded = (path, data, content_type, access_token)
+    async def upload(self, path: str, data: bytes, content_type: str) -> None:
+        self.uploaded = (path, data, content_type)
 
-    async def remove(self, path: str, access_token: str) -> None:
+    async def remove(self, path: str) -> None:
         return None
 
-    async def download(self, path: str, access_token: str) -> bytes:
-        self.downloaded = (path, access_token)
+    async def download(self, path: str) -> bytes:
+        self.downloaded = path
         return self.download_contents
 
-    async def create_signed_url(
+    def create_signed_url(
         self,
         path: str,
-        access_token: str,
-        expires_in: int,
+        content_type: str,
         download_name: str | None,
     ) -> str:
-        self.signed = (path, access_token, expires_in, download_name)
-        return "https://example.supabase.co/storage/v1/object/sign/demand-files/file?token=test"
+        self.signed = (path, content_type, download_name)
+        return "/api/v1/files/signed/test-token"
 
 
 def _principal(*, code: str = "collaborator", profile_id: uuid.UUID | None = None) -> Principal:
@@ -175,10 +172,6 @@ async def test_upload_file_persists_hash_event_and_audit(monkeypatch: pytest.Mon
         headers=Headers({"content-type": "application/pdf"}),
     )
 
-    async def with_token(operation, principal_arg, settings_arg, db_arg):
-        return await operation("user-token")
-
-    monkeypatch.setattr("app.api.files._with_storage_token", with_token)
 
     def assign_database_values() -> None:
         item = next(
@@ -207,7 +200,7 @@ async def test_upload_file_persists_hash_event_and_audit(monkeypatch: pytest.Mon
     assert result.can_set_cover is False
     assert storage.uploaded is not None
     assert storage.uploaded[0].startswith(f"{demand.organization_id}/{demand.id}/")
-    assert storage.uploaded[2:] == ("application/pdf", "user-token")
+    assert storage.uploaded[2] == "application/pdf"
     added = [call.args[0] for call in db.add.call_args_list]
     assert any(isinstance(value, DemandUpdate) and value.kind == "FILE_ATTACHED" for value in added)
     assert any(
@@ -288,10 +281,6 @@ async def test_signed_download_uses_private_object_path(monkeypatch: pytest.Monk
     db.scalar.side_effect = [demand, item]
     storage = FakeStorage()
 
-    async def with_token(operation, principal_arg, settings_arg, db_arg):
-        return await operation("user-token")
-
-    monkeypatch.setattr("app.api.files._with_storage_token", with_token)
     result = await sign_file_download(
         demand.id,
         item.id,
@@ -301,8 +290,8 @@ async def test_signed_download_uses_private_object_path(monkeypatch: pytest.Monk
         storage,  # type: ignore[arg-type]
     )
 
-    assert "token=test" in result.url
-    assert storage.signed == (item.storage_path, "user-token", 120, item.original_name)
+    assert result.url == "/api/v1/files/signed/test-token"
+    assert storage.signed == (item.storage_path, item.content_type, item.original_name)
 
 
 @pytest.mark.asyncio
@@ -318,10 +307,6 @@ async def test_image_preview_redirects_to_private_signed_object(
     db.scalar.side_effect = [demand, item]
     storage = FakeStorage()
 
-    async def with_token(operation, principal_arg, settings_arg, db_arg):
-        return await operation("user-token")
-
-    monkeypatch.setattr("app.api.files._with_storage_token", with_token)
     result = await preview_image(
         demand.id,
         item.id,
@@ -332,9 +317,9 @@ async def test_image_preview_redirects_to_private_signed_object(
     )
 
     assert result.status_code == 307
-    assert result.headers["location"].startswith("https://example.supabase.co/")
+    assert result.headers["location"] == "/api/v1/files/signed/test-token"
     assert result.headers["cache-control"] == "private, max-age=60"
-    assert storage.signed == (item.storage_path, "user-token", 120, None)
+    assert storage.signed == (item.storage_path, "image/png", None)
 
 
 @pytest.mark.asyncio
@@ -355,10 +340,6 @@ async def test_tiff_preview_is_converted_to_png(
     db = MagicMock(spec=Session)
     db.scalar.side_effect = [demand, item]
 
-    async def with_token(operation, principal_arg, settings_arg, db_arg):
-        return await operation("user-token")
-
-    monkeypatch.setattr("app.api.files._with_storage_token", with_token)
     result = await preview_image(
         demand.id,
         item.id,
@@ -371,4 +352,4 @@ async def test_tiff_preview_is_converted_to_png(
     assert result.status_code == 200
     assert result.media_type == "image/png"
     assert bytes(result.body).startswith(b"\x89PNG")
-    assert storage.downloaded == (item.storage_path, "user-token")
+    assert storage.downloaded == item.storage_path

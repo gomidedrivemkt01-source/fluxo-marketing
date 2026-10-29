@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
@@ -27,14 +28,15 @@ class Settings(BaseSettings):
     ] = "require"
     session_secret: SecretStr = Field(min_length=32)
     token_encryption_key: SecretStr = Field(min_length=32)
-    supabase_url: AnyHttpUrl
-    supabase_publishable_key: SecretStr
+    storage_dir: Path = Path("/app/storage")
     storage_bucket: str = "demand-files"
     storage_max_file_size: int = Field(default=25 * 1024 * 1024, ge=1, le=50 * 1024 * 1024)
     storage_signed_url_ttl: int = Field(default=120, ge=30, le=900)
     bootstrap_organization_name: str = "Marketing"
     bootstrap_admin_email: EmailStr | None = None
     cookie_secure: bool = False
+    # Rede interna sem TLS: permite produção em HTTP de forma explícita.
+    allow_insecure_http: bool = False
     allowed_origins: list[str] = ["http://localhost:5173"]
 
     @field_validator("allowed_origins")
@@ -52,10 +54,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Configure APP_DATABASE_URL ou host, usuário e senha separados para o banco."
             )
-        if self.env == "production" and not self.cookie_secure:
-            raise ValueError("APP_COOKIE_SECURE must be true in production")
-        if self.env == "production" and str(self.public_url).startswith("http://"):
-            raise ValueError("APP_PUBLIC_URL must use HTTPS in production")
+        if self.env == "production" and not self.allow_insecure_http:
+            if not self.cookie_secure:
+                raise ValueError("APP_COOKIE_SECURE must be true in production")
+            if str(self.public_url).startswith("http://"):
+                raise ValueError("APP_PUBLIC_URL must use HTTPS in production")
         return self
 
     def database_dsn(self) -> str:
