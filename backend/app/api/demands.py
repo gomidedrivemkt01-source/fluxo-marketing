@@ -185,9 +185,7 @@ def workflow_definition(
                     str(stage.default_assignee_id) if stage.default_assignee_id else None
                 ),
                 "ownerRoleId": str(stage.owner_role_id) if stage.owner_role_id else None,
-                "fallbackUserId": (
-                    str(stage.fallback_user_id) if stage.fallback_user_id else None
-                ),
+                "fallbackUserId": (str(stage.fallback_user_id) if stage.fallback_user_id else None),
                 "expectedDurationHours": stage.expected_duration_hours,
                 "slaHours": stage.sla_hours,
                 "acceptanceRule": stage.acceptance_rule,
@@ -278,11 +276,7 @@ def version_stage(
     if not isinstance(stages, list):
         return None
     return next(
-        (
-            item
-            for item in stages
-            if isinstance(item, dict) and item.get("id") == str(stage_id)
-        ),
+        (item for item in stages if isinstance(item, dict) and item.get("id") == str(stage_id)),
         None,
     )
 
@@ -300,12 +294,16 @@ def resolve_stage_assignee(
             return False
         if db is None:
             return True
-        return bool(db.scalar(select(Membership.id).where(
-            Membership.organization_id == demand.organization_id,
-            Membership.user_profile_id == uuid.UUID(str(identifier)),
-            Membership.status == MembershipStatus.ACTIVE,
-            Membership.removed_at.is_(None),
-        )))
+        return bool(
+            db.scalar(
+                select(Membership.id).where(
+                    Membership.organization_id == demand.organization_id,
+                    Membership.user_profile_id == uuid.UUID(str(identifier)),
+                    Membership.status == MembershipStatus.ACTIVE,
+                    Membership.removed_at.is_(None),
+                )
+            )
+        )
 
     if default_assignee_id and available(default_assignee_id):
         return uuid.UUID(str(default_assignee_id))
@@ -360,6 +358,17 @@ def apply_stage_snapshot_defaults(
     apply_assignee: bool = True,
     entered_at: datetime | None = None,
 ) -> None:
+    instance = None
+    if db is not None and stage.get("id") and demand.workflow_version_id:
+        instance = db.scalar(
+            select(DemandStageInstance).where(
+                DemandStageInstance.demand_id == demand.id,
+                DemandStageInstance.workflow_version_id == demand.workflow_version_id,
+                DemandStageInstance.workflow_stage_id == uuid.UUID(str(stage["id"])),
+            )
+        )
+        if instance and instance.assignment_defaults:
+            stage = {**stage, **instance.assignment_defaults}
     assignee_id = resolve_stage_assignee(
         db,
         demand,
@@ -367,7 +376,12 @@ def apply_stage_snapshot_defaults(
         owner_role_id=stage.get("ownerRoleId"),
         fallback_user_id=stage.get("fallbackUserId"),
     )
-    if apply_assignee and assignee_id:
+    if instance and instance.assignee_id and instance.assignee_id != assignee_id:
+        # Uma exceção atribuída ao card prevalece sobre o padrão compartilhado.
+        assignee_id = instance.assignee_id
+    if apply_assignee and (
+        assignee_id or stage.get("ownerRoleId") or (instance and instance.assignment_defaults)
+    ):
         demand.current_assignee_id = assignee_id
     expected_duration = stage.get("expectedDurationHours")
     demand.forecast_at = (
@@ -485,7 +499,9 @@ def create_demand_record(
     db.add(demand)
     db.flush()
     instances = ensure_demand_stage_instances(db, demand, workflow_version)
-    rebalance_stage_deadlines(instances, workflow_version, demand.deadline_at, now=demand.created_at)
+    rebalance_stage_deadlines(
+        instances, workflow_version, demand.deadline_at, now=demand.created_at
+    )
     if demand.current_stage_id:
         db.add(
             DemandStageVisit(
@@ -609,7 +625,9 @@ def rebalance_stage_deadlines(
         return
     snapshots = {str(item.get("id")): item for item in sorted_version_stages(version)}
     weights = [
-        max(1, int(snapshots.get(str(item.workflow_stage_id), {}).get("expectedDurationHours") or 1))
+        max(
+            1, int(snapshots.get(str(item.workflow_stage_id), {}).get("expectedDurationHours") or 1)
+        )
         for item in remaining
     ]
     total_weight = sum(weights)
@@ -685,15 +703,23 @@ def move_stage_plan(
             item.state = (
                 "skipped"
                 if action == "skip"
-                else "completed" if target.position > previous.position else "upcoming"
+                else "completed"
+                if target.position > previous.position
+                else "upcoming"
             )
             item.left_at = moved_at
             changed = True
-        elif target.position > previous_position and previous_position < item.position < target.position:
+        elif (
+            target.position > previous_position
+            and previous_position < item.position < target.position
+        ):
             item.state = "skipped"
             item.left_at = moved_at
             changed = True
-        elif target.position < previous_position and target.position < item.position <= previous_position:
+        elif (
+            target.position < previous_position
+            and target.position < item.position <= previous_position
+        ):
             item.state = "upcoming"
             item.left_at = None
             changed = True
@@ -720,7 +746,9 @@ def resolve_workflow_target(
             -1,
         )
         if target_index < 0:
-            raise ApiError(422, "workflow_target_invalid", "A etapa escolhida não pertence ao fluxo.")
+            raise ApiError(
+                422, "workflow_target_invalid", "A etapa escolhida não pertence ao fluxo."
+            )
         if target_index == current_index:
             raise ApiError(422, "workflow_target_current", "A demanda já está nesta etapa.")
         expected_action = "return" if target_index < current_index else "advance"
@@ -835,11 +863,13 @@ def _demand_out_from_related(
         stageId=demand.current_stage_id,
         stageName=str(stage_snapshot["name"]) if stage_snapshot else stage.name if stage else None,
         stageCode=str(stage_snapshot["code"]) if stage_snapshot else stage.code if stage else None,
-        stageColor=str(stage_snapshot["color"]) if stage_snapshot else stage.color if stage else None,
+        stageColor=str(stage_snapshot["color"])
+        if stage_snapshot
+        else stage.color
+        if stage
+        else None,
         stagePosition=(
-            int(stage_snapshot["position"])
-            if stage_snapshot
-            else stage.position if stage else None
+            int(stage_snapshot["position"]) if stage_snapshot else stage.position if stage else None
         ),
         workflowId=demand.workflow_id,
         workflowName=workflow.name if workflow else None,
@@ -866,9 +896,7 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
         company=db.get(Company, demand.primary_company_id) if demand.primary_company_id else None,
         category=db.get(DemandCategory, demand.category_id) if demand.category_id else None,
         assignee=(
-            db.get(UserProfile, demand.current_assignee_id)
-            if demand.current_assignee_id
-            else None
+            db.get(UserProfile, demand.current_assignee_id) if demand.current_assignee_id else None
         ),
         creator=db.get(UserProfile, demand.created_by),
         stage=db.get(WorkflowStage, demand.current_stage_id) if demand.current_stage_id else None,
@@ -882,9 +910,7 @@ def demand_out(db: Session, demand: Demand) -> DemandOut:
     )
 
 
-def cover_image_ids(
-    db: Session, demand_ids: set[uuid.UUID]
-) -> dict[uuid.UUID, uuid.UUID]:
+def cover_image_ids(db: Session, demand_ids: set[uuid.UUID]) -> dict[uuid.UUID, uuid.UUID]:
     """Retorna a capa escolhida ou, na ausência dela, a primeira imagem ativa."""
     if not demand_ids:
         return {}
@@ -911,23 +937,17 @@ def demands_out(db: Session, demands: list[Demand]) -> list[DemandOut]:
     company_ids = {item.primary_company_id for item in demands if item.primary_company_id}
     category_ids = {item.category_id for item in demands if item.category_id}
     user_ids = {
-        value
-        for item in demands
-        for value in (item.current_assignee_id, item.created_by)
-        if value
+        value for item in demands for value in (item.current_assignee_id, item.created_by) if value
     }
     stage_ids = {item.current_stage_id for item in demands if item.current_stage_id}
     workflow_ids = {item.workflow_id for item in demands if item.workflow_id}
     version_ids = {item.workflow_version_id for item in demands if item.workflow_version_id}
     companies = {
-        item.id: item
-        for item in db.scalars(select(Company).where(Company.id.in_(company_ids)))
+        item.id: item for item in db.scalars(select(Company).where(Company.id.in_(company_ids)))
     }
     categories = {
         item.id: item
-        for item in db.scalars(
-            select(DemandCategory).where(DemandCategory.id.in_(category_ids))
-        )
+        for item in db.scalars(select(DemandCategory).where(DemandCategory.id.in_(category_ids)))
     }
     users = {
         item.id: item
@@ -938,14 +958,11 @@ def demands_out(db: Session, demands: list[Demand]) -> list[DemandOut]:
         for item in db.scalars(select(WorkflowStage).where(WorkflowStage.id.in_(stage_ids)))
     }
     workflows = {
-        item.id: item
-        for item in db.scalars(select(Workflow).where(Workflow.id.in_(workflow_ids)))
+        item.id: item for item in db.scalars(select(Workflow).where(Workflow.id.in_(workflow_ids)))
     }
     versions = {
         item.id: item
-        for item in db.scalars(
-            select(WorkflowVersion).where(WorkflowVersion.id.in_(version_ids))
-        )
+        for item in db.scalars(select(WorkflowVersion).where(WorkflowVersion.id.in_(version_ids)))
     }
     covers = cover_image_ids(db, {item.id for item in demands})
     return [
@@ -1015,7 +1032,9 @@ def validate_references(
         if not stage:
             raise ApiError(422, "stage_invalid", "A etapa selecionada não está disponível.")
         if resolved_workflow_id and stage.workflow_id != resolved_workflow_id:
-            raise ApiError(422, "stage_workflow_mismatch", "A etapa não pertence ao workflow selecionado.")
+            raise ApiError(
+                422, "stage_workflow_mismatch", "A etapa não pertence ao workflow selecionado."
+            )
         resolved_workflow_id = stage.workflow_id
     if resolved_workflow_id and not db.scalar(
         select(Workflow.id).where(
@@ -1399,9 +1418,7 @@ def update_demand(
     if demand.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
     current_version = (
-        db.get(WorkflowVersion, demand.workflow_version_id)
-        if demand.workflow_version_id
-        else None
+        db.get(WorkflowVersion, demand.workflow_version_id) if demand.workflow_version_id else None
     )
     keep_version = (
         payload.workflow_id == demand.workflow_id
@@ -1478,7 +1495,9 @@ def update_demand(
             stage_moved_at = utc_now()
             target_instance = move_stage_plan(
                 stage_instances,
-                previous_stage_id if current_version and current_version.id == target_version.id else None,
+                previous_stage_id
+                if current_version and current_version.id == target_version.id
+                else None,
                 stage_id,
                 action="manual",
                 moved_at=stage_moved_at,
@@ -1585,9 +1604,7 @@ def update_demand_assignee(
     if previous_assignee_id == payload.assignee_id:
         return demand_out(db, demand)
 
-    previous_assignee = (
-        db.get(UserProfile, previous_assignee_id) if previous_assignee_id else None
-    )
+    previous_assignee = db.get(UserProfile, previous_assignee_id) if previous_assignee_id else None
     next_assignee = db.get(UserProfile, payload.assignee_id) if payload.assignee_id else None
     changed_at = utc_now()
     demand.current_assignee_id = payload.assignee_id
@@ -1682,9 +1699,7 @@ def move_demand_stage(
     if demand.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
     version = (
-        db.get(WorkflowVersion, demand.workflow_version_id)
-        if demand.workflow_version_id
-        else None
+        db.get(WorkflowVersion, demand.workflow_version_id) if demand.workflow_version_id else None
     )
     stage_snapshot = version_stage(version, payload.stage_id)
     stage = db.get(WorkflowStage, payload.stage_id)
@@ -1852,12 +1867,20 @@ def apply_workflow_action(
         raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
     if demand.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
-    version = db.get(WorkflowVersion, demand.workflow_version_id) if demand.workflow_version_id else None
+    version = (
+        db.get(WorkflowVersion, demand.workflow_version_id) if demand.workflow_version_id else None
+    )
     if not version:
-        raise ApiError(409, "workflow_version_missing", "O fluxo desta demanda precisa ser revisado.")
+        raise ApiError(
+            409, "workflow_version_missing", "O fluxo desta demanda precisa ser revisado."
+        )
     instances = ensure_demand_stage_instances(db, demand, version)
     current_index = next(
-        (index for index, item in enumerate(instances) if item.workflow_stage_id == demand.current_stage_id),
+        (
+            index
+            for index, item in enumerate(instances)
+            if item.workflow_stage_id == demand.current_stage_id
+        ),
         -1,
     )
     if current_index < 0:
@@ -1907,7 +1930,9 @@ def apply_workflow_action(
         if demand.status in {"WAITING_EXECUTION", "COMPLETED"}:
             demand.status = "IN_PROGRESS"
         target_snapshot = version_stage(version, target.workflow_stage_id)
-        target_name = str(target_snapshot.get("name", "nova etapa")) if target_snapshot else "nova etapa"
+        target_name = (
+            str(target_snapshot.get("name", "nova etapa")) if target_snapshot else "nova etapa"
+        )
         event_kind = f"WORKFLOW_{effective_action.upper()}"
         summary = f"Demanda {action_labels[effective_action]} para {target_name}."
         if effective_action == "return":
@@ -2054,13 +2079,13 @@ def get_demand_timeline(
     if not demand:
         raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
     version = (
-        db.get(WorkflowVersion, demand.workflow_version_id)
-        if demand.workflow_version_id
-        else None
+        db.get(WorkflowVersion, demand.workflow_version_id) if demand.workflow_version_id else None
     )
     workflow = db.get(Workflow, demand.workflow_id) if demand.workflow_id else None
     if not version or not workflow:
-        raise ApiError(409, "workflow_version_missing", "O fluxo desta demanda precisa ser revisado.")
+        raise ApiError(
+            409, "workflow_version_missing", "O fluxo desta demanda precisa ser revisado."
+        )
 
     stages = sorted_version_stages(version)
     stage_instances = list(
@@ -2164,11 +2189,7 @@ def get_demand_timeline(
         visited.add(current_stage_id)
         entered_at.setdefault(current_stage_id, demand.created_at)
     current_position = next(
-        (
-            int(item.get("position", 0))
-            for item in stages
-            if item.get("id") == current_stage_id
-        ),
+        (int(item.get("position", 0)) for item in stages if item.get("id") == current_stage_id),
         0,
     )
     forecast_cursor = demand.forecast_at or utc_now()

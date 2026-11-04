@@ -548,6 +548,7 @@ class DemandStageInstance(Base):
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
     )
+    assignment_defaults: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     forecast_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { api, messageFrom } from "../api";
 import { RemovalDialog, ResponsibilityEditor } from "../features/management/ManagementDialogs";
+import FunctionsManager from "../features/management/FunctionsManager";
 import type {
   Category,
   ChecklistTemplateItem,
@@ -240,7 +241,7 @@ function WorkflowStageModal({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [ownerRoleId, setOwnerRoleId] = useState(stage?.ownerRoleId ?? "");
+  const [ownerRoleId, setOwnerRoleId] = useState(stage ? stage.ownerRoleId ?? "" : "__shared");
   const sharedPrimary = roleAssignments.find((item) => item.roleId === ownerRoleId && !item.isFallback);
   const sharedFallback = roleAssignments.find((item) => item.roleId === ownerRoleId && item.isFallback);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -267,6 +268,7 @@ function WorkflowStageModal({
       payload.expectedRevision = stage.revision;
       payload.active = data.get("active") === "on";
     }
+    if (ownerRoleId === "__shared") delete payload.ownerRoleId;
     try {
       await api(
         stage
@@ -339,6 +341,7 @@ function WorkflowStageModal({
                 value={ownerRoleId}
                 onChange={(event) => setOwnerRoleId(event.target.value)}
               >
+                {!stage && <option value="__shared">Usar a função das etapas de mesmo nome</option>}
                 <option value="">Definir pessoas nesta etapa</option>
                 {roles.map((role) => (
                   <option key={role.id} value={role.id}>
@@ -569,6 +572,7 @@ export default function WorkflowPage({
   const [editing, setEditing] = useState<WorkflowStage | "new" | null>(null);
   const [removing, setRemoving] = useState<{ stageId?: string; name: string } | null>(null);
   const [responsibility, setResponsibility] = useState<{ stageId?: string; roleId?: string } | null>(null);
+  const [view, setView] = useState<"workflows" | "functions">("workflows");
   const [checklistStage, setChecklistStage] = useState<WorkflowStage | null>(
     null,
   );
@@ -677,6 +681,8 @@ export default function WorkflowPage({
       setBusy(false);
     }
   }
+  const managementTabs = <nav className="management-tabs" aria-label="Gestão de workflows"><button className={view === "workflows" ? "active" : ""} onClick={() => setView("workflows")}>Workflows</button><button className={view === "functions" ? "active" : ""} onClick={() => setView("functions")}>Funções e etapas</button></nav>;
+  if (view === "functions") return <>{managementTabs}<FunctionsManager onSaved={onReload} /></>;
   if (!selected)
     return (
       <section className="panel page-panel">
@@ -707,6 +713,7 @@ export default function WorkflowPage({
     ) + 1;
   return (
     <>
+      {managementTabs}
       {canPrepare && blueprint && (
         <section className="panel blueprint-banner">
           <div>

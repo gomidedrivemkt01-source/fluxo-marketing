@@ -18,8 +18,64 @@ from app.operational_management import (
     remove_workflow_or_stage,
     responsibility_plan,
 )
+from app.stage_functions import (
+    StageFunctionBinding,
+    bind_stage_function,
+    job_role_removal_preview,
+    list_stage_function_groups,
+    remove_job_role,
+)
 
 router = APIRouter(prefix="/management", tags=["Gestão operacional"])
+
+
+@router.get("/stage-functions")
+def stage_function_groups(
+    principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    require_permission(principal, "catalog:write")
+    return list_stage_function_groups(db, principal.membership.organization_id)
+
+
+@router.post("/stage-functions/{key}/preview", dependencies=[Depends(require_csrf)])
+def preview_stage_function(
+    key: str,
+    payload: StageFunctionBinding,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    require_permission(principal, "catalog:write")
+    return bind_stage_function(db, principal, key, payload, preview=True)
+
+
+@router.put("/stage-functions/{key}", dependencies=[Depends(require_csrf)])
+def save_stage_function(
+    key: str,
+    payload: StageFunctionBinding,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    require_permission(principal, "catalog:write")
+    return bind_stage_function(db, principal, key, payload)
+
+
+@router.get("/job-roles/{role_id}/removal-preview")
+def preview_job_role_removal(
+    role_id: uuid.UUID, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    require_permission(principal, "catalog:write")
+    return job_role_removal_preview(db, principal, role_id)
+
+
+@router.delete("/job-roles/{role_id}", dependencies=[Depends(require_csrf)])
+def delete_job_role(
+    role_id: uuid.UUID,
+    expected_revision: int = Query(alias="expectedRevision", ge=1),
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    require_permission(principal, "catalog:write")
+    return remove_job_role(db, principal, role_id, expected_revision)
 
 
 @router.post("/responsibilities/preview", dependencies=[Depends(require_csrf)])

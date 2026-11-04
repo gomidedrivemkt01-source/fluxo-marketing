@@ -5,7 +5,7 @@ import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.api.demands import (
@@ -105,9 +105,11 @@ def current_roles(
     rows = db.execute(
         select(MemberRoleAssignment, Membership.user_profile_id)
         .join(Membership, Membership.id == MemberRoleAssignment.membership_id)
+        .join(JobRole, JobRole.id == MemberRoleAssignment.job_role_id)
         .where(
             MemberRoleAssignment.organization_id == organization_id,
             MemberRoleAssignment.active.is_(True),
+            JobRole.active.is_(True),
             Membership.status == MembershipStatus.ACTIVE,
             Membership.removed_at.is_(None),
         )
@@ -161,7 +163,16 @@ def responsibility_plan(
     db: Session, principal: Principal, payload: ResponsibilityChange, *, lock: bool = False
 ) -> tuple[
     dict[str, Any],
-    list[tuple[Demand, DemandStageInstance | None, bool, uuid.UUID | None, uuid.UUID]],
+    list[
+        tuple[
+            Demand,
+            DemandStageInstance | None,
+            bool,
+            uuid.UUID | None,
+            uuid.UUID,
+            dict[str, Any] | None,
+        ]
+    ],
     dict[uuid.UUID, JobRole],
     dict[uuid.UUID, WorkflowStage],
 ]:
@@ -236,7 +247,17 @@ def responsibility_plan(
             Demand.organization_id == org,
             Demand.deleted_at.is_(None),
             Demand.status != "COMPLETED",
-            Demand.workflow_version_id.in_(related_versions),
+            or_(
+                Demand.workflow_version_id.in_(related_versions),
+                Demand.id.in_(
+                    select(DemandStageInstance.demand_id).where(
+                        DemandStageInstance.organization_id == org,
+                        DemandStageInstance.assignment_defaults["ownerRoleId"].astext.in_(
+                            [str(key) for key in role_changes]
+                        ),
+                    )
+                ),
+            ),
         )
         .order_by(Demand.id)
     )
@@ -255,15 +276,21 @@ def responsibility_plan(
     by_card: dict[uuid.UUID, list[DemandStageInstance]] = {}
     for stored_instance in instances:
         by_card.setdefault(stored_instance.demand_id, []).append(stored_instance)
-    changes: list[tuple[Demand, DemandStageInstance | None, bool, uuid.UUID | None, uuid.UUID]] = []
+    changes: list[
+        tuple[
+            Demand,
+            DemandStageInstance | None,
+            bool,
+            uuid.UUID | None,
+            uuid.UUID,
+            dict[str, Any] | None,
+        ]
+    ] = []
     for card in cards:
         assert card.workflow_version_id is not None
         version = versions[card.workflow_version_id]
         for snapshot in version.definition.get("stages", []):
             stage_id = uuid.UUID(snapshot["id"])
-            role_id = uuid.UUID(snapshot["ownerRoleId"]) if snapshot.get("ownerRoleId") else None
-            if stage_id not in stage_changes and role_id not in role_changes:
-                continue
             current = card.current_stage_id == stage_id
             instance = next(
                 (
@@ -273,6 +300,12 @@ def responsibility_plan(
                 ),
                 None,
             )
+            effective = (
+                {**snapshot, **(instance.assignment_defaults or {})} if instance else snapshot
+            )
+            role_id = uuid.UUID(effective["ownerRoleId"]) if effective.get("ownerRoleId") else None
+            if stage_id not in stage_changes and role_id not in role_changes:
+                continue
             if not current and (
                 not payload.apply_to_future or (instance and instance.state != "upcoming")
             ):
@@ -280,13 +313,12 @@ def responsibility_plan(
             if current and not payload.apply_to_current:
                 continue
             # An explicit assignment on a card is not a default assignment.
-            old_default = resolve_assignment(snapshot, before_roles, people, card)
+            old_default = resolve_assignment(effective, before_roles, people, card)
             actual = (
                 card.current_assignee_id if current else instance.assignee_id if instance else None
             )
-            if actual is not None and actual != old_default:
-                continue
-            changed_snapshot = dict(snapshot)
+            manual = actual is not None and actual != old_default
+            changed_snapshot = dict(effective)
             explicit = stage_changes.get(stage_id)
             if explicit:
                 changed_snapshot.update(
@@ -298,10 +330,26 @@ def responsibility_plan(
                     if explicit.fallback_profile_id
                     else None,
                 )
-            target = resolve_assignment(changed_snapshot, after_roles, people, card)
-            if target != actual:
-                changes.append((card, instance, current, target, stage_id))
-    current_ids = {card.id for card, _, current, _, _ in changes if current}
+            target = (
+                actual
+                if manual
+                else resolve_assignment(changed_snapshot, after_roles, people, card)
+            )
+            defaults = (
+                {
+                    key: changed_snapshot.get(key)
+                    for key in ("ownerRoleId", "defaultAssigneeId", "fallbackUserId")
+                }
+                if explicit
+                else None
+            )
+            if target != actual or defaults is not None:
+                changes.append((card, instance, current, target, stage_id, defaults))
+    current_ids = {
+        card.id
+        for card, _, current, target, _, _ in changes
+        if current and target != card.current_assignee_id
+    }
     running = list(
         db.scalars(
             select(TimeEntry.demand_id).where(
@@ -331,7 +379,7 @@ def responsibility_plan(
 
 
 def apply_responsibilities(
-    db: Session, principal: Principal, payload: ResponsibilityChange
+    db: Session, principal: Principal, payload: ResponsibilityChange, *, commit: bool = True
 ) -> dict[str, Any]:
     preview, changes, roles, stages = responsibility_plan(db, principal, payload, lock=True)
     if preview["runningTimers"]:
@@ -398,7 +446,7 @@ def apply_responsibilities(
         stage.fallback_user_id = stage_change.fallback_profile_id
         stage.revision += 1
         stage.updated_at = now
-    for card, instance, current, target, stage_id in changes:
+    for card, instance, current, target, stage_id, defaults in changes:
         if instance is None and card.workflow_version_id:
             version = db.get(WorkflowVersion, card.workflow_version_id)
             if version:
@@ -411,10 +459,12 @@ def apply_responsibilities(
                     None,
                 )
         if instance:
+            if defaults is not None:
+                instance.assignment_defaults = defaults
             instance.assignee_id = target
             instance.revision += 1
             instance.updated_at = now
-        if current:
+        if current and card.current_assignee_id != target:
             previous = card.current_assignee_id
             card.current_assignee_id = target
             card.revision += 1
@@ -453,7 +503,10 @@ def apply_responsibilities(
             "changes": payload.model_dump(mode="json", by_alias=True),
         },
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return preview
 
 

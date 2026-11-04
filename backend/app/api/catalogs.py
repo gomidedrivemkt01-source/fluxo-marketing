@@ -28,6 +28,7 @@ from app.models import (
     utc_now,
 )
 from app.operational_management import remove_workflow_or_stage
+from app.stage_functions import find_job_role, grouped_stages, stage_function_key
 from app.workflow_blueprints import apply_blueprint, blueprint_preview, publish_blueprint
 
 router = APIRouter(prefix="/catalogs", tags=["Cadastros"])
@@ -127,6 +128,10 @@ class JobRoleOut(BaseModel):
     description: str | None
     active: bool
     revision: int
+
+
+class JobRoleUpdate(JobRoleInput):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
 class JobRoleAssignmentOut(BaseModel):
@@ -273,6 +278,7 @@ def _validate_stage_default_assignee(
             "default_assignee_invalid",
             "O responsável padrão precisa ser um integrante ativo da equipe.",
         )
+
 
 def _validate_stage_role(
     db: Session, organization_id: uuid.UUID, role_id: uuid.UUID | None
@@ -460,12 +466,15 @@ def archive_company(
         raise ApiError(404, "company_not_found", "Empresa não encontrada.")
     if company.revision != expected_revision:
         raise ApiError(409, "revision_conflict", "A empresa foi alterada. Atualize a tela.")
-    linked_demands = db.scalar(
-        select(func.count(Demand.id)).where(
-            Demand.organization_id == principal.membership.organization_id,
-            Demand.primary_company_id == company.id,
+    linked_demands = (
+        db.scalar(
+            select(func.count(Demand.id)).where(
+                Demand.organization_id == principal.membership.organization_id,
+                Demand.primary_company_id == company.id,
+            )
         )
-    ) or 0
+        or 0
+    )
     before = {
         "name": company.name,
         "code": company.code,
@@ -729,7 +738,9 @@ def create_workflow(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise ApiError(409, "workflow_conflict", "Nome ou código de workflow já utilizado.") from exc
+        raise ApiError(
+            409, "workflow_conflict", "Nome ou código de workflow já utilizado."
+        ) from exc
     db.refresh(workflow)
     return workflow
 
@@ -757,7 +768,9 @@ def update_workflow(
     if workflow.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "O workflow foi alterado. Atualize a tela.")
     if workflow.is_default and (not payload.is_default or not payload.active):
-        raise ApiError(409, "default_workflow_required", "Defina outro workflow padrão antes de alterar este.")
+        raise ApiError(
+            409, "default_workflow_required", "Defina outro workflow padrão antes de alterar este."
+        )
     if workflow.lifecycle_state != "PUBLISHED" and payload.is_default:
         raise ApiError(
             409,
@@ -775,7 +788,9 @@ def update_workflow(
             .limit(1)
         )
         if in_use:
-            raise ApiError(409, "workflow_in_use", "Mude o workflow das demandas antes de desativá-lo.")
+            raise ApiError(
+                409, "workflow_in_use", "Mude o workflow das demandas antes de desativá-lo."
+            )
     if payload.is_default and not workflow.is_default:
         for current in db.scalars(
             select(Workflow).where(
@@ -795,12 +810,20 @@ def update_workflow(
     workflow.active = payload.active
     workflow.revision += 1
     workflow.updated_at = utc_now()
-    _audit(db, principal, "WORKFLOW_UPDATED", workflow.id, after={"name": workflow.name, "revision": workflow.revision})
+    _audit(
+        db,
+        principal,
+        "WORKFLOW_UPDATED",
+        workflow.id,
+        after={"name": workflow.name, "revision": workflow.revision},
+    )
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise ApiError(409, "workflow_conflict", "Nome ou código de workflow já utilizado.") from exc
+        raise ApiError(
+            409, "workflow_conflict", "Nome ou código de workflow já utilizado."
+        ) from exc
     db.refresh(workflow)
     return workflow
 
@@ -879,9 +902,7 @@ def create_workflow_stage(
         db, principal.membership.organization_id, payload.fallback_user_id
     )
     _validate_stage_role(db, principal.membership.organization_id, payload.owner_role_id)
-    workflow = _validate_workflow(
-        db, principal.membership.organization_id, payload.workflow_id
-    )
+    workflow = _validate_workflow(db, principal.membership.organization_id, payload.workflow_id)
     if workflow is None:
         workflow = db.scalar(
             select(Workflow).where(
@@ -892,6 +913,22 @@ def create_workflow_stage(
         )
     if workflow is None:
         raise ApiError(422, "workflow_required", "Crie um workflow antes de adicionar etapas.")
+    inherited_role_id = payload.owner_role_id
+    if inherited_role_id is None and "owner_role_id" not in payload.model_fields_set:
+        candidates = [
+            s.owner_role_id
+            for s, _ in grouped_stages(db, principal.membership.organization_id)
+            if stage_function_key(s.name) == stage_function_key(payload.name)
+        ]
+        if len(set(candidates)) > 1:
+            raise ApiError(
+                422,
+                "stage_function_ambiguous",
+                "As etapas com esse nome têm funções diferentes. Escolha a função para a nova etapa.",
+            )
+        if candidates and len(set(candidates)) == 1 and candidates[0]:
+            role = db.get(JobRole, candidates[0])
+            inherited_role_id = role.id if role and role.active else None
     stage = WorkflowStage(
         organization_id=principal.membership.organization_id,
         workflow_id=workflow.id,
@@ -900,7 +937,7 @@ def create_workflow_stage(
         color=payload.color.upper(),
         position=payload.position,
         default_assignee_id=payload.default_assignee_id,
-        owner_role_id=payload.owner_role_id,
+        owner_role_id=inherited_role_id,
         fallback_user_id=payload.fallback_user_id,
         expected_duration_hours=payload.expected_duration_hours,
         sla_hours=payload.sla_hours,
@@ -951,7 +988,9 @@ def update_workflow_stage(
     )
     _validate_stage_role(db, principal.membership.organization_id, payload.owner_role_id)
     if payload.workflow_id and payload.workflow_id != stage.workflow_id:
-        raise ApiError(422, "stage_workflow_immutable", "A etapa não pode ser movida para outro workflow.")
+        raise ApiError(
+            422, "stage_workflow_immutable", "A etapa não pode ser movida para outro workflow."
+        )
     if stage.active and not payload.active:
         demand_id = db.scalar(
             select(Demand.id)
@@ -1136,8 +1175,51 @@ def create_job_role(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise ApiError(409, "job_role_conflict", "Este cargo já foi cadastrado.") from exc
+        raise ApiError(
+            409, "job_role_conflict", "Já existe uma função com esse nome ou código."
+        ) from exc
     db.refresh(role)
+    return role
+
+
+@router.put("/job-roles/{role_id}", response_model=JobRoleOut, dependencies=[Depends(require_csrf)])
+def update_job_role(
+    role_id: uuid.UUID,
+    payload: JobRoleUpdate,
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> JobRole:
+    require_permission(principal, "catalog:write")
+    role = find_job_role(db, principal, role_id)
+    if role.revision != payload.expected_revision:
+        raise ApiError(409, "revision_conflict", "A função foi alterada. Atualize a tela.")
+    before: dict[str, object] = {
+        "name": role.name,
+        "code": role.code,
+        "description": role.description,
+    }
+    role.name, role.code, role.description = (
+        " ".join(payload.name.split()),
+        payload.code,
+        payload.description,
+    )
+    role.revision += 1
+    try:
+        db.flush()
+        _audit(
+            db,
+            principal,
+            "JOB_ROLE_UPDATED",
+            role.id,
+            before=before,
+            after={"name": role.name, "code": role.code, "description": role.description},
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ApiError(
+            409, "job_role_conflict", "Já existe uma função com esse nome ou código."
+        ) from exc
     return role
 
 

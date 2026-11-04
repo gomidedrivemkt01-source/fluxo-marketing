@@ -11,13 +11,25 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.api.catalogs import list_workflow_stages, list_workflows
+from app.api.catalogs import (
+    JobRoleInput,
+    JobRoleUpdate,
+    WorkflowStageInput,
+    create_job_role,
+    create_workflow_stage,
+    list_workflow_stages,
+    list_workflows,
+    update_job_role,
+)
 from app.api.demands import (
+    apply_stage_snapshot_defaults,
     ensure_demand_stage_instances,
     ensure_workflow_version,
     resolve_stage_assignee,
+    version_stage,
 )
 from app.api.errors import ApiError
+from app.api.management import stage_function_groups
 from app.auth.service import Principal
 from app.models import (
     AuditEvent,
@@ -48,6 +60,13 @@ from app.operational_management import (
     remove_person,
     remove_workflow_or_stage,
     responsibility_plan,
+)
+from app.stage_functions import (
+    StageFunctionBinding,
+    bind_stage_function,
+    job_role_removal_preview,
+    list_stage_function_groups,
+    remove_job_role,
 )
 
 DSN = os.environ.get("FM_MANAGEMENT_TEST_DSN", "")
@@ -394,3 +413,209 @@ def test_removal_preserves_briefing_and_replaces_active_category_binding(setup, 
     assert current.briefing_template_version_id == briefing.id
     assert current.workflow_version_id == s.cards[0].workflow_version_id
     assert old.effective_until is not None
+
+
+def add_shared_role(s, person_index=1):
+    role = create_job_role(
+        JobRoleInput(code="SHARED", name="Planejamento de Demandas"), s.principal, s.db
+    )
+    s.db.add(
+        MemberRoleAssignment(
+            organization_id=s.org.id,
+            membership_id=s.people[person_index][1].id,
+            job_role_id=role.id,
+            priority=10,
+        )
+    )
+    s.db.flush()
+    return role
+
+
+def binding_for(s, key, role):
+    group = next(g for g in list_stage_function_groups(s.db, s.org.id) if g["key"] == key)
+    return StageFunctionBinding(
+        roleId=role.id if role else None,
+        stages=[{"id": item["id"], "revision": item["revision"]} for item in group["stages"]],
+    )
+
+
+def test_shared_group_binds_multiple_workflows_without_rewriting_versions(setup):
+    s = setup
+    from copy import deepcopy
+
+    definition = deepcopy(s.version.definition)
+    deadline = s.cards[0].deadline_at
+    role = add_shared_role(s, 2)
+    result = bind_stage_function(s.db, s.principal, "briefing", binding_for(s, "briefing", role))
+    assert result["stages"] == 2
+    assert s.stages[0].owner_role_id == role.id
+    assert s.default_stages[0].owner_role_id == role.id
+    assert s.cards[0].current_assignee_id == s.people[2][0].id
+    assert s.cards[1].current_assignee_id == s.people[3][0].id
+    assert s.cards[2].current_assignee_id == s.people[1][0].id
+    assert s.cards[0].deadline_at == deadline
+    assert s.version.definition == definition
+
+
+def test_same_owner_binding_persists_for_future_role_changes_and_handoffs(setup):
+    s = setup
+    role = add_shared_role(s, 1)
+    bind_stage_function(s.db, s.principal, "producao", binding_for(s, "producao", role))
+    future = s.db.scalar(
+        select(DemandStageInstance).where(
+            DemandStageInstance.demand_id == s.cards[0].id,
+            DemandStageInstance.workflow_stage_id == s.stages[1].id,
+        )
+    )
+    assert future.assignment_defaults["ownerRoleId"] == str(role.id)
+    # A versão congelada ainda aponta à função antiga. A atribuição operacional acompanha a nova.
+    assert version_stage(s.version, s.stages[1].id)["ownerRoleId"] == str(s.role.id)
+    apply_responsibilities(
+        s.db,
+        s.principal,
+        ResponsibilityChange(
+            roles=[
+                {
+                    "roleId": role.id,
+                    "primaryProfileId": s.people[2][0].id,
+                    "fallbackProfileId": None,
+                    "expectedRevision": role.revision,
+                }
+            ],
+            applyToCurrent=True,
+        ),
+    )
+    assert future.assignee_id == s.people[2][0].id
+    s.cards[0].current_stage_id = s.stages[1].id
+    apply_stage_snapshot_defaults(s.cards[0], version_stage(s.version, s.stages[1].id), db=s.db)
+    assert s.cards[0].current_assignee_id == s.people[2][0].id
+
+
+def test_group_binding_rejects_stale_and_foreign_stage_membership(setup):
+    s = setup
+    payload = binding_for(s, "briefing", s.role)
+    payload.stages.pop()
+    with pytest.raises(ApiError) as caught:
+        bind_stage_function(s.db, s.principal, "briefing", payload)
+    assert caught.value.status_code == 409
+    assert s.cards[0].current_assignee_id == s.people[1][0].id
+
+
+def test_removing_role_unlinks_defaults_and_preserves_manual_and_completed_history(setup):
+    s = setup
+    old_id, old_name, old_code = s.role.id, s.role.name, s.role.code
+    preview = job_role_removal_preview(s.db, s.principal, old_id)
+    assert preview["stages"] == 6
+    remove_job_role(s.db, s.principal, old_id, s.role.revision)
+    assert not s.role.active
+    assert all(stage.owner_role_id is None for stage in [*s.stages, *s.default_stages])
+    assert s.cards[0].current_assignee_id is None
+    assert s.cards[1].current_assignee_id == s.people[3][0].id
+    assert s.cards[2].current_assignee_id == s.people[1][0].id
+    assert s.db.get(Comment, s.comment.id).author_id == s.people[1][0].id
+    assert version_stage(s.version, s.stages[0].id)["ownerRoleId"] == str(old_id)
+    recreated = create_job_role(JobRoleInput(name=old_name, code=old_code), s.principal, s.db)
+    assert recreated.id != old_id
+    assert resolve_stage_assignee(s.db, s.cards[0], owner_role_id=old_id) is None
+
+
+def test_role_removal_uses_direct_stage_fallback_and_checks_revision(setup):
+    s = setup
+    s.stages[0].fallback_user_id = s.people[2][0].id
+    s.db.flush()
+    with pytest.raises(ApiError) as caught:
+        remove_job_role(s.db, s.principal, s.role.id, s.role.revision + 1)
+    assert caught.value.status_code == 409
+    remove_job_role(s.db, s.principal, s.role.id, s.role.revision)
+    assert s.cards[0].current_assignee_id == s.people[2][0].id
+    assert s.stages[0].fallback_user_id == s.people[2][0].id
+
+
+def test_role_edit_and_group_access_require_organization_permissions(setup):
+    s = setup
+    updated = update_job_role(
+        s.role.id,
+        JobRoleUpdate(code=s.role.code, name="Copywriter", expectedRevision=s.role.revision),
+        s.principal,
+        s.db,
+    )
+    assert updated.id == s.role.id and updated.name == "Copywriter"
+    s.principal.role.permissions = ["catalog:read"]
+    with pytest.raises(ApiError) as caught:
+        stage_function_groups(s.principal, s.db)
+    assert caught.value.status_code == 403
+
+
+def test_new_stage_inherits_shared_role_but_allows_explicit_no_function(setup):
+    s = setup
+    workflow = Workflow(organization_id=s.org.id, code="NOVO", name="Novo fluxo")
+    s.db.add(workflow)
+    s.db.flush()
+    role = add_shared_role(s)
+    bind_stage_function(s.db, s.principal, "briefing", binding_for(s, "briefing", role))
+    created = create_workflow_stage(
+        WorkflowStageInput(name="Briefing", code="BRIEFING", position=1, workflowId=workflow.id),
+        s.principal,
+        s.db,
+    )
+    assert created.owner_role_id == role.id
+    independent = create_workflow_stage(
+        WorkflowStageInput(
+            name="Briefing",
+            code="BRIEFING_EXTRA",
+            position=2,
+            workflowId=workflow.id,
+            ownerRoleId=None,
+        ),
+        s.principal,
+        s.db,
+    )
+    assert independent.owner_role_id is None
+
+
+def test_function_removal_refuses_running_timer_without_partial_unlink(setup):
+    s = setup
+    s.db.add(
+        TimeEntry(
+            organization_id=s.org.id,
+            demand_id=s.cards[0].id,
+            user_profile_id=s.people[1][0].id,
+            source="TIMER",
+            state="RUNNING",
+            started_at=datetime.now(UTC),
+        )
+    )
+    s.db.flush()
+    with pytest.raises(ApiError) as caught:
+        remove_job_role(s.db, s.principal, s.role.id, s.role.revision)
+    assert caught.value.code == "running_timers"
+    assert s.role.active and s.stages[0].owner_role_id == s.role.id
+
+
+def test_function_binding_and_removal_cannot_cross_organizations(setup):
+    s = setup
+    other = Organization(name="Outra", slug=f"other-{uuid.uuid4()}")
+    s.db.add(other)
+    s.db.flush()
+    foreign = JobRole(organization_id=other.id, name="Restrita", code="RESTRITA")
+    s.db.add(foreign)
+    s.db.flush()
+    with pytest.raises(ApiError) as caught:
+        bind_stage_function(s.db, s.principal, "briefing", binding_for(s, "briefing", foreign))
+    assert caught.value.code == "role_invalid"
+    with pytest.raises(ApiError) as caught:
+        remove_job_role(s.db, s.principal, foreign.id, foreign.revision)
+    assert caught.value.status_code == 404
+
+
+def test_automatic_function_inheritance_refuses_ambiguous_groups(setup):
+    s = setup
+    s.stages[0].owner_role_id = None
+    s.db.flush()
+    with pytest.raises(ApiError) as caught:
+        create_workflow_stage(
+            WorkflowStageInput(name="Briefing", code="EXTRA", position=4, workflowId=s.source.id),
+            s.principal,
+            s.db,
+        )
+    assert caught.value.code == "stage_function_ambiguous"

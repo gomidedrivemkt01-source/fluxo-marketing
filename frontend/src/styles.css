@@ -1299,25 +1299,25 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
 .agenda-copy small, .agenda-row-open time, .agenda-arrow { color: var(--muted); }
 
 .reports-workspace { display: grid; gap: 18px; }
-.report-hero { display: flex; align-items: center; justify-content: space-between; gap: 28px; min-height: 178px; padding: 30px 34px; border-radius: 13px; color: var(--on-sidebar); background: linear-gradient(115deg, var(--sidebar), color-mix(in srgb, var(--teal-dark) 55%, var(--sidebar))); box-shadow: 0 18px 50px var(--shadow-color); }
+.report-hero { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 28px; min-height: 178px; padding: 30px 34px; border-radius: 13px; color: var(--on-sidebar); background: linear-gradient(115deg, var(--sidebar), color-mix(in srgb, var(--teal-dark) 55%, var(--sidebar))); box-shadow: 0 18px 50px var(--shadow-color); }
 .report-hero.custom { align-items: stretch; flex-direction: column; }
 .report-hero-copy { flex: 1 1 420px; min-width: 0; }
 .report-hero h2 { margin: 7px 0 8px; color: inherit; font: 600 clamp(1.55rem, 2.5vw, 2.2rem)/1.08 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -.04em; }
 .report-hero p { max-width: 660px; margin: 0; color: var(--sidebar-muted); font-size: .78rem; line-height: 1.65; }
-.report-controls { display: flex; flex: 0 1 470px; align-items: flex-end; justify-content: flex-end; gap: 12px; min-width: 0; }
+.report-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: 1 1 470px; align-items: start; gap: 16px; min-width: 0; max-width: 100%; }
 .report-controls.custom { flex-basis: auto; justify-content: flex-start; width: 100%; }
-.report-scope-picker { display: grid; flex: 1 1 225px; gap: 7px; min-width: 190px; max-width: 250px; }
+.report-scope-picker { display: grid; gap: 7px; min-width: 0; width: 100%; }
 .report-scope-picker > span, .report-private-scope > span { color: var(--sidebar-muted); font-size: .58rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .report-scope-picker > small { color: var(--sidebar-muted); font-size: .56rem; line-height: 1.4; }
-.report-private-scope { display: grid; flex: 1 1 225px; gap: 4px; min-width: 190px; max-width: 250px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 24%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--surface) 9%, transparent); }
+.report-private-scope { display: grid; gap: 4px; min-width: 0; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 24%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--surface) 9%, transparent); }
 .report-private-scope strong { color: var(--on-sidebar); font-size: .72rem; }
 .report-private-scope small { color: var(--sidebar-muted); font-size: .56rem; line-height: 1.35; }
-.report-period-picker { display: grid; flex: 0 0 220px; gap: 7px; width: min(100%, 220px); }
-.report-period-picker.custom { width: min(100%, 620px); }
-.report-period-picker label { display: grid; gap: 7px; }
+.report-period-picker { display: grid; gap: 7px; width: 100%; min-width: 0; }
+.report-period-picker.custom { width: 100%; }
+.report-period-picker label { display: grid; gap: 7px; min-width: 0; }
 .report-period-picker label > span { color: var(--sidebar-muted); font-size: .58rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .report-period-picker > small { color: var(--sidebar-muted); font-size: .56rem; line-height: 1.4; }
-.report-hero select { min-height: 43px; padding: 0 38px 0 13px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 30%, transparent); border-radius: 7px; color: var(--on-sidebar); background-color: color-mix(in srgb, var(--surface) 12%, transparent); }
+.report-hero select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; min-height: 43px; padding: 0 38px 0 13px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 30%, transparent); border-radius: 7px; color: var(--on-sidebar); background-color: color-mix(in srgb, var(--surface) 12%, transparent); }
 .report-hero select option { color: var(--ink); background: var(--surface); }
 .report-custom-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; gap: 9px; align-items: end; }
 .report-custom-range input { min-width: 0; min-height: 43px; padding: 0 11px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 30%, transparent); border-radius: 7px; color: var(--on-sidebar); background: color-mix(in srgb, var(--surface) 12%, transparent); color-scheme: dark; }
@@ -1808,4 +1808,42 @@ th { color: #7d9099; font-size: .67rem; letter-spacing: .08em; text-transform: u
   .management-body { padding: 16px; }
   .management-role-list article, .management-exception-row { grid-template-columns: 1fr; }
   .management-metrics { grid-template-columns: repeat(2, 1fr); }
+}
+
+.management-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+.management-tabs button { padding: 10px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); cursor: pointer; font: inherit; font-size: .8rem; font-weight: 700; }
+.management-tabs button.active { border-color: var(--teal-dark); color: var(--teal-dark); background: var(--teal-soft); }
+.functions-manager { display: grid; gap: 20px; min-width: 0; }
+.functions-manager .panel-head { gap: 16px; flex-wrap: wrap; }
+.functions-manager .panel-head > div { min-width: 0; flex: 1 1 240px; }
+.function-catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 14px; padding: 20px; }
+.function-catalog > article { display: grid; align-content: start; gap: 18px; padding: 19px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; background: var(--surface-soft); }
+.function-catalog h4 { margin: 0 0 8px; color: var(--ink); font-size: .9rem; overflow-wrap: anywhere; }
+.function-catalog p { font-size: .75rem; color: var(--muted); margin: 0 0 9px; }
+.function-catalog small, .function-bindings small { display: block; color: var(--muted); font-size: .72rem; }
+.function-people { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.function-people span { color: var(--muted); font-size: .65rem; }
+.function-people strong { display: block; color: var(--ink); font-size: .75rem; margin-top: 6px; overflow-wrap: anywhere; }
+.function-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.function-bindings { display: grid; }
+.function-bindings > article { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .8fr); align-items: center; gap: 24px; padding: 19px 24px; border-bottom: 1px solid var(--line); min-width: 0; }
+.function-bindings > article:last-child { border-bottom: 0; }
+.function-bindings strong { display: block; color: var(--ink); margin-bottom: 5px; font-size: .85rem; }
+.function-bindings .field { margin: 0; min-width: 0; }
+.function-bindings select { width: 100%; min-width: 0; max-width: 100%; }
+.function-binding-control { display: grid; gap: 10px; min-width: 0; justify-items: stretch; }
+.function-binding-control > button { justify-self: start; text-align: left; }
+.function-bindings details { margin-top: 9px; color: var(--muted); font-size: .72rem; }
+.function-bindings summary { cursor: pointer; }
+.function-workflow-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 12px; }
+.function-workflow-tags span { background: var(--surface-soft); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; color: var(--ink); font-size: .7rem; }
+.management-body > .field + .field { margin-top: 18px; }
+.report-custom-range input { width: 100%; box-sizing: border-box; }
+@media (max-width: 600px) {
+  .report-controls, .report-controls.custom { grid-template-columns: minmax(0, 1fr); }
+  .report-custom-range { grid-template-columns: minmax(0, 1fr); }
+  .report-custom-range button { grid-column: auto; }
+  .function-bindings > article { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 16px; }
+  .function-catalog { padding: 16px; }
+  .function-actions { gap: 10px; }
 }
