@@ -31,3 +31,7 @@ A migration aditiva `0021_stage_function_defaults` acrescenta uma coluna JSONB n
 As operações exigem `catalog:write`, CSRF, escopo da organização e revisão atual dos registros. Mudanças concorrentes no grupo exigem recarregar antes de aplicar. Testes PostgreSQL usam exclusivamente `fm_test_management` em loopback, com dados sintéticos e rollback.
 
 Os filtros de Relatórios passaram a usar colunas flexíveis, limites de largura nos campos e empilhamento em telas pequenas, inclusive no intervalo personalizado. A privacidade dos relatórios não foi modificada.
+
+Validação: 194 testes de backend, incluindo PostgreSQL isolado, e 13 testes de frontend passaram. Build e lint passaram; a checagem de tipos dos cinco módulos de backend alterados passou. A checagem global de tipos ainda identifica quatro incompatibilidades de listas preexistentes em `api/workspace.py`, arquivo não alterado nesta entrega.
+
+Foi criado um backup local antes da migration; as contagens de demandas, versões, etapas, funções, comentários e anexos são conferidas após a ativação. A validação visual cobre Equipe sem busca, catálogo de funções, filtros de Relatórios em 1280px, 768px e 390px, incluindo o período personalizado. Não foram criadas ou excluídas funções reais durante a conferência visual.
