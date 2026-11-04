@@ -23,6 +23,7 @@ from app.api.errors import ApiError, api_error_handler
 from app.api.files import router as files_router
 from app.api.files import signed_router as signed_files_router
 from app.api.governance import router as governance_router
+from app.api.management import router as management_router
 from app.api.reports import router as reports_router
 from app.api.time_tracking import active_router as active_time_tracking_router
 from app.api.time_tracking import router as time_tracking_router
@@ -114,6 +115,7 @@ async def validation_error(request: Request, exc: RequestValidationError) -> JSO
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(catalogs_router, prefix="/api/v1")
+app.include_router(management_router, prefix="/api/v1")
 app.include_router(demands_router, prefix="/api/v1")
 app.include_router(daily_imports_router, prefix="/api/v1")
 app.include_router(work_catalog_router, prefix="/api/v1")

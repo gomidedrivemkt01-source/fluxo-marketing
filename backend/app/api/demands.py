@@ -295,16 +295,28 @@ def resolve_stage_assignee(
     owner_role_id: object = None,
     fallback_user_id: object = None,
 ) -> uuid.UUID | None:
-    if default_assignee_id:
+    def available(identifier: object) -> bool:
+        if not identifier:
+            return False
+        if db is None:
+            return True
+        return bool(db.scalar(select(Membership.id).where(
+            Membership.organization_id == demand.organization_id,
+            Membership.user_profile_id == uuid.UUID(str(identifier)),
+            Membership.status == MembershipStatus.ACTIVE,
+            Membership.removed_at.is_(None),
+        )))
+
+    if default_assignee_id and available(default_assignee_id):
         return uuid.UUID(str(default_assignee_id))
     if owner_role_id and db is not None:
         role_id = uuid.UUID(str(owner_role_id))
         role = db.get(JobRole, role_id)
         if role and role.organization_id == demand.organization_id and role.active:
-            if role.code == "TECHNICAL_SPECIALIST" and demand.technical_specialist_id:
+            if role.code == "TECHNICAL_SPECIALIST" and available(demand.technical_specialist_id):
                 return demand.technical_specialist_id
             if role.code in {"DEFINED_OWNER", "DEFINED_REVIEWER"}:
-                return demand.current_assignee_id
+                return demand.current_assignee_id if available(demand.current_assignee_id) else None
             reference = utc_now()
             membership_profile_id = db.scalar(
                 select(Membership.user_profile_id)
@@ -335,7 +347,7 @@ def resolve_stage_assignee(
             )
             if membership_profile_id:
                 return membership_profile_id
-    if fallback_user_id:
+    if fallback_user_id and available(fallback_user_id):
         return uuid.UUID(str(fallback_user_id))
     return None
 

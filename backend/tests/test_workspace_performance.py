@@ -209,6 +209,7 @@ def test_list_demands_does_not_silently_truncate_after_fifty(
         membership=SimpleNamespace(
             organization_id=organization_id,
             status=MembershipStatus.ACTIVE,
+            removed_at=None,
         ),
         role=SimpleNamespace(permissions=["demands:read"]),
     )

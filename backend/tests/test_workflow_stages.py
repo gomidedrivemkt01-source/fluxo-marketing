@@ -358,7 +358,7 @@ def test_stage_role_uses_card_specialist_before_the_role_fallback() -> None:
     resolved = resolve_stage_assignee(db, demand, owner_role_id=role_id)
 
     assert resolved == specialist_id
-    db.scalar.assert_not_called()
+    db.scalar.assert_called_once()
 
 
 def test_workflow_definition_preserves_the_version_used_by_a_card() -> None:

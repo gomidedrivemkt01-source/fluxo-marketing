@@ -14,3 +14,4 @@ frontend/dist/
 # Dados migrados do Supabase (confidencial)
 migracao/
 backups/
+.verification/

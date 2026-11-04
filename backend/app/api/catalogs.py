@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -15,7 +15,6 @@ from app.auth.service import Principal
 from app.database import get_db
 from app.models import (
     AuditEvent,
-    CategoryTemplateBinding,
     Company,
     Demand,
     DemandCategory,
@@ -26,9 +25,9 @@ from app.models import (
     UserProfile,
     Workflow,
     WorkflowStage,
-    WorkflowVersion,
     utc_now,
 )
+from app.operational_management import remove_workflow_or_stage
 from app.workflow_blueprints import apply_blueprint, blueprint_preview, publish_blueprint
 
 router = APIRouter(prefix="/catalogs", tags=["Cadastros"])
@@ -162,6 +161,12 @@ class WorkflowStageInput(BaseModel):
     acceptance_rule: str | None = Field(default=None, alias="acceptanceRule", max_length=2000)
     condition_rule: dict[str, object] = Field(default_factory=dict, alias="conditionRule")
     workflow_id: uuid.UUID | None = Field(default=None, alias="workflowId")
+
+    @model_validator(mode="after")
+    def distinct_responsible_people(self) -> "WorkflowStageInput":
+        if self.default_assignee_id and self.default_assignee_id == self.fallback_user_id:
+            raise ValueError("O principal e o substituto devem ser pessoas diferentes.")
+        return self
 
     @field_validator("name")
     @classmethod
@@ -611,7 +616,8 @@ def list_workflows(
     if include_draft:
         require_permission(principal, "catalog:write")
     statement = select(Workflow).where(
-        Workflow.organization_id == principal.membership.organization_id
+        Workflow.organization_id == principal.membership.organization_id,
+        Workflow.removed_at.is_(None),
     )
     if not include_inactive:
         statement = statement.where(Workflow.active.is_(True))
@@ -746,7 +752,7 @@ def update_workflow(
         .where(Workflow.id == workflow_id, Workflow.organization_id == organization_id)
         .with_for_update()
     )
-    if not workflow:
+    if not workflow or workflow.removed_at:
         raise ApiError(404, "workflow_not_found", "Workflow não encontrado.")
     if workflow.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "O workflow foi alterado. Atualize a tela.")
@@ -810,65 +816,7 @@ def delete_workflow(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     require_permission(principal, "catalog:write")
-    organization_id = principal.membership.organization_id
-    workflow = db.scalar(
-        select(Workflow)
-        .where(Workflow.id == workflow_id, Workflow.organization_id == organization_id)
-        .with_for_update()
-    )
-    if not workflow:
-        raise ApiError(404, "workflow_not_found", "Workflow não encontrado.")
-    if workflow.revision != expected_revision:
-        raise ApiError(409, "revision_conflict", "O workflow foi alterado. Atualize a tela.")
-    if workflow.is_default:
-        raise ApiError(409, "default_workflow_required", "O workflow padrão não pode ser excluído.")
-    linked_category = db.scalar(
-        select(DemandCategory.id).where(DemandCategory.default_workflow_id == workflow.id).limit(1)
-    )
-    linked_demand = db.scalar(
-        select(Demand.id).where(Demand.workflow_id == workflow.id).limit(1)
-    )
-    versions = list(
-        db.scalars(
-            select(WorkflowVersion).where(WorkflowVersion.workflow_id == workflow.id)
-        )
-    )
-    version_ids = [item.id for item in versions]
-    historical_binding = (
-        db.scalar(
-            select(CategoryTemplateBinding.id)
-            .where(CategoryTemplateBinding.workflow_version_id.in_(version_ids))
-            .limit(1)
-        )
-        if version_ids
-        else None
-    )
-    if linked_category or linked_demand or historical_binding:
-        raise ApiError(
-            409,
-            "workflow_in_use",
-            "Este workflow possui categoria, card ou histórico vinculado e deve ser preservado.",
-        )
-    snapshot = {
-        "id": str(workflow.id),
-        "name": workflow.name,
-        "code": workflow.code,
-        "lifecycleState": workflow.lifecycle_state,
-    }
-    for version in versions:
-        db.delete(version)
-    db.delete(workflow)
-    db.add(
-        AuditEvent(
-            organization_id=organization_id,
-            actor_user_id=principal.profile.id,
-            event_type="WORKFLOW_DELETED",
-            source="interface",
-            metadata_json=snapshot,
-        )
-    )
-    db.commit()
-    return {"deleted": True, "workflow": snapshot}
+    return remove_workflow_or_stage(db, principal, workflow_id, expected_revision)
 
 
 @router.get("/workflow-stages", response_model=list[WorkflowStageOut])
@@ -884,7 +832,8 @@ def list_workflow_stages(
     if include_draft:
         require_permission(principal, "catalog:write")
     statement = select(WorkflowStage).where(
-        WorkflowStage.organization_id == principal.membership.organization_id
+        WorkflowStage.organization_id == principal.membership.organization_id,
+        WorkflowStage.removed_at.is_(None),
     )
     if not include_draft:
         statement = statement.where(
@@ -990,7 +939,7 @@ def update_workflow_stage(
         )
         .with_for_update()
     )
-    if not stage:
+    if not stage or stage.removed_at:
         raise ApiError(404, "workflow_stage_not_found", "Etapa não encontrada.")
     if stage.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A etapa foi alterada. Atualize a tela.")

@@ -4,6 +4,8 @@ from app.models import MembershipStatus
 
 
 def require_active(principal: Principal) -> None:
+    if principal.membership.removed_at:
+        raise ApiError(403, "account_removed", "Este cadastro foi removido.")
     if principal.membership.status == MembershipStatus.SUSPENDED:
         raise ApiError(403, "account_suspended", "Seu acesso está suspenso.")
     if principal.membership.status != MembershipStatus.ACTIVE or not principal.role:

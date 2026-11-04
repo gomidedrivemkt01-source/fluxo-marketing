@@ -412,6 +412,7 @@ def list_user_options(
         .where(
             Membership.organization_id == principal.membership.organization_id,
             Membership.status == MembershipStatus.ACTIVE,
+            Membership.removed_at.is_(None),
         )
         .order_by(UserProfile.full_name)
     ).scalars()
@@ -545,7 +546,8 @@ def list_users(
         select(Membership, UserProfile, PermissionRole)
         .join(UserProfile, UserProfile.id == Membership.user_profile_id)
         .outerjoin(PermissionRole, PermissionRole.id == Membership.permission_role_id)
-        .where(Membership.organization_id == principal.membership.organization_id)
+        .where(Membership.organization_id == principal.membership.organization_id,
+               Membership.removed_at.is_(None))
         .order_by(UserProfile.full_name)
     ).all()
     return [
@@ -584,6 +586,7 @@ def approve_user(
         .where(
             Membership.id == membership_id,
             Membership.organization_id == principal.membership.organization_id,
+            Membership.removed_at.is_(None),
         )
         .with_for_update()
     )
@@ -656,6 +659,7 @@ def update_user_access(
         .where(
             Membership.id == membership_id,
             Membership.organization_id == principal.membership.organization_id,
+            Membership.removed_at.is_(None),
         )
         .with_for_update()
     )
@@ -743,6 +747,7 @@ def reset_user_password(
         select(Membership).where(
             Membership.id == membership_id,
             Membership.organization_id == principal.membership.organization_id,
+            Membership.removed_at.is_(None),
         )
     )
     if not membership:
