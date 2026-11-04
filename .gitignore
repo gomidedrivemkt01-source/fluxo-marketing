@@ -15,3 +15,5 @@ frontend/dist/
 migracao/
 backups/
 .verification/
+.preview/
+.ruff_cache/

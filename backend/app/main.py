@@ -41,11 +41,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    retention_task = asyncio.create_task(retention_loop())
+    retention_task = (
+        asyncio.create_task(retention_loop()) if settings.retention_scheduler_enabled else None
+    )
     yield
-    retention_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await retention_task
+    if retention_task is not None:
+        retention_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await retention_task
 
 
 app = FastAPI(

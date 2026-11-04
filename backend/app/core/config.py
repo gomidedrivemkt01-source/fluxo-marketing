@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # Rede interna sem TLS: permite produção em HTTP de forma explícita.
     allow_insecure_http: bool = False
     allowed_origins: list[str] = ["http://localhost:5173"]
+    retention_scheduler_enabled: bool = True
 
     @field_validator("allowed_origins")
     @classmethod
