@@ -1,17 +1,17 @@
 # Prévia local do Fluxo Marketing
 
-Pasta: `C:\Users\Marketing 00\Documents\Codex\fluxo-marketing-preview`.
-Endereço reservado: `http://127.0.0.1:18000`.
+Pasta: `C:\Users\Marketing 00\Documents\fluxo-local`.
+Endereço da prévia: `http://127.0.0.1:18000`.
 
 ## Referência copiada em 04/11/2026
 
-Código do servidor `Y:` na revisão `2462845745aa01ecfbc0e520f4db3102de2f03c0`, incluindo a alteração local já existente em `scripts/backup.sh`. A aplicação em `http://192.168.0.160:8000` serve os arquivos de frontend correspondentes a essa versão. A cópia contém os ajustes de responsáveis, equipe, etapas e exclusão segura de workflows da entrega anterior.
+Código baseado na revisão do servidor `2462845745aa01ecfbc0e520f4db3102de2f03c0`, obtido pelo GitHub com as ferramentas da branch `codex/local-preview`. A aplicação em `http://192.168.0.160:8000` serve os arquivos de frontend correspondentes a essa base. A cópia contém os ajustes de responsáveis, equipe, etapas e exclusão segura de workflows da entrega anterior. A alteração preexistente em `Y:\scripts\backup.sh` foi preservada no servidor, que não recebeu gravações nesta preparação.
 
-O banco e os anexos atuais **ainda não foram copiados**: `Y:\backups` não permite leitura neste computador. Não usar o export antigo do Supabase como se representasse o estado atual. A prévia só abre a aplicação após restaurar um backup do servidor atual.
+Em 04/11/2026, a pasta de trabalho passou a ser `C:\Users\Marketing 00\Documents\fluxo-local`. Os arquivos que faltavam foram completados a partir da branch `codex/local-preview` do GitHub, preservando os dois arquivos que já existiam na pasta. O banco ativo foi obtido por uma consulta somente de leitura no Supabase às 12:09:35 (America/Sao_Paulo) e restaurado no PostgreSQL local. Foram conferidas as contagens das tabelas e todas as referências de chaves estrangeiras: 1.117 demandas no total, 209 visíveis, 15 workflows, 5 usuários confirmados, 137 comentários e 3.767 atualizações. Os 20 objetos armazenados foram reaproveitados do cache local somente após validar tamanho e checksum contra os dados atuais da origem. As 1.708 referências de anexos incluem links externos do Trello, mantidos como links. A prévia não representa uma réplica exata do servidor: mudanças realizadas somente no servidor depois da migração não estão incluídas nessa cópia do Supabase.
 
 O Docker Desktop deste computador falhou ao iniciar seu serviço de inferência. Por isso, esta prévia usa Python 3.12, PostgreSQL 17 portátil e o build React/Vite. O Dockerfile e o Compose do projeto continuam disponíveis para execução em uma instalação funcional do Docker. O teste do contêiner local continua pendente.
 
-Validação realizada: build do frontend idêntico ao publicado, 13 testes do frontend, migrations até `0020_operational_management`, testes do backend incluindo integração em PostgreSQL 17, ensaio de dump/restauração com base sintética e respostas HTTP das rotas `/health`, `/team`, `/workflows` e `/demands`. A base sintética foi desativada ao final; não substitui a conferência dos dados reais. A aplicação fica parada enquanto aguarda a restauração atual.
+Validação realizada: build do frontend idêntico ao publicado, 13 testes do frontend, migrations até `0020_operational_management`, testes do backend incluindo integração em PostgreSQL 17, ensaio de dump/restauração com base sintética e respostas HTTP das rotas `/health`, `/team`, `/workflows` e `/demands`. A base sintética foi desativada ao final. A cópia real do Supabase está ativa, com autenticação normal e agendamento automático de retenção desativado somente na prévia.
 
 ## Isolamento
 
@@ -28,15 +28,15 @@ Validação realizada: build do frontend idêntico ao publicado, 13 testes do fr
 Requisitos: Python 3.12+, Node/npm e acesso à internet na primeira instalação. No PowerShell:
 
 ```powershell
-Set-Location -LiteralPath 'C:\Users\Marketing 00\Documents\Codex\fluxo-marketing-preview'
+Set-Location -LiteralPath 'C:\Users\Marketing 00\Documents\fluxo-local'
 & .\scripts\prepare-local-preview.ps1
 ```
 
 Se Python não estiver no PATH, use `-Python 'C:\caminho\python.exe'`. O script prepara dependências, baixa o PostgreSQL oficial e aplica as migrations somente em um banco local de conferência da estrutura. Não cria contas ou cards de demonstração.
 
-## Obter os dados que faltam
+## Atualizar futuramente a cópia a partir do servidor
 
-Precisamos do par de arquivos do mesmo backup do servidor:
+Para substituir a cópia atual do Supabase por uma réplica dos dados do servidor, usar o par de arquivos do mesmo backup:
 
 - `fluxo_AAAA-MM-DD_HHMM.dump`: banco PostgreSQL completo, incluindo usuários, configurações, cards e históricos.
 - `fluxo_arquivos_AAAA-MM-DD_HHMM.tar.gz`: volume de anexos completo.
@@ -75,3 +75,13 @@ Abrir `http://127.0.0.1:18000` e entrar com a conta existente no backup. Nenhuma
 4. Fazer commit e enviar a branch `codex/` ao GitHub, somente com código e documentação.
 5. Após a validação, publicar a versão aprovada na origem do servidor e recompilar/recriar o serviço pelo mecanismo disponível no servidor. Copiar o código em `Y:` sozinho não troca o conteúdo de uma imagem Docker já criada.
 6. Validar saúde, versão e funções no endereço do servidor. Dados usados nos testes da prévia não são enviados à produção.
+
+## Repetir a importação de um snapshot Supabase
+
+O script `scripts/import_supabase_snapshot.py` recebe o CSV exportado pelo SQL Editor e cria um banco novo. Valida projeto, formato, compatibilidade de colunas, contagens, chaves estrangeiras e checksums dos anexos. Converte os usuários confirmados para o login local mantendo seus hashes bcrypt. Sessões antigas não são importadas. O CSV, os hashes de senha e os anexos são confidenciais: nunca devem entrar no Git.
+
+O campo `compressed_snapshot` utiliza pgcrypto apenas como formato de transporte compactado; a frase fixa do formato não é uma proteção de sigilo. Tratar o CSV como dados pessoais legíveis e mantê-lo em local privado.
+
+```powershell
+& .\.venv\Scripts\python.exe scripts/import_supabase_snapshot.py --csv 'C:\copia-privada\supabase-snapshot.csv' --files-cache 'C:\copia-privada\storage\objects'
+```
