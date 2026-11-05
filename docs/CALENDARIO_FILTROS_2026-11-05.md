@@ -11,4 +11,6 @@ Entrega para a prévia local em `http://127.0.0.1:18000/calendar`.
 
 Não há migration, alteração de demandas ou mudança de dados nesta entrega. Validação técnica: build e 13 testes do frontend passaram; 7 testes do carregamento da carteira passaram, incluindo o acesso direto ao calendário com categorias e sem os catálogos de workflows. Ruff passou nos módulos de backend alterados.
 
-A conferência visual na prévia e o versionamento no GitHub são realizados antes da entrega. A publicação no servidor continua dependendo da validação da prévia pelo usuário.
+A conferência visual na prévia cobriu larguras de 1280px, 768px e 390px, sem transbordamento da página ou campos cortados. Foi corrigida a sobreposição do botão flutuante de nova demanda sobre as ações do painel no celular. No snapshot local, Blog retornou as mesmas 26 demandas de novembro em Mês e Agenda; Blog + Expert retornou as mesmas 8 demandas nos dois formatos. Foram conferidos Sem categoria, limpeza geral, fechamento por Escape com devolução de foco e clique fora.
+
+O código é versionado no GitHub na branch `codex/fluxo-local`. A publicação no servidor continua dependendo da validação da prévia pelo usuário.
