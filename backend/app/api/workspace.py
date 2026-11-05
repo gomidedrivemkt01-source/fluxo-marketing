@@ -133,8 +133,10 @@ def workspace_page(
         )
     if page == "calendar":
         companies = list_companies(include_inactive=False, principal=principal, db=db)
+        categories = list_categories(principal=principal, db=db)
         return WorkspacePageOut(
             companies=[CompanyOut.model_validate(item) for item in companies],
+            categories=[CategoryOut.model_validate(item) for item in categories],
             people=list_user_options(principal=principal, db=db),
             demands=list_demands(q=None, principal=principal, db=db),
             profile=profile,

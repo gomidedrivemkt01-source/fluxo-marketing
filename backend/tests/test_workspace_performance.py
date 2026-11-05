@@ -201,6 +201,52 @@ def test_workspace_overview_loads_only_profile_and_demands(
     catalog_mock.assert_not_called()
 
 
+def test_calendar_direct_load_includes_category_filters_without_workflow_catalogs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = ProfileOut(
+        profileId=uuid.uuid4(),
+        name="Colaborador",
+        email="colaborador@example.com",
+        timezone="America/Sao_Paulo",
+        role="collaborator",
+        revision=1,
+        avatarUrl=None,
+        preferences={},
+    )
+    category = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Vídeo",
+        code="VIDEO",
+        color="#475569",
+        default_workflow_id=None,
+        active=True,
+        revision=1,
+    )
+    monkeypatch.setattr(workspace, "get_my_profile", MagicMock(return_value=profile))
+    monkeypatch.setattr(workspace, "list_companies", MagicMock(return_value=[]))
+    monkeypatch.setattr(workspace, "list_user_options", MagicMock(return_value=[]))
+    categories_mock = MagicMock(return_value=[category])
+    demands_mock = MagicMock(return_value=[])
+    catalog_mock = MagicMock()
+    monkeypatch.setattr(workspace, "list_categories", categories_mock)
+    monkeypatch.setattr(workspace, "list_demands", demands_mock)
+    monkeypatch.setattr(workspace, "_catalog_data", catalog_mock)
+    principal = MagicMock()
+    db = MagicMock(spec=Session)
+
+    result = workspace.workspace_page("calendar", principal, db)
+
+    assert result.categories is not None
+    assert [(item.id, item.name) for item in result.categories] == [(category.id, "Vídeo")]
+    assert result.demands == []
+    assert result.workflows is None
+    assert result.stages is None
+    categories_mock.assert_called_once_with(principal=principal, db=db)
+    demands_mock.assert_called_once_with(q=None, principal=principal, db=db)
+    catalog_mock.assert_not_called()
+
+
 def test_list_demands_does_not_silently_truncate_after_fifty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
