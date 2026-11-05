@@ -347,7 +347,7 @@ export default function CalendarPage({
                       placeholder="Demanda, código, empresa ou pessoa"
                     />
                   </label>
-                  <label>
+                  <label className="calendar-category">
                     <span>Categoria</span>
                     <select
                       value={category}
