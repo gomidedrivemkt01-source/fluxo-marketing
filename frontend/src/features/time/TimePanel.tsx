@@ -1,3 +1,4 @@
+import { ValidatedForm } from "../../components/ValidatedForm";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api, messageFrom } from "../../api";
@@ -299,7 +300,7 @@ export function TimePanel({
           {summary.activeTimer && <strong className="timer-clock">{summary.activeTimer.state === "PAUSED" ? durationLabel(summary.activeTimer.durationMinutes) : runningLabel(summary.activeTimer.startedAt, now, summary.activeTimer.durationMinutes ?? 0)}</strong>}
         </section>
 
-        <form className="manual-time-form" onSubmit={createManual}>
+        <ValidatedForm className="manual-time-form" onSubmit={createManual}>
           <div>
             <span className="eyebrow dark">Registro manual</span>
             <h4>Adicionar tempo concluído</h4>
@@ -335,10 +336,10 @@ export function TimePanel({
           <button className="secondary time-submit" disabled={!canTrack || busy === "manual"}>
             {busy === "manual" ? "Adicionando…" : "+ Adicionar tempo"}
           </button>
-        </form>
+        </ValidatedForm>
       </div>
 
-      <form className="estimate-form" onSubmit={saveEstimate}>
+      <ValidatedForm className="estimate-form" onSubmit={saveEstimate}>
         <div>
           <strong>Esforço previsto da demanda</strong>
           <span>Informe a estimativa em minutos. Esta medida é separada da duração de calendário da etapa.</span>
@@ -358,7 +359,7 @@ export function TimePanel({
         <button className="secondary compact" disabled={!canEditEstimate || busy === "estimate"}>
           {busy === "estimate" ? "Salvando…" : "Salvar estimativa"}
         </button>
-      </form>
+      </ValidatedForm>
 
       <div className="time-history">
         <header>

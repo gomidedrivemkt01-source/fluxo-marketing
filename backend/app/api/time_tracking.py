@@ -107,6 +107,36 @@ class ActiveTimerOut(BaseModel):
     timer: TimeEntryOut
 
 
+@active_router.get("/active-timers", response_model=list[ActiveTimerOut])
+def get_active_timers(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+) -> list[ActiveTimerOut]:
+    require_permission(principal, "demands:read")
+    rows = db.execute(
+        select(TimeEntry, Demand)
+        .join(Demand, Demand.id == TimeEntry.demand_id)
+        .where(
+            TimeEntry.organization_id == principal.membership.organization_id,
+            TimeEntry.user_profile_id == principal.profile.id,
+            TimeEntry.state.in_(["RUNNING", "PAUSED"]),
+            TimeEntry.deleted_at.is_(None),
+            Demand.organization_id == principal.membership.organization_id,
+            Demand.deleted_at.is_(None),
+        )
+        .order_by(TimeEntry.created_at, TimeEntry.id)
+    ).all()
+    return [
+        ActiveTimerOut(
+            demand_id=demand.id,
+            demand_public_id=demand.public_id,
+            demand_title=demand.title,
+            timer=_entry_out(entry, principal.profile, principal),
+        )
+        for entry, demand in rows
+    ]
+
+
 @active_router.get("/active", response_model=ActiveTimerOut | None)
 def get_active_timer(
     principal: Principal = Depends(get_principal),
@@ -515,21 +545,40 @@ def start_timer(
 ) -> TimeEntryOut:
     require_any_permission(principal, "demands:write", "demands:work")
     demand = _get_demand(db, demand_id, principal)
-    active = db.scalar(
-        select(TimeEntry).where(
-            TimeEntry.organization_id == demand.organization_id,
-            TimeEntry.user_profile_id == principal.profile.id,
-            TimeEntry.state.in_(["RUNNING", "PAUSED"]),
-            TimeEntry.deleted_at.is_(None),
+    # Serializa cliques simultâneos/abas da mesma pessoa; os índices também impõem o limite no banco.
+    db.execute(
+        select(UserProfile.id).where(UserProfile.id == principal.profile.id).with_for_update()
+    )
+    active = list(
+        db.scalars(
+            select(TimeEntry).where(
+                TimeEntry.organization_id == demand.organization_id,
+                TimeEntry.user_profile_id == principal.profile.id,
+                TimeEntry.state.in_(["RUNNING", "PAUSED"]),
+                TimeEntry.deleted_at.is_(None),
+            )
         )
     )
-    if active:
-        raise ApiError(409, "timer_already_running", "Você já possui um timer em andamento.")
+    same_demand = next((item for item in active if item.demand_id == demand.id), None)
+    if same_demand:
+        if same_demand.state == "PAUSED":
+            return resume_timer(
+                demand_id, TimerStop(expectedRevision=same_demand.revision), principal, db
+            )
+        return _entry_out(same_demand, principal.profile, principal)
+    if len(active) >= 2:
+        raise ApiError(
+            409,
+            "timer_limit_reached",
+            "Você já tem dois timers abertos. Conclua um deles antes de iniciar outra demanda.",
+        )
+    slot = next(number for number in (1, 2) if number not in {item.timer_slot for item in active})
     entry = TimeEntry(
         organization_id=demand.organization_id,
         demand_id=demand.id,
         user_profile_id=principal.profile.id,
         source="TIMER",
+        timer_slot=slot,
         state="RUNNING",
         started_at=utc_now(),
         note=payload.note,
@@ -558,7 +607,9 @@ def start_timer(
     except IntegrityError as exc:
         db.rollback()
         raise ApiError(
-            409, "timer_already_running", "Você já possui um timer em andamento."
+            409,
+            "timer_limit_reached",
+            "Os timers foram alterados em outra aba. Atualize e tente novamente.",
         ) from exc
     return _entry_out(entry, principal.profile, principal)
 
@@ -669,7 +720,13 @@ def pause_timer(
             payload={"timeEntryId": str(entry.id), "durationMinutes": entry.duration_minutes},
         )
     )
-    db.add(_audit(principal, "TIME_TIMER_PAUSED", {"demandId": str(demand.id), "timeEntryId": str(entry.id)}))
+    db.add(
+        _audit(
+            principal,
+            "TIME_TIMER_PAUSED",
+            {"demandId": str(demand.id), "timeEntryId": str(entry.id)},
+        )
+    )
     db.commit()
     return _entry_out(entry, principal.profile, principal)
 
@@ -717,6 +774,12 @@ def resume_timer(
             payload={"timeEntryId": str(entry.id)},
         )
     )
-    db.add(_audit(principal, "TIME_TIMER_RESUMED", {"demandId": str(demand.id), "timeEntryId": str(entry.id)}))
+    db.add(
+        _audit(
+            principal,
+            "TIME_TIMER_RESUMED",
+            {"demandId": str(demand.id), "timeEntryId": str(entry.id)},
+        )
+    )
     db.commit()
     return _entry_out(entry, principal.profile, principal)

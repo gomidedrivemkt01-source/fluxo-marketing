@@ -1,3 +1,4 @@
+import { ValidatedForm } from "./components/ValidatedForm";
 import { lazy, Suspense, type FormEvent, useEffect, useState } from "react";
 import type React from "react";
 import { api, AUTH_EXPIRED_EVENT, messageFrom, type Session } from "./api";
@@ -62,13 +63,13 @@ function Login({ onSession, go }: { onSession: (session: Session) => void; go: (
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
   return <AuthShell eyebrow="Bem-vindo" title="Entre na sua conta" text="Use o e-mail e a senha cadastrados para acessar seu espaço de trabalho.">
-    <form onSubmit={submit} className="form-stack">
+    <ValidatedForm onSubmit={submit} className="form-stack">
       {error && <Notice>{error}</Notice>}
       <Field label="E-mail" name="email" type="email" autoComplete="email" placeholder="nome@empresa.com" required />
       <PasswordField label="Senha" name="password" autoComplete="current-password" placeholder="Sua senha" required />
       <button className="link-button align-right" type="button" onClick={() => go("forgot")}>Esqueci minha senha</button>
       <button className="primary" disabled={busy}>{busy ? "Entrando…" : "Entrar"}</button>
-    </form>
+    </ValidatedForm>
     <p className="switch-copy">Ainda não tem acesso? <button className="link-button" onClick={() => go("register")}>Criar cadastro</button></p>
   </AuthShell>;
 }
@@ -85,7 +86,7 @@ function Register({ onSession, go }: { onSession: (session: Session) => void; go
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
   return <AuthShell eyebrow="Novo acesso" title="Crie seu cadastro" text="Depois do cadastro, um administrador libera seu acesso à equipe.">
-    <form onSubmit={submit} className="form-stack">
+    <ValidatedForm onSubmit={submit} className="form-stack">
       {error && <Notice>{error}</Notice>}
       <Field label="Nome completo" name="name" autoComplete="name" required />
       <Field label="E-mail" name="email" type="email" autoComplete="email" required />
@@ -93,7 +94,7 @@ function Register({ onSession, go }: { onSession: (session: Session) => void; go
       <PasswordField label="Confirme a senha" name="confirmPassword" autoComplete="new-password" minLength={12} maxLength={72} required />
       <label className="check"><input name="privacy" type="checkbox" required /><span>Li o aviso de privacidade e entendo o uso dos dados para gestão interna.</span></label>
       <button className="primary" disabled={busy}>{busy ? "Criando cadastro…" : "Criar cadastro"}</button>
-    </form>
+    </ValidatedForm>
     <p className="switch-copy">Já possui cadastro? <button className="link-button" onClick={() => go("login")}>Entrar</button></p>
   </AuthShell>;
 }
@@ -115,14 +116,14 @@ function ChangePasswordForm({ forced = false, onChanged }: { forced?: boolean; o
       form.reset(); setSuccess("Senha alterada. As outras sessões foram encerradas."); onChanged(session);
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
-  return <form onSubmit={submit} className="form-stack">
+  return <ValidatedForm onSubmit={submit} className="form-stack">
     {error && <Notice>{error}</Notice>}
     {success && <Notice kind="success">{success}</Notice>}
     <PasswordField label={forced ? "Senha temporária" : "Senha atual"} name="currentPassword" autoComplete="current-password" required />
     <PasswordField label="Nova senha" name="password" minLength={12} maxLength={72} autoComplete="new-password" required />
     <PasswordField label="Confirme a nova senha" name="confirmPassword" minLength={12} maxLength={72} autoComplete="new-password" required />
     <button className="primary" disabled={busy}>{busy ? "Salvando…" : "Alterar senha"}</button>
-  </form>;
+  </ValidatedForm>;
 }
 
 function ForcedPasswordChange({ onSession, logout }: { onSession: (session: Session) => void; logout: () => void }) {

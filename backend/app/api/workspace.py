@@ -38,6 +38,7 @@ WorkspacePage = Literal[
     "my-work",
     "demands",
     "calendar",
+    "bulk-demands",
     "companies",
     "team",
     "reports",

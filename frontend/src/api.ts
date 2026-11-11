@@ -6,7 +6,11 @@ export type Session = {
   mustChangePassword: boolean;
 };
 
-export type ApiError = { code: string; message: string; requestId?: string };
+export type FieldProblem = { field: string; message?: string; type?: string; code?: string };
+export type ApiError = { code: string; message: string; requestId?: string; fieldErrors?: FieldProblem[]; warnings?: FieldProblem[]; canProceed?: boolean };
+export const FORM_PROBLEM_EVENT = "fluxo:form-problem";
+export const WARNING_REVIEW_EVENT = "fluxo:warning-review";
+export type WarningReviewRequest = { warnings: FieldProblem[]; handled: boolean; resolve: (accepted: boolean) => void };
 export const AUTH_EXPIRED_EVENT = "fluxo:auth-expired";
 const GET_TIMEOUT_MS = 25_000;
 const WRITE_TIMEOUT_MS = 90_000;
@@ -46,7 +50,8 @@ async function fetchWithTimeout(path: string, init: RequestInit, timeoutMs: numb
   }
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, init: RequestInit = {}, originForm?: Element | null): Promise<T> {
+  const form = originForm ?? (typeof document !== "undefined" ? document.activeElement?.closest("form") : null);
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -74,6 +79,17 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     const fallback: ApiError = { code: "request_failed", message: "Não foi possível concluir." };
     const detail = (await response.json().catch(() => fallback)) as ApiError;
+    if (typeof window !== "undefined" && detail.fieldErrors?.length) {
+      window.dispatchEvent(new CustomEvent(FORM_PROBLEM_EVENT, { detail: { fields: detail.fieldErrors, form } }));
+    }
+    if (detail.code === "acknowledgement_required" && detail.canProceed && detail.warnings?.length && typeof init.body === "string" && typeof window !== "undefined") {
+      const accepted = await new Promise<boolean>((resolve) => {
+        const request: WarningReviewRequest = { warnings: detail.warnings!, handled: false, resolve };
+        window.dispatchEvent(new CustomEvent(WARNING_REVIEW_EVENT, { detail: request }));
+        if (!request.handled) resolve(false);
+      });
+      if (accepted) { const body = JSON.parse(init.body); return api<T>(path, { ...init, body: JSON.stringify({ ...body, acknowledgedWarnings: [...new Set([...(body.acknowledgedWarnings ?? []), ...detail.warnings.map(item => item.code)])] }) }, form); }
+    }
     if (response.status === 401 && path !== "/auth/session" && typeof window !== "undefined") {
       window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
     }

@@ -1,3 +1,4 @@
+import { ValidatedForm } from "../../components/ValidatedForm";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api, messageFrom } from "../../api";
@@ -248,7 +249,7 @@ export function ActivityPanel({ demandId, canComment, compact = false }: { deman
       </div>
 
       {canComment && mode === "comments" && (
-        <form className="comment-composer" onSubmit={submitComment}>
+        <ValidatedForm className="comment-composer" onSubmit={submitComment}>
           <textarea
             name="content"
             rows={3}
@@ -263,7 +264,7 @@ export function ActivityPanel({ demandId, canComment, compact = false }: { deman
               {busy ? "Publicando…" : "Comentar"}
             </button>
           </footer>
-        </form>
+        </ValidatedForm>
       )}
 
       {error && <div className="activity-error">{error}</div>}
@@ -293,7 +294,7 @@ export function ActivityPanel({ demandId, canComment, compact = false }: { deman
                   {item.editedAt && !item.deletedAt && <em>Editado</em>}
                 </div>
                 {editing?.id === item.id ? (
-                  <form className="comment-edit" onSubmit={saveEdit}>
+                  <ValidatedForm className="comment-edit" onSubmit={saveEdit}>
                     <textarea name="content" rows={4} maxLength={5000} defaultValue={item.content ?? ""} required />
                     <div>
                       <button type="button" className="secondary compact" onClick={() => setEditing(null)}>
@@ -303,7 +304,7 @@ export function ActivityPanel({ demandId, canComment, compact = false }: { deman
                         Salvar edição
                       </button>
                     </div>
-                  </form>
+                  </ValidatedForm>
                 ) : item.itemType === "comment" ? (
                   <p className={item.deletedAt ? "comment-deleted" : "comment-text"}>
                     {item.deletedAt ? "Comentário removido." : item.content}

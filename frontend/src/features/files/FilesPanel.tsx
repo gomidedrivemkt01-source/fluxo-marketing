@@ -1,3 +1,4 @@
+import { ValidatedForm } from "../../components/ValidatedForm";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import { api, messageFrom } from "../../api";
@@ -287,7 +288,7 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
   if (compact) {
     return (
       <><section className="inline-files">
-        <header><div><strong>Arquivos e mídias</strong><span>{files.length ? `${files.length} anexado${files.length === 1 ? "" : "s"}` : "Nenhum anexo"}</span></div>{canManage && <form onSubmit={upload}><label className="inline-file-add"><input ref={inputRef} type="file" accept={acceptedTypes} multiple disabled={busy === "upload"} onChange={chooseFiles} required /><span>＋</span>{selectedLabel}</label>{selectedFiles.length > 0 && <button disabled={busy === "upload"}>{busy === "upload" ? `${uploadProgress.completed}/${uploadProgress.total}` : "Enviar"}</button>}</form>}</header>
+        <header><div><strong>Arquivos e mídias</strong><span>{files.length ? `${files.length} anexado${files.length === 1 ? "" : "s"}` : "Nenhum anexo"}</span></div>{canManage && <ValidatedForm onSubmit={upload}><label className="inline-file-add"><input ref={inputRef} type="file" accept={acceptedTypes} multiple disabled={busy === "upload"} onChange={chooseFiles} required /><span>＋</span>{selectedLabel}</label>{selectedFiles.length > 0 && <button disabled={busy === "upload"}>{busy === "upload" ? `${uploadProgress.completed}/${uploadProgress.total}` : "Enviar"}</button>}</ValidatedForm>}</header>
         {error && <div className="activity-error">{error}</div>}
         {files.length > 0 && <div className="inline-file-grid">{files.slice(0, 8).map((item) => { const image = item.contentType.startsWith("image/"); return <button type="button" key={item.id} onClick={() => image ? openViewer(item) : void download(item)} title={image ? `Visualizar ${item.name}` : `Baixar ${item.name}`}><span>{image ? <img src={previewUrl(demandId, item.id)} alt="" loading="lazy" /> : fileIcon(item.contentType)}</span><small>{item.name}</small></button>; })}</div>}
       </section>{viewer}</>
@@ -306,7 +307,7 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
       </header>
 
       {canManage && (
-        <form className="file-uploader" onSubmit={upload}>
+        <ValidatedForm className="file-uploader" onSubmit={upload}>
           <label className="file-picker">
             <input
               ref={inputRef}
@@ -325,7 +326,7 @@ export function FilesPanel({ demandId, canManage, compact = false, onFilesChange
           <button className="primary action-primary" disabled={!selectedFiles.length || busy === "upload"}>
             {uploadLabel}
           </button>
-        </form>
+        </ValidatedForm>
       )}
 
       {error && <div className="activity-error">{error}</div>}

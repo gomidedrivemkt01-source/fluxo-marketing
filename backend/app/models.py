@@ -928,6 +928,7 @@ class TimeEntry(Base):
         UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT"), index=True
     )
     source: Mapped[str] = mapped_column(String(20))
+    timer_slot: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     state: Mapped[str] = mapped_column(String(20))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -937,6 +938,44 @@ class TimeEntry(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class BulkDemandBatch(Base):
+    __tablename__ = "bulk_demand_batches"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "batch_key", name="uq_bulk_batch_key"),
+        {"schema": "app"},
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT")
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    batch_key: Mapped[str] = mapped_column(String(160))
+    document_hash: Mapped[str] = mapped_column(String(64))
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class BulkDemandItem(Base):
+    __tablename__ = "bulk_demand_items"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "external_key", name="uq_bulk_demand_external_key"),
+        {"schema": "app"},
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.organizations.id", ondelete="RESTRICT")
+    )
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.bulk_demand_batches.id", ondelete="RESTRICT")
+    )
+    external_key: Mapped[str] = mapped_column(String(160))
+    demand_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.demands.id", ondelete="RESTRICT")
+    )
 
 
 class AppSession(Base):

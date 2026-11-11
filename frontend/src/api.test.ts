@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, AUTH_EXPIRED_EVENT, messageFrom } from "./api";
+import { api, AUTH_EXPIRED_EVENT, messageFrom, WARNING_REVIEW_EVENT, type WarningReviewRequest } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -20,6 +20,28 @@ describe("messageFrom", () => {
 });
 
 describe("api", () => {
+  it("only retries a warning after explicit acknowledgement and preserves the mutation", async () => {
+    vi.stubGlobal("document", {cookie:""});
+    const browserWindow = new EventTarget();
+    browserWindow.addEventListener(WARNING_REVIEW_EVENT, event=>{const request=(event as CustomEvent<WarningReviewRequest>).detail;request.handled=true;request.resolve(true);});
+    vi.stubGlobal("window",browserWindow);
+    const request=vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({code:"acknowledgement_required",message:"Confira",canProceed:true,warnings:[{code:"deadline_past",field:"deadlineAt",message:"Prazo vencido"}]}),{status:409})).mockResolvedValueOnce(new Response(JSON.stringify({ok:true}),{status:200}));
+    vi.stubGlobal("fetch",request);
+    await expect(api("/demands/card",{method:"PUT",body:JSON.stringify({expectedRevision:7,title:"Texto"})})).resolves.toEqual({ok:true});
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(request.mock.calls[1]![1].body)).toEqual({expectedRevision:7,title:"Texto",acknowledgedWarnings:["deadline_past"]});
+  });
+
+  it("does not repeat a write when warning review is cancelled",async()=>{
+    vi.stubGlobal("document",{cookie:""});
+    const browserWindow=new EventTarget();
+    browserWindow.addEventListener(WARNING_REVIEW_EVENT,event=>{const request=(event as CustomEvent<WarningReviewRequest>).detail;request.handled=true;request.resolve(false);});
+    vi.stubGlobal("window",browserWindow);
+    const request=vi.fn().mockResolvedValue(new Response(JSON.stringify({code:"acknowledgement_required",message:"Confira",canProceed:true,warnings:[{code:"deadline_past",field:"deadlineAt",message:"Prazo vencido"}]}),{status:409}));
+    vi.stubGlobal("fetch",request);
+    await expect(api("/demands/card",{method:"PUT",body:"{}"})).rejects.toThrow("Confira");
+    expect(request).toHaveBeenCalledOnce();
+  });
   it("retries a GET once after a temporary network failure", async () => {
     const request = vi.fn()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))

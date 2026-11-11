@@ -28,6 +28,7 @@ from app.models import (
     WorkflowStage,
     utc_now,
 )
+from app.operation_warnings import WarningAcknowledgement, confirm_warnings
 
 catalog_router = APIRouter(prefix="/catalogs", tags=["Modelos de trabalho"])
 demand_router = APIRouter(prefix="/demands", tags=["Conteúdo das demandas"])
@@ -119,7 +120,7 @@ class BriefingAnswerInput(BaseModel):
     value: str | None = Field(default=None, max_length=10000)
 
 
-class DemandBriefingInput(BaseModel):
+class DemandBriefingInput(WarningAcknowledgement):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     answers: list[BriefingAnswerInput] = Field(max_length=200)
 
@@ -197,7 +198,9 @@ def _stage(db: Session, principal: Principal, stage_id: uuid.UUID) -> WorkflowSt
     return stage
 
 
-def _demand(db: Session, principal: Principal, demand_id: uuid.UUID, *, lock: bool = False) -> Demand:
+def _demand(
+    db: Session, principal: Principal, demand_id: uuid.UUID, *, lock: bool = False
+) -> Demand:
     statement = select(Demand).where(
         Demand.id == demand_id,
         Demand.organization_id == principal.membership.organization_id,
@@ -274,11 +277,18 @@ def create_briefing_field(
     db.add(field)
     try:
         db.flush()
-        _audit(db, principal, "BRIEFING_FIELD_CREATED", {"fieldId": str(field.id), "categoryId": str(category_id)})
+        _audit(
+            db,
+            principal,
+            "BRIEFING_FIELD_CREATED",
+            {"fieldId": str(field.id), "categoryId": str(category_id)},
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise ApiError(409, "briefing_field_conflict", "Esta chave já existe na categoria.") from exc
+        raise ApiError(
+            409, "briefing_field_conflict", "Esta chave já existe na categoria."
+        ) from exc
     db.refresh(field)
     return field
 
@@ -319,12 +329,16 @@ def update_briefing_field(
     field.active = payload.active
     field.revision += 1
     field.updated_at = utc_now()
-    _audit(db, principal, "BRIEFING_FIELD_UPDATED", {"fieldId": str(field.id), "active": field.active})
+    _audit(
+        db, principal, "BRIEFING_FIELD_UPDATED", {"fieldId": str(field.id), "active": field.active}
+    )
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise ApiError(409, "briefing_field_conflict", "Esta chave já existe na categoria.") from exc
+        raise ApiError(
+            409, "briefing_field_conflict", "Esta chave já existe na categoria."
+        ) from exc
     db.refresh(field)
     return field
 
@@ -376,7 +390,12 @@ def create_checklist_template_item(
     )
     db.add(item)
     db.flush()
-    _audit(db, principal, "CHECKLIST_TEMPLATE_ITEM_CREATED", {"itemId": str(item.id), "stageId": str(stage_id)})
+    _audit(
+        db,
+        principal,
+        "CHECKLIST_TEMPLATE_ITEM_CREATED",
+        {"itemId": str(item.id), "stageId": str(stage_id)},
+    )
     db.commit()
     db.refresh(item)
     return item
@@ -413,7 +432,12 @@ def update_checklist_template_item(
     item.active = payload.active
     item.revision += 1
     item.updated_at = utc_now()
-    _audit(db, principal, "CHECKLIST_TEMPLATE_ITEM_UPDATED", {"itemId": str(item.id), "active": item.active})
+    _audit(
+        db,
+        principal,
+        "CHECKLIST_TEMPLATE_ITEM_UPDATED",
+        {"itemId": str(item.id), "active": item.active},
+    )
     db.commit()
     db.refresh(item)
     return item
@@ -458,7 +482,9 @@ def get_demand_briefing(
                 position=field.position,
                 active=field.active,
                 revision=field.revision,
-                value=str(answers[field.id].value) if field.id in answers and answers[field.id].value is not None else None,
+                value=str(answers[field.id].value)
+                if field.id in answers and answers[field.id].value is not None
+                else None,
             )
             for field in fields
         ],
@@ -481,7 +507,9 @@ def update_demand_briefing(
     if demand.revision != payload.expected_revision:
         raise ApiError(409, "revision_conflict", "A demanda foi alterada. Atualize a tela.")
     if not demand.category_id:
-        raise ApiError(422, "briefing_requires_category", "Selecione uma categoria para preencher o briefing.")
+        raise ApiError(
+            422, "briefing_requires_category", "Selecione uma categoria para preencher o briefing."
+        )
     fields = list(
         db.scalars(
             select(BriefingField).where(
@@ -492,21 +520,57 @@ def update_demand_briefing(
         )
     )
     by_id = {field.id: field for field in fields}
-    submitted = {answer.field_id: answer.value.strip() if answer.value else None for answer in payload.answers}
+    submitted = {
+        answer.field_id: answer.value.strip() if answer.value else None
+        for answer in payload.answers
+    }
     if not set(submitted).issubset(by_id):
         raise ApiError(422, "briefing_field_invalid", "O briefing contém um campo indisponível.")
-    missing = [field.label for field in fields if field.required and not submitted.get(field.id)]
-    if missing:
-        raise ApiError(422, "briefing_required", f"Preencha os campos obrigatórios: {', '.join(missing)}.")
+    missing = [field for field in fields if field.required and not submitted.get(field.id)]
+    warnings = [
+        {
+            "code": f"briefing:{field.id}",
+            "field": str(field.id),
+            "message": f"{field.label}: preencha o campo obrigatório ou confirme a ciência de deixá-lo pendente.",
+        }
+        for field in missing
+    ]
+    confirm_warnings(
+        db, principal, demand, warnings, payload.acknowledged_warnings, action="briefing_update"
+    )
     for field in fields:
         value = submitted.get(field.id)
         if field.field_type == "select" and value and value not in field.options:
-            raise ApiError(422, "briefing_option_invalid", f"Selecione uma opção válida em {field.label}.")
+            raise ApiError(
+                422,
+                "briefing_option_invalid",
+                f"Selecione uma opção válida em {field.label}.",
+                {
+                    "fieldErrors": [
+                        {
+                            "field": str(field.id),
+                            "message": "Escolha uma das opções disponíveis neste campo.",
+                        }
+                    ]
+                },
+            )
         if field.field_type == "number" and value:
             try:
                 float(value.replace(",", "."))
             except ValueError as exc:
-                raise ApiError(422, "briefing_number_invalid", f"Informe um número válido em {field.label}.") from exc
+                raise ApiError(
+                    422,
+                    "briefing_number_invalid",
+                    f"Informe um número válido em {field.label}.",
+                    {
+                        "fieldErrors": [
+                            {
+                                "field": str(field.id),
+                                "message": "Informe um número válido neste campo.",
+                            }
+                        ]
+                    },
+                ) from exc
     existing = {
         answer.field_id: answer
         for answer in db.scalars(
@@ -540,7 +604,12 @@ def update_demand_briefing(
             payload={"fieldCount": len(fields)},
         )
     )
-    _audit(db, principal, "DEMAND_BRIEFING_UPDATED", {"demandId": str(demand.id), "fieldCount": len(fields)})
+    _audit(
+        db,
+        principal,
+        "DEMAND_BRIEFING_UPDATED",
+        {"demandId": str(demand.id), "fieldCount": len(fields)},
+    )
     db.commit()
     db.refresh(demand)
     return demand_out(db, demand)
@@ -578,7 +647,9 @@ def get_demand_checklist(
     items: list[DemandChecklistItemOut] = []
     for template in templates:
         record = records.get(template.id)
-        completed_by = db.get(UserProfile, record.completed_by) if record and record.completed_by else None
+        completed_by = (
+            db.get(UserProfile, record.completed_by) if record and record.completed_by else None
+        )
         items.append(
             DemandChecklistItemOut(
                 id=template.id,
@@ -686,7 +757,16 @@ def toggle_demand_checklist_item(
             payload={"templateItemId": str(template.id), "completed": payload.completed},
         )
     )
-    _audit(db, principal, "DEMAND_CHECKLIST_UPDATED", {"demandId": str(demand.id), "templateItemId": str(template.id), "completed": payload.completed})
+    _audit(
+        db,
+        principal,
+        "DEMAND_CHECKLIST_UPDATED",
+        {
+            "demandId": str(demand.id),
+            "templateItemId": str(template.id),
+            "completed": payload.completed,
+        },
+    )
     db.commit()
     db.refresh(demand)
     return demand_out(db, demand)
@@ -786,7 +866,16 @@ def toggle_demand_todo_item(
             payload={"checklistItemId": str(todo.id), "completed": payload.completed},
         )
     )
-    _audit(db, principal, "DEMAND_CHECKLIST_UPDATED", {"demandId": str(demand.id), "checklistItemId": str(todo.id), "completed": payload.completed})
+    _audit(
+        db,
+        principal,
+        "DEMAND_CHECKLIST_UPDATED",
+        {
+            "demandId": str(demand.id),
+            "checklistItemId": str(todo.id),
+            "completed": payload.completed,
+        },
+    )
     db.commit()
     db.refresh(demand)
     return demand_out(db, demand)
@@ -835,7 +924,12 @@ def delete_demand_todo_item(
             payload={"checklistItemId": str(todo.id)},
         )
     )
-    _audit(db, principal, "DEMAND_CHECKLIST_ITEM_REMOVED", {"demandId": str(demand.id), "checklistItemId": str(todo.id)})
+    _audit(
+        db,
+        principal,
+        "DEMAND_CHECKLIST_ITEM_REMOVED",
+        {"demandId": str(demand.id), "checklistItemId": str(todo.id)},
+    )
     db.commit()
     db.refresh(demand)
     return demand_out(db, demand)

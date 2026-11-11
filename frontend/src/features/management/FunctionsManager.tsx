@@ -1,3 +1,4 @@
+import { ValidatedForm } from "../../components/ValidatedForm";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, messageFrom } from "../../api";
 import type { JobRole, JobRoleAssignment } from "../../WorkspaceApp";
@@ -95,7 +96,7 @@ function RoleForm({
             ×
           </button>
         </header>
-        <form onSubmit={(event) => void submit(event)}>
+        <ValidatedForm onSubmit={(event) => void submit(event)}>
           <div className="management-body">
             {error && (
               <div className="notice error" role="alert">
@@ -137,7 +138,7 @@ function RoleForm({
               {busy ? "Salvando…" : "Salvar função"}
             </button>
           </footer>
-        </form>
+        </ValidatedForm>
       </section>
     </div>
   );

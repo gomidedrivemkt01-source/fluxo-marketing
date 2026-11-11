@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -15,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from app.api.bulk_demands import router as bulk_demands_router
 from app.api.catalogs import router as catalogs_router
 from app.api.collaboration import router as collaboration_router
 from app.api.daily_imports import router as daily_imports_router
@@ -99,6 +101,55 @@ async def request_context(request: Request, call_next: RequestResponseEndpoint) 
     return response
 
 
+def validation_message(error: dict[str, Any]) -> str:
+    kind = error["type"]
+    context = error.get("ctx", {})
+    if kind == "missing":
+        return "Preencha este campo."
+    if kind == "string_too_long":
+        return f"Use no máximo {context.get('max_length')} caracteres."
+    if kind == "string_too_short":
+        return f"Use pelo menos {context.get('min_length')} caracteres."
+    if kind.startswith("datetime"):
+        return "Informe uma data e horário válidos, com o fuso horário no arquivo JSON."
+    if kind == "string_pattern_mismatch":
+        if error["loc"][-1] in {"externalId", "batchId"}:
+            return "Use letras sem acento, números e os caracteres . _ : / -, sem espaços."
+        return "Escolha uma das opções disponíveis para este campo."
+    if kind == "timezone_aware":
+        return "Inclua o fuso horário na data, por exemplo 2026-12-10T17:00:00-03:00."
+    if kind in {"too_long", "too_short"}:
+        limit = context.get("max_length" if kind == "too_long" else "min_length")
+        return f"Use {'no máximo' if kind == 'too_long' else 'pelo menos'} {limit} item(ns)."
+    if kind == "extra_forbidden":
+        return "Este campo não faz parte do modelo. Confira o JSON de referência."
+    if kind == "value_error":
+        return str(error["msg"]).removeprefix("Value error, ")
+    return "Confira o formato e o valor deste campo."
+
+
+def validation_field(error: dict[str, Any], body: Any) -> str:
+    path = error["loc"][1:]
+    if (
+        len(path) >= 3
+        and path[0] == "answers"
+        and isinstance(path[1], int)
+        and path[2] == "value"
+        and isinstance(body, dict)
+    ):
+        answers = body.get("answers", [])
+        if (
+            isinstance(answers, list)
+            and path[1] < len(answers)
+            and isinstance(answers[path[1]], dict)
+        ):
+            try:
+                return str(uuid.UUID(str(answers[path[1]].get("fieldId"))))
+            except (ValueError, TypeError):
+                pass
+    return ".".join(str(part) for part in path)
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(
@@ -108,7 +159,11 @@ async def validation_error(request: Request, exc: RequestValidationError) -> JSO
             "message": "Revise os campos informados.",
             "requestId": request.state.request_id,
             "fieldErrors": [
-                {"field": ".".join(str(part) for part in error["loc"][1:]), "type": error["type"]}
+                {
+                    "field": validation_field(error, exc.body),
+                    "type": error["type"],
+                    "message": validation_message(error),
+                }
                 for error in exc.errors()
             ],
         },
@@ -120,6 +175,7 @@ app.include_router(users_router, prefix="/api/v1")
 app.include_router(catalogs_router, prefix="/api/v1")
 app.include_router(management_router, prefix="/api/v1")
 app.include_router(demands_router, prefix="/api/v1")
+app.include_router(bulk_demands_router, prefix="/api/v1")
 app.include_router(daily_imports_router, prefix="/api/v1")
 app.include_router(work_catalog_router, prefix="/api/v1")
 app.include_router(work_demand_router, prefix="/api/v1")

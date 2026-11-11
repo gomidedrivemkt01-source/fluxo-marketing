@@ -1,3 +1,4 @@
+import { ValidatedForm } from "../components/ValidatedForm";
 import { type FormEvent, useEffect, useState } from "react";
 import { api, messageFrom } from "../api";
 import { RemovalDialog, ResponsibilityEditor } from "../features/management/ManagementDialogs";
@@ -119,7 +120,7 @@ function ChecklistTemplateModal({
           </button>
         </header>
         {editing ? (
-          <form className="modal-form" onSubmit={submit}>
+          <ValidatedForm className="modal-form" onSubmit={submit}>
             {error && <Notice>{error}</Notice>}
             <Field
               label="Item do checklist"
@@ -166,7 +167,7 @@ function ChecklistTemplateModal({
                 {busy ? "Salvando…" : "Salvar item"}
               </button>
             </footer>
-          </form>
+          </ValidatedForm>
         ) : (
           <div className="template-body">
             {error && <Notice>{error}</Notice>}
@@ -303,7 +304,7 @@ function WorkflowStageModal({
             ×
           </button>
         </header>
-        <form className="modal-form" onSubmit={submit}>
+        <ValidatedForm className="modal-form" onSubmit={submit}>
           {error && <Notice>{error}</Notice>}
           <p className="form-intro">
             Vincule a etapa a uma responsabilidade compartilhada ou defina pessoas específicas.
@@ -416,7 +417,7 @@ function WorkflowStageModal({
               {busy ? "Salvando…" : "Salvar etapa"}
             </button>
           </footer>
-        </form>
+        </ValidatedForm>
       </section>
     </div>
   );
@@ -477,7 +478,7 @@ function WorkflowModal({
             ×
           </button>
         </header>
-        <form className="modal-form" onSubmit={submit}>
+        <ValidatedForm className="modal-form" onSubmit={submit}>
           {error && <Notice>{error}</Notice>}
           <Field
             label="Nome"
@@ -536,7 +537,7 @@ function WorkflowModal({
               {busy ? "Salvando…" : "Salvar workflow"}
             </button>
           </footer>
-        </form>
+        </ValidatedForm>
       </section>
     </div>
   );

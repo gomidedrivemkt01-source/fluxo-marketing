@@ -156,18 +156,20 @@ def test_only_author_or_coordinator_can_change_entry() -> None:
     assert can_change_time_entry(coordinator, entry)
 
 
-def test_start_timer_rejects_another_active_timer_for_user() -> None:
+def test_start_timer_rejects_a_third_active_timer_for_user() -> None:
     principal = _principal()
     demand = _demand(principal)
-    active = _entry(principal, demand, state="RUNNING")
+    first = _entry(principal, _demand(principal), state="RUNNING")
+    second = _entry(principal, _demand(principal), state="RUNNING")
     db = MagicMock(spec=Session)
-    db.scalar.side_effect = [demand, active]
+    db.scalar.return_value = demand
+    db.scalars.return_value = [first, second]
 
     with pytest.raises(ApiError) as caught:
         start_timer(demand.id, TimerStart(note="Execução"), principal, db)
 
     assert caught.value.status_code == 409
-    assert caught.value.code == "timer_already_running"
+    assert caught.value.code == "timer_limit_reached"
     db.add.assert_not_called()
 
 
@@ -191,6 +193,7 @@ def test_start_and_stop_timer_use_minimum_one_minute_and_register_events() -> No
     demand = _demand(principal)
     create_db = MagicMock(spec=Session)
     create_db.scalar.side_effect = [demand, None]
+    create_db.scalars.return_value = []
     create_db.flush.side_effect = lambda: _assign_entry_database_values(create_db)
 
     started = start_timer(demand.id, TimerStart(note="Execução"), principal, create_db)

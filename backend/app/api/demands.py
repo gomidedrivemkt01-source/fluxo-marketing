@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, aliased
 
@@ -37,6 +37,7 @@ from app.models import (
     WorkflowVersion,
     utc_now,
 )
+from app.operation_warnings import WarningAcknowledgement, confirm_warnings
 
 router = APIRouter(prefix="/demands", tags=["Demandas"])
 
@@ -47,7 +48,7 @@ class DemandCreate(BaseModel):
     company_id: uuid.UUID | None = Field(default=None, alias="companyId")
     category_id: uuid.UUID | None = Field(default=None, alias="categoryId")
     priority: str = Field(default="NORMAL", pattern=r"^(LOW|NORMAL|HIGH|URGENT)$")
-    deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
+    deadline_at: AwareDatetime | None = Field(default=None, alias="deadlineAt")
     assignee_id: uuid.UUID | None = Field(default=None, alias="assigneeId")
     stage_id: uuid.UUID | None = Field(default=None, alias="stageId")
     workflow_id: uuid.UUID | None = Field(default=None, alias="workflowId")
@@ -89,23 +90,23 @@ class DemandOut(BaseModel):
     created_at: datetime = Field(alias="createdAt")
 
 
-class DemandEdit(BaseModel):
+class DemandEdit(WarningAcknowledgement):
     title: str = Field(min_length=2, max_length=300)
-    description: str | None = Field(default=None, max_length=5000)
+    description: str | None = Field(default=None, max_length=50000)
     company_id: uuid.UUID | None = Field(default=None, alias="companyId")
     category_id: uuid.UUID | None = Field(default=None, alias="categoryId")
     priority: str = Field(pattern=r"^(LOW|NORMAL|HIGH|URGENT)$")
     status: str = Field(
         pattern=r"^(WAITING_EXECUTION|IN_PROGRESS|WAITING_INFORMATION|WAITING_APPROVAL|BLOCKED|SCHEDULED|COMPLETED)$"
     )
-    deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
+    deadline_at: AwareDatetime | None = Field(default=None, alias="deadlineAt")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     assignee_id: uuid.UUID | None = Field(default=None, alias="assigneeId")
     stage_id: uuid.UUID | None = Field(default=None, alias="stageId")
     workflow_id: uuid.UUID | None = Field(default=None, alias="workflowId")
 
 
-class DemandStageUpdate(BaseModel):
+class DemandStageUpdate(WarningAcknowledgement):
     stage_id: uuid.UUID = Field(alias="stageId")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
@@ -115,16 +116,16 @@ class DemandAssigneeUpdate(BaseModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
-class DemandWorkflowAction(BaseModel):
+class DemandWorkflowAction(WarningAcknowledgement):
     action: str = Field(pattern=r"^(advance|return|skip)$")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     target_stage_id: uuid.UUID | None = Field(default=None, alias="targetStageId")
-    comment: str | None = Field(default=None, min_length=3, max_length=2000)
+    comment: str | None = Field(default=None, max_length=2000)
 
 
-class DemandStageScheduleUpdate(BaseModel):
-    deadline_at: datetime | None = Field(default=None, alias="deadlineAt")
-    forecast_at: datetime | None = Field(default=None, alias="forecastAt")
+class DemandStageScheduleUpdate(WarningAcknowledgement):
+    deadline_at: AwareDatetime | None = Field(default=None, alias="deadlineAt")
+    forecast_at: AwareDatetime | None = Field(default=None, alias="forecastAt")
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
@@ -443,6 +444,7 @@ def create_demand_record(
     stage_id: uuid.UUID | None = None,
     workflow_id: uuid.UUID | None = None,
     source: str = "interface",
+    inherit_assignee: bool = True,
 ) -> Demand:
     if workflow_id is None:
         workflow_id = db.scalar(
@@ -494,7 +496,7 @@ def create_demand_record(
             demand,
             stage_snapshot,
             db=db,
-            apply_assignee=assignee_id is None,
+            apply_assignee=assignee_id is None and inherit_assignee,
         )
     db.add(demand)
     db.flush()
@@ -1460,6 +1462,34 @@ def update_demand(
         "workflowId": str(demand.workflow_id) if demand.workflow_id else None,
         "revision": demand.revision,
     }
+    warnings = []
+    if (
+        payload.description
+        and payload.description != demand.description
+        and len(payload.description) > 5000
+    ):
+        warnings.append(
+            {
+                "code": "description_long",
+                "field": "description",
+                "message": "A descrição excede 5.000 caracteres. Resuma o conteúdo ou confirme a ciência de manter o texto extenso.",
+            }
+        )
+    if (
+        payload.deadline_at
+        and payload.deadline_at != demand.deadline_at
+        and payload.deadline_at < utc_now()
+    ):
+        warnings.append(
+            {
+                "code": "deadline_past",
+                "field": "deadlineAt",
+                "message": "O prazo escolhido já passou. Ajuste a data ou confirme que deseja manter a demanda em atraso.",
+            }
+        )
+    confirm_warnings(
+        db, principal, demand, warnings, payload.acknowledged_warnings, action="edit_demand"
+    )
     demand.title = " ".join(payload.title.split())
     demand.description = payload.description
     demand.primary_company_id = payload.company_id
@@ -1728,6 +1758,8 @@ def move_demand_stage(
         require_checklist=bool(
             current_instance and target_instance.position > current_instance.position
         ),
+        principal=principal,
+        acknowledged=payload.acknowledged_warnings,
     )
     previous_stage_id = demand.current_stage_id
     moved_at = utc_now()
@@ -1797,6 +1829,8 @@ def validate_stage_handoff(
     demand: Demand,
     *,
     require_checklist: bool,
+    principal: Principal | None = None,
+    acknowledged: list[str] | None = None,
 ) -> None:
     active_timer = db.scalar(
         select(TimeEntry.id).where(
@@ -1835,11 +1869,38 @@ def validate_stage_handoff(
     )
     missing = len(set(required_ids) - completed_ids)
     if missing:
-        raise ApiError(
-            409,
-            "required_checklist_incomplete",
-            f"Conclua {missing} item(ns) obrigatório(s) do checklist antes de avançar.",
+        pending = set(required_ids) - completed_ids
+        titles = (
+            {
+                identifier: title
+                for identifier, title in db.execute(
+                    select(ChecklistTemplateItem.id, ChecklistTemplateItem.title).where(
+                        ChecklistTemplateItem.id.in_(pending)
+                    )
+                ).all()
+            }
+            if principal is not None
+            else {}
         )
+        warnings = [
+            {
+                "code": f"checklist:{item}",
+                "field": "checklist",
+                "message": f"Checklist pendente: {titles.get(item, 'item obrigatório')}. Conclua-o ou registre ciência para avançar.",
+            }
+            for item in sorted(pending)
+        ]
+        if principal is not None:
+            confirm_warnings(
+                db, principal, demand, warnings, acknowledged or [], action="stage_handoff"
+            )
+        else:
+            raise ApiError(
+                409,
+                "required_checklist_incomplete",
+                f"Conclua {missing} item(ns) obrigatório(s) do checklist antes de avançar.",
+                {"fieldErrors": warnings},
+            )
 
 
 @router.post(
@@ -1893,15 +1954,27 @@ def apply_workflow_action(
     )
     return_comment = (payload.comment or "").strip()
     if effective_action == "return" and len(return_comment) < 3:
-        raise ApiError(
-            422,
-            "return_comment_required",
-            "Explique o motivo do retorno para orientar a pessoa responsável pela etapa escolhida.",
+        confirm_warnings(
+            db,
+            principal,
+            demand,
+            [
+                {
+                    "code": "return_reason_missing",
+                    "field": "comment",
+                    "message": "Falta a justificativa do retorno. Explique o que precisa ser corrigido ou confirme a ciência de retornar sem detalhes.",
+                }
+            ],
+            payload.acknowledged_warnings,
+            action="return_without_reason",
         )
+        return_comment = "Retorno sem justificativa detalhada, com ciência registrada pela pessoa que realizou a alteração."
     validate_stage_handoff(
         db,
         demand,
         require_checklist=effective_action == "advance",
+        principal=principal,
+        acknowledged=payload.acknowledged_warnings,
     )
     now = utc_now()
     current = instances[current_index]
@@ -2023,6 +2096,18 @@ def update_stage_schedule(
     if not instance:
         raise ApiError(404, "stage_plan_not_found", "A etapa não está no plano desta demanda.")
     previous_deadline = instance.deadline_at
+    warnings = []
+    if payload.deadline_at and demand.deadline_at and payload.deadline_at > demand.deadline_at:
+        warnings.append(
+            {
+                "code": "stage_after_final",
+                "field": "deadlineAt",
+                "message": "A entrega desta etapa fica depois do prazo final da demanda. Ajuste as datas ou registre ciência.",
+            }
+        )
+    confirm_warnings(
+        db, principal, demand, warnings, payload.acknowledged_warnings, action="stage_schedule"
+    )
     previous_forecast = instance.forecast_at
     now = utc_now()
     instance.deadline_at = payload.deadline_at

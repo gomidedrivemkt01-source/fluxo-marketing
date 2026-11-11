@@ -148,7 +148,7 @@ def test_required_briefing_field_blocks_incomplete_save() -> None:
             db,
         )
 
-    assert caught.value.code == "briefing_required"
+    assert caught.value.code == "acknowledgement_required"
     db.commit.assert_not_called()
 
 
