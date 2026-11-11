@@ -18,3 +18,9 @@ docs
 migracao
 backups
 .preview
+
+# Cópias de ambientes de trabalho existentes no compartilhamento do servidor.
+/ChatGPT
+/Codex
+**/.preview
+**/.verification

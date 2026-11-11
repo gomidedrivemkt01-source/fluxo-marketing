@@ -16,4 +16,8 @@ migracao/
 backups/
 .verification/
 .preview/
+
+# Cópias de ambientes de trabalho no compartilhamento do servidor.
+/ChatGPT/
+/Codex/
 .ruff_cache/
