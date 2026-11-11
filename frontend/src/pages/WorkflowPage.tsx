@@ -5,7 +5,6 @@ import { RemovalDialog, ResponsibilityEditor } from "../features/management/Mana
 import FunctionsManager from "../features/management/FunctionsManager";
 import type {
   Category,
-  ChecklistTemplateItem,
   Demand,
   JobRole,
   JobRoleAssignment,
@@ -40,183 +39,6 @@ function Notice({
       role={kind === "error" ? "alert" : "status"}
     >
       {children}
-    </div>
-  );
-}
-
-function ChecklistTemplateModal({
-  stage,
-  onClose,
-}: {
-  stage: WorkflowStage;
-  onClose: () => void;
-}) {
-  const [items, setItems] = useState<ChecklistTemplateItem[]>([]);
-  const [editing, setEditing] = useState<ChecklistTemplateItem | "new" | null>(
-    null,
-  );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  async function load() {
-    try {
-      setItems(
-        await api<ChecklistTemplateItem[]>(
-          `/catalogs/workflow-stages/${stage.id}/checklist-items`,
-        ),
-      );
-    } catch (caught) {
-      setError(messageFrom(caught));
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, [stage.id]);
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    const data = new FormData(event.currentTarget);
-    const current = editing === "new" ? null : editing;
-    const payload: Record<string, unknown> = {
-      title: data.get("title"),
-      description: data.get("description") || null,
-      required: data.get("required") === "on",
-      position: current?.position ?? items.length + 1,
-    };
-    if (current) {
-      payload.expectedRevision = current.revision;
-      payload.active = data.get("active") === "on";
-    }
-    try {
-      await api(
-        current
-          ? `/catalogs/checklist-items/${current.id}`
-          : `/catalogs/workflow-stages/${stage.id}/checklist-items`,
-        { method: current ? "PUT" : "POST", body: JSON.stringify(payload) },
-      );
-      await load();
-      setEditing(null);
-    } catch (caught) {
-      setError(messageFrom(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-  const current = editing === "new" ? null : editing;
-  return (
-    <div className="modal-backdrop">
-      <section
-        className="form-modal template-modal"
-        role="dialog"
-        aria-modal="true"
-      >
-        <header className="modal-head">
-          <div>
-            <span className="eyebrow dark">Padrão da etapa</span>
-            <h2>Checklist · {stage.name}</h2>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Fechar">
-            ×
-          </button>
-        </header>
-        {editing ? (
-          <ValidatedForm className="modal-form" onSubmit={submit}>
-            {error && <Notice>{error}</Notice>}
-            <Field
-              label="Item do checklist"
-              name="title"
-              defaultValue={current?.title}
-              placeholder="Ex.: Validar texto final"
-              required
-            />
-            <label className="field">
-              <span>Orientação</span>
-              <textarea
-                name="description"
-                rows={3}
-                defaultValue={current?.description ?? ""}
-              />
-            </label>
-            <label className="check stage-active-check">
-              <input
-                name="required"
-                type="checkbox"
-                defaultChecked={current?.required}
-              />
-              <span>Item obrigatório nesta etapa</span>
-            </label>
-            {current && (
-              <label className="check stage-active-check">
-                <input
-                  name="active"
-                  type="checkbox"
-                  defaultChecked={current.active}
-                />
-                <span>Item ativo no checklist</span>
-              </label>
-            )}
-            <footer className="form-actions">
-              <button
-                className="secondary compact"
-                type="button"
-                onClick={() => setEditing(null)}
-              >
-                Voltar
-              </button>
-              <button className="primary action-primary" disabled={busy}>
-                {busy ? "Salvando…" : "Salvar item"}
-              </button>
-            </footer>
-          </ValidatedForm>
-        ) : (
-          <div className="template-body">
-            {error && <Notice>{error}</Notice>}
-            <div className="template-intro">
-              <p>
-                Defina o padrão de conferência aplicado aos cards que estiverem
-                nesta etapa.
-              </p>
-              <button
-                className="small-button"
-                onClick={() => setEditing("new")}
-              >
-                + Novo item
-              </button>
-            </div>
-            {items.length ? (
-              <div className="template-list">
-                {items.map((item) => (
-                  <button
-                    key={item.id}
-                    className={!item.active ? "inactive" : ""}
-                    onClick={() => setEditing(item)}
-                  >
-                    <span>{item.position}</span>
-                    <div>
-                      <strong>
-                        {item.title}
-                        {item.required && <b>Obrigatório</b>}
-                      </strong>
-                      <small>
-                        {item.description || "Sem orientação adicional"}
-                      </small>
-                    </div>
-                    <em>{item.active ? "Editar" : "Inativo"}</em>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state compact-empty">
-                <span>✓</span>
-                <h3>Checklist ainda vazio</h3>
-                <p>
-                  Adicione os pontos que a equipe precisa conferir nesta etapa.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
     </div>
   );
 }
@@ -574,9 +396,6 @@ export default function WorkflowPage({
   const [removing, setRemoving] = useState<{ stageId?: string; name: string } | null>(null);
   const [responsibility, setResponsibility] = useState<{ stageId?: string; roleId?: string } | null>(null);
   const [view, setView] = useState<"workflows" | "functions">("workflows");
-  const [checklistStage, setChecklistStage] = useState<WorkflowStage | null>(
-    null,
-  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -611,7 +430,7 @@ export default function WorkflowPage({
       );
       setBlueprint(result);
       setSuccess(
-        `${result.workflowsCreated ?? 0} workflows, ${result.stagesCreated ?? 0} etapas e ${result.checklistsCreated ?? 0} checklists preparados como rascunho.`,
+        `${result.workflowsCreated ?? 0} workflows e ${result.stagesCreated ?? 0} etapas preparados como rascunho.`,
       );
       await onReload();
     } catch (caught) {
@@ -876,8 +695,7 @@ export default function WorkflowPage({
                   <div>
                     <strong>{stage.name}</strong>
                     <small>
-                      {stage.code} · {responsible}
-                      {role ? ` (${role.name})` : ""} ·{" "}
+                      {role?.name ?? "Sem função definida"} · Principal: {responsible} ·{" "}
                       {stage.slaHours
                         ? `${stage.slaHours}h de SLA`
                         : "SLA a definir com dados reais"}
@@ -907,7 +725,6 @@ export default function WorkflowPage({
                     </button>
                     <details className="stage-actions-menu"><summary aria-label={`Mais ações de ${stage.name}`} title="Mais ações">⋯</summary><div>
                       {stage.ownerRoleId && <button onClick={() => setResponsibility({ roleId: stage.ownerRoleId! })}>Pessoas da função</button>}
-                      <button onClick={() => setChecklistStage(stage)}>Checklist</button>
                       <button onClick={() => setEditing(stage)}>Editar etapa</button>
                       <button className="danger-text" disabled={busy} onClick={() => setRemoving({ stageId: stage.id, name: stage.name })}>Excluir etapa</button>
                     </div></details>
@@ -964,12 +781,7 @@ export default function WorkflowPage({
           onSaved={onReload}
         />
       )}
-      {checklistStage && (
-        <ChecklistTemplateModal
-          stage={checklistStage}
-          onClose={() => setChecklistStage(null)}
-        />
-      )}
+
     </>
   );
 }

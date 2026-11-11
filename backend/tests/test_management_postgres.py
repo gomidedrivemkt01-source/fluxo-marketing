@@ -2,12 +2,13 @@
 
 import os
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,7 @@ from app.api.demands import (
     ensure_demand_stage_instances,
     ensure_workflow_version,
     resolve_stage_assignee,
+    validate_stage_handoff,
     version_stage,
 )
 from app.api.errors import ApiError
@@ -37,10 +39,13 @@ from app.models import (
     BriefingTemplate,
     BriefingTemplateVersion,
     CategoryTemplateBinding,
+    ChecklistTemplateItem,
     Comment,
     Demand,
     DemandCategory,
+    DemandChecklistItem,
     DemandStageInstance,
+    DemandTodoItem,
     JobRole,
     MemberRoleAssignment,
     Membership,
@@ -68,6 +73,8 @@ from app.stage_functions import (
     list_stage_function_groups,
     remove_job_role,
 )
+from app.workflow_blueprints import BLUEPRINTS, apply_blueprint
+from app.workflow_simplification import WorkflowSimplification, simplify_workflows
 
 DSN = os.environ.get("FM_MANAGEMENT_TEST_DSN", "")
 pytestmark = pytest.mark.skipif(
@@ -194,6 +201,134 @@ def setup():
     transaction.rollback()
     connection.close()
     engine.dispose()
+
+
+def test_simplification_preserves_history_manual_cards_and_todos(setup):
+    s = setup
+    item = ChecklistTemplateItem(
+        organization_id=s.org.id,
+        workflow_stage_id=s.stages[0].id,
+        title="Conferência antiga",
+        position=1,
+        required=True,
+    )
+    s.db.add(item)
+    s.db.flush()
+    history = DemandChecklistItem(
+        demand_id=s.cards[2].id,
+        template_item_id=item.id,
+        completed=True,
+        completed_by=s.people[1][0].id,
+    )
+    todo = DemandTodoItem(
+        organization_id=s.org.id,
+        demand_id=s.cards[0].id,
+        title="Tarefa manual",
+        position=1,
+        created_by=s.people[0][0].id,
+    )
+    s.db.add_all([history, todo])
+    s.db.flush()
+    frozen = deepcopy(s.version.definition)
+    config = WorkflowSimplification.model_validate(
+        {
+            "functions": [
+                {
+                    "code": "WRITING",
+                    "name": "Redação",
+                    "primaryName": "Pessoa 0",
+                    "fallbackName": "Pessoa 2",
+                }
+            ],
+            "stages": [
+                {"workflowCode": "VIDEO", "stageCode": stage.code, "functionCode": "WRITING"}
+                for stage in s.stages
+            ],
+        }
+    )
+    result = simplify_workflows(s.db, s.principal, config, apply=True)
+    assert result["checklistsDisabled"] == 1
+    assert item.active is False
+    assert s.db.get(DemandChecklistItem, history.id).completed is True
+    assert s.db.get(DemandTodoItem, todo.id).title == "Tarefa manual"
+    assert s.version.definition == frozen
+    assert s.cards[0].current_assignee_id == s.people[0][0].id
+    assert s.cards[1].current_assignee_id == s.people[3][0].id  # explicit card choice
+    assert s.cards[2].current_assignee_id == s.people[1][0].id  # completed history
+    validate_stage_handoff(s.db, s.cards[0], require_checklist=True)
+    role = s.db.scalar(
+        select(JobRole).where(JobRole.organization_id == s.org.id, JobRole.code == "WRITING")
+    )
+    assert all(stage.owner_role_id == role.id for stage in s.stages)
+    assert all(stage.default_assignee_id is None for stage in s.stages)
+    audit_count = s.db.scalar(
+        select(func.count()).select_from(AuditEvent).where(AuditEvent.organization_id == s.org.id)
+    )
+    revisions = [stage.revision for stage in s.stages]
+    repeated = simplify_workflows(s.db, s.principal, config, apply=True)
+    assert repeated["checklistsDisabled"] == 0
+    assert repeated["createdFunctions"] == []
+    assert repeated["responsibilities"] == {}
+    assert [stage.revision for stage in s.stages] == revisions
+    assert (
+        s.db.scalar(
+            select(func.count())
+            .select_from(AuditEvent)
+            .where(AuditEvent.organization_id == s.org.id)
+        )
+        == audit_count
+    )
+
+
+def test_simplification_preview_rolls_back_and_is_scoped(setup):
+    s = setup
+    config = WorkflowSimplification.model_validate(
+        {
+            "functions": [
+                {
+                    "code": "WRITING",
+                    "name": "Redação",
+                    "primaryName": "Pessoa 0",
+                    "fallbackName": "Pessoa 2",
+                }
+            ],
+            "stages": [
+                {"workflowCode": "VIDEO", "stageCode": "BRIEFING", "functionCode": "WRITING"}
+            ],
+        }
+    )
+    savepoint = s.db.begin_nested()
+    result = simplify_workflows(s.db, s.principal, config)
+    assert result["createdFunctions"] == ["WRITING"]
+    assert s.cards[0].current_assignee_id == s.people[1][0].id
+    assert s.stages[0].owner_role_id == s.role.id
+    savepoint.rollback()
+    assert (
+        s.db.scalar(
+            select(JobRole).where(JobRole.organization_id == s.org.id, JobRole.code == "WRITING")
+        )
+        is None
+    )
+    config.functions[0].primary_name = "Pessoa inexistente"
+    with pytest.raises(ValueError, match="ausente ou ambíguo"):
+        simplify_workflows(s.db, s.principal, config, apply=True)
+
+
+def test_blueprint_sync_no_longer_generates_stage_checklists(setup):
+    s = setup
+    for code, spec in BLUEPRINTS.items():
+        s.db.add(DemandCategory(organization_id=s.org.id, code=code, name=spec["name"]))
+    s.db.flush()
+    result = apply_blueprint(s.db, s.principal)
+    assert result["checklistsCreated"] == 0
+    assert (
+        s.db.scalar(
+            select(func.count())
+            .select_from(ChecklistTemplateItem)
+            .where(ChecklistTemplateItem.organization_id == s.org.id)
+        )
+        == 0
+    )
 
 
 def role_change(s):

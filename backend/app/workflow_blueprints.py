@@ -17,7 +17,6 @@ from app.models import (
     BriefingTemplate,
     BriefingTemplateVersion,
     CategoryTemplateBinding,
-    ChecklistTemplateItem,
     DemandCategory,
     JobRole,
     MemberRoleAssignment,
@@ -307,13 +306,6 @@ STAGE_COLORS = [
 def stable_code(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
     return re.sub(r"[^A-Z0-9]+", "_", normalized.upper()).strip("_")
-
-
-def checklist_parts(value: str) -> list[str]:
-    """Transforma o critério do manual em confirmações menores e auditáveis."""
-    clean = value.strip().rstrip(".")
-    parts = [item.strip() for item in re.split(r",\s*|\s+e\s+", clean) if item.strip()]
-    return [item[:1].upper() + item[1:] for item in parts]
 
 
 def briefing_definition(category_code: str, spec: dict[str, Any]) -> dict[str, Any]:
@@ -621,36 +613,7 @@ def apply_blueprint(db: Session, principal: Principal) -> dict[str, Any]:
                 stage.acceptance_rule = checklist
                 stage.condition_rule = condition_rule
                 stage.active = True
-            for item_position, item_title in enumerate(checklist_parts(checklist), start=1):
-                template_item = db.scalar(
-                    select(ChecklistTemplateItem).where(
-                        ChecklistTemplateItem.workflow_stage_id == stage.id,
-                        ChecklistTemplateItem.position == item_position,
-                    )
-                )
-                if template_item is None:
-                    db.add(
-                        ChecklistTemplateItem(
-                            organization_id=organization_id,
-                            workflow_stage_id=stage.id,
-                            title=item_title,
-                            description=(
-                                f"Parte do critério de saída: {checklist} "
-                                f"Fonte: {BLUEPRINT_CODE}."
-                            ),
-                            position=item_position,
-                            required=True,
-                        )
-                    )
-                    checklist_count += 1
-                else:
-                    template_item.title = item_title
-                    template_item.description = (
-                        f"Parte do critério de saída: {checklist} "
-                        f"Fonte: {BLUEPRINT_CODE}."
-                    )
-                    template_item.required = True
-                    template_item.active = True
+            # Criteria remain guidance; stage checklists are managed only on cards.
         db.flush()
         workflow_version = ensure_workflow_version(
             db, organization_id, workflow.id, principal.profile.id

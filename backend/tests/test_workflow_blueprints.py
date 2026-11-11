@@ -1,4 +1,4 @@
-from app.workflow_blueprints import BLUEPRINTS, checklist_parts
+from app.workflow_blueprints import BLUEPRINTS
 
 
 def test_manual_blueprint_inventory_matches_source_document() -> None:
@@ -14,11 +14,3 @@ def test_manual_blueprint_keeps_distinct_design_and_it_ownership() -> None:
     assert owners["Design"] == "DESIGN_AUDIOVISUAL"
     assert owners["Desenvolvimento"] == "TECH_AUTOMATION"
     assert owners["Integrações"] == "TECH_AUTOMATION"
-
-
-def test_checklist_acceptance_rule_is_split_into_atomic_confirmations() -> None:
-    assert checklist_parts("Problema, regra de negócio e aceite definidos.") == [
-        "Problema",
-        "Regra de negócio",
-        "Aceite definidos",
-    ]
