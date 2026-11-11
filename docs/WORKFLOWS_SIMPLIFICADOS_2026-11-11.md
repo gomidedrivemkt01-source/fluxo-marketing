@@ -45,3 +45,5 @@ Sem `--apply`, a simulação desfaz suas escritas temporárias. Conferir o impac
 ## Validação e publicação
 
 Testes de integração verificam preservação de históricos/checklists manuais, atribuições individuais, cards concluídos, versões imutáveis, repetição sem duplicação e ausência de geração automática no blueprint. A entrega é ativada primeiro na prévia local. A publicação no servidor exige validação dessa prévia e aplicação da configuração no banco do servidor; copiar somente o código não altera seus responsáveis nem seus checklists existentes.
+
+Validação desta entrega: 212 testes de backend, 15 testes de frontend, build, Ruff e checagem de tipos dos módulos novos. Conferência visual com conta sintética em 1440px e 390px: responsáveis visíveis, menu sem checklist, acesso à gestão de funções, ausência de transbordamento horizontal e de erros de JavaScript. A aplicação local preservou as contagens das 44 tabelas existentes e as 17 versões históricas. Os 309 itens automáticos foram desativados; os 100 registros de preenchimento e 526 itens manuais foram preservados.

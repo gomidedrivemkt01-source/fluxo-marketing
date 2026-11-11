@@ -48,7 +48,8 @@ def main() -> None:
             db.commit()
         else:
             db.rollback()
-        print(json.dumps({"applied": args.apply, **result}, ensure_ascii=False, indent=2))
+        # Keep CLI output safe on Windows consoles, including card titles with emoji.
+        print(json.dumps({"applied": args.apply, **result}, ensure_ascii=True, indent=2))
 
 
 if __name__ == "__main__":
