@@ -47,3 +47,13 @@ Sem `--apply`, a simulação desfaz suas escritas temporárias. Conferir o impac
 Testes de integração verificam preservação de históricos/checklists manuais, atribuições individuais, cards concluídos, versões imutáveis, repetição sem duplicação e ausência de geração automática no blueprint. A entrega é ativada primeiro na prévia local. A publicação no servidor exige validação dessa prévia e aplicação da configuração no banco do servidor; copiar somente o código não altera seus responsáveis nem seus checklists existentes.
 
 Validação desta entrega: 212 testes de backend, 15 testes de frontend, build, Ruff e checagem de tipos dos módulos novos. Conferência visual com conta sintética em 1440px e 390px: responsáveis visíveis, menu sem checklist, acesso à gestão de funções, ausência de transbordamento horizontal e de erros de JavaScript. A aplicação local preservou as contagens das 44 tabelas existentes e as 17 versões históricas. Os 309 itens automáticos foram desativados; os 100 registros de preenchimento e 526 itens manuais foram preservados.
+
+## Publicação com Docker
+
+O comando também está empacotado na imagem: `python -m app.workflow_simplification_cli`. Ele aceita `--config -` para ler JSON pela entrada padrão, sem copiar dados pessoais para a imagem ou precisar montar pastas adicionais.
+
+Para uma publicação com atualização de workflows, definir `FM_WORKFLOW_CONFIG` com o caminho do JSON no host e `FM_WORKFLOW_ACTOR` com o nome exato do administrador. Executar `sh scripts/atualizar-servidor.sh` no host Docker. O script preserva a imagem anterior, confere backups do banco/anexos, compila a imagem e executa a simulação e a aplicação no banco do servidor antes de ativar o novo container. Uma falha em qualquer dessas duas operações interrompe a ativação. Os resultados privados ficam em `backups/atualizacoes/<data_hora>/workflows-*.json`.
+
+O diretório `.deployments/` é ignorado pelo Git e pelo contexto Docker para guardar a configuração específica do servidor. Nunca enviar o banco ou os anexos da prévia para esse processo. Copiar os arquivos em Y: prepara a publicação; o comando deve ser executado no host que controla o Docker.
+
+Se uma função já existir com o mesmo nome e outro código gerado pela interface, sua identidade e código são reaproveitados. Se o código solicitado e o nome apontarem para funções diferentes, a publicação é interrompida para resolver a ambiguidade. Etapas ou integrantes ausentes também impedem a aplicação, sem alterações parciais. Validação do pacote de publicação: 215 testes de backend, incluindo entrada de configuração por arquivo/stdin e reaproveitamento de funções existentes.

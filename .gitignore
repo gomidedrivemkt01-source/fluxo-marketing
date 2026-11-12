@@ -21,3 +21,4 @@ backups/
 /ChatGPT/
 /Codex/
 .ruff_cache/
+.deployments/

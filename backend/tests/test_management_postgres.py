@@ -2,8 +2,10 @@
 
 import os
 import uuid
+from contextlib import nullcontext
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -329,6 +331,86 @@ def test_blueprint_sync_no_longer_generates_stage_checklists(setup):
         )
         == 0
     )
+
+
+def test_simplification_reuses_existing_function_name_without_changing_its_code(setup):
+    s = setup
+    config = WorkflowSimplification.model_validate(
+        {
+            "functions": [
+                {
+                    "code": "CANONICAL_DESIGN",
+                    "name": "Design",
+                    "primaryName": "Pessoa 0",
+                    "fallbackName": "Pessoa 2",
+                }
+            ],
+            "stages": [
+                {
+                    "workflowCode": "VIDEO",
+                    "stageCode": "BRIEFING",
+                    "functionCode": "CANONICAL_DESIGN",
+                }
+            ],
+        }
+    )
+    result = simplify_workflows(s.db, s.principal, config, apply=True)
+    assert result["createdFunctions"] == []
+    assert s.role.code == "DESIGN"
+    assert s.stages[0].owner_role_id == s.role.id
+    assert s.cards[0].current_assignee_id == s.people[0][0].id
+
+
+@pytest.mark.parametrize("source", ["stdin", "file"])
+def test_packaged_workflow_cli_accepts_private_configuration(
+    setup, monkeypatch, capsys, tmp_path, source
+):
+    import json
+
+    from app import workflow_simplification_cli as cli
+
+    s = setup
+    config = json.dumps(
+        {
+            "functions": [
+                {
+                    "code": "WRITING",
+                    "name": "Redação",
+                    "primaryName": "Pessoa 0",
+                    "fallbackName": "Pessoa 2",
+                }
+            ],
+            "stages": [
+                {"workflowCode": "VIDEO", "stageCode": "BRIEFING", "functionCode": "WRITING"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+    path = tmp_path / "private.json"
+    path.write_text(config, encoding="utf-8")
+    monkeypatch.setattr(cli.sys, "stdin", StringIO(config))
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "cli",
+            "--organization",
+            s.org.slug,
+            "--actor",
+            "Pessoa 0",
+            "--config",
+            "-" if source == "stdin" else str(path),
+            "--apply",
+        ],
+    )
+    monkeypatch.setattr(cli, "Session", lambda _: nullcontext(s.db))
+    cli.main()
+    output = capsys.readouterr().out
+    assert output.isascii()
+    result = json.loads(output)
+    assert result["applied"] is True
+    assert result["createdFunctions"] == ["WRITING"]
+    assert s.cards[0].current_assignee_id == s.people[0][0].id
 
 
 def role_change(s):

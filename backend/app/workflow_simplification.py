@@ -83,8 +83,10 @@ def simplify_workflows(
             raise ValueError("Principal e substituto devem ser pessoas diferentes.")
         role = next((r for r in roles if r.code == entry.code), None)
         named = next((r for r in roles if r.name.casefold() == entry.name.casefold()), None)
-        if named is not None and named is not role:
+        if named is not None and role is not None and named is not role:
             raise ValueError(f"Nome de função já associado a outro código: {entry.name}.")
+        # Preserve identities when the server already has this function under a UI-generated code.
+        role = role or named
         if role is None:
             role = JobRole(organization_id=org, code=entry.code, name=entry.name, active=True)
             db.add(role)
