@@ -57,3 +57,9 @@ Para uma publicação com atualização de workflows, definir `FM_WORKFLOW_CONFI
 O diretório `.deployments/` é ignorado pelo Git e pelo contexto Docker para guardar a configuração específica do servidor. Nunca enviar o banco ou os anexos da prévia para esse processo. Copiar os arquivos em Y: prepara a publicação; o comando deve ser executado no host que controla o Docker.
 
 Se uma função já existir com o mesmo nome e outro código gerado pela interface, sua identidade e código são reaproveitados. Se o código solicitado e o nome apontarem para funções diferentes, a publicação é interrompida para resolver a ambiguidade. Etapas ou integrantes ausentes também impedem a aplicação, sem alterações parciais. Validação do pacote de publicação: 215 testes de backend, incluindo entrada de configuração por arquivo/stdin e reaproveitamento de funções existentes.
+
+### Aplicar somente os dados na imagem ja publicada
+
+Com `FM_WORKFLOW_ACTOR` definido e a configuracao disponivel, executar `sh scripts/atualizar-banco-workflows.sh` no host Docker. O comando utiliza a imagem atual, confere backup do banco, simula, aplica e repete a simulacao para detectar pendencias. Nao recompila a interface, nao substitui o banco por uma copia local e nao recria containers.
+
+O resumo de sucesso e gravado atomicamente em `.deployments/workflows/verification.json`, com contagens e data UTC, sem nomes ou segredos. Esse arquivo pode ser lido pelo compartilhamento sem liberar os backups privados. A ausencia do resumo ou um resumo antigo nao comprova a aplicacao atual. Os logs completos ficam junto ao backup. Uma falha depois da aplicacao pode deixar os dados ja ajustados; repetir o comando e seguro porque a configuracao e idempotente.

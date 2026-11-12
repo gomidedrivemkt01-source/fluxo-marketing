@@ -1,1 +1,2 @@
 scripts/atualizar-servidor.sh text eol=lf
+scripts/atualizar-banco-workflows.sh text eol=lf
