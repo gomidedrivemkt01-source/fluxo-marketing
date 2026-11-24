@@ -16,6 +16,7 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
+from app.demand_lifecycle import set_demand_status
 from app.models import (
     AuditEvent,
     DailyImport,
@@ -408,7 +409,9 @@ def apply_proposal(
     after: dict[str, Any] = {}
     if proposal_type == "SET_STATUS":
         before["status"] = demand.status
-        demand.status = str(payload["value"])
+        set_demand_status(
+            db, demand, str(payload["value"]), actor_id=principal.profile.id, source="daily"
+        )
         after["status"] = demand.status
     elif proposal_type == "SET_FORECAST":
         before["forecastAt"] = demand.forecast_at.isoformat() if demand.forecast_at else None

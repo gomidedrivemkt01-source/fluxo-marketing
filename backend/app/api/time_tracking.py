@@ -544,7 +544,9 @@ def start_timer(
     db: Session = Depends(get_db),
 ) -> TimeEntryOut:
     require_any_permission(principal, "demands:write", "demands:work")
-    demand = _get_demand(db, demand_id, principal)
+    demand = _get_demand(db, demand_id, principal, lock=True)
+    if demand.status == "COMPLETED" or demand.archived_at is not None:
+        raise ApiError(409, "demand_archived", "Reabra a demanda antes de iniciar um novo timer.")
     # Serializa cliques simultâneos/abas da mesma pessoa; os índices também impõem o limite no banco.
     db.execute(
         select(UserProfile.id).where(UserProfile.id == principal.profile.id).with_for_update()

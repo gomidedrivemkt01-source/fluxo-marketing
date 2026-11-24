@@ -1,3 +1,4 @@
+import { ActionMenu } from "../../components/ActionMenu";
 import { ValidatedForm } from "../../components/ValidatedForm";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -222,7 +223,6 @@ export function ActivityPanel({ demandId, canComment, compact = false }: { deman
     <section className={`${compact ? "overview-block compact-activity" : "panel"} activity-panel`}>
       <header className="activity-head">
         <div>
-          <span className="eyebrow dark">Colaboração</span>
           <h3>{compact ? "Conversa e histórico" : "Atividade da demanda"}</h3>
           {!compact && <p>Comentários e alterações importantes permanecem no mesmo histórico.</p>}
         </div>
@@ -243,10 +243,10 @@ export function ActivityPanel({ demandId, canComment, compact = false }: { deman
         </div>
       </header>
 
-      <div className="activity-mode" role="tablist" aria-label="Conteúdo da colaboração">
-        <button className={mode === "comments" ? "active" : ""} onClick={() => setMode("comments")}>Comentários <b>{activity.items.filter((item) => item.itemType === "comment").length}</b></button>
-        <button className={mode === "history" ? "active" : ""} onClick={() => setMode("history")}>Histórico <b>{activity.items.filter((item) => item.itemType === "event").length}</b></button>
-      </div>
+      <div className="activity-mode compact-activity-navigation"><ActionMenu label="Visualização da atividade" items={[
+        { label: "Comentários", selected: mode === "comments", onSelect: () => setMode("comments") },
+        { label: "Histórico", selected: mode === "history", onSelect: () => setMode("history") },
+      ]}>{mode === "comments" ? "Comentários" : "Histórico"}</ActionMenu></div>
 
       {canComment && mode === "comments" && (
         <ValidatedForm className="comment-composer" onSubmit={submitComment}>
@@ -313,10 +313,10 @@ export function ActivityPanel({ demandId, canComment, compact = false }: { deman
                   <p className="event-summary">{item.summary}</p>
                 )}
                 {item.itemType === "comment" && !item.deletedAt && editing?.id !== item.id && (
-                  <div className="comment-actions">
-                    {item.canEdit && <button onClick={() => setEditing(item)}>Editar</button>}
-                    {item.canDelete && <button onClick={() => void removeComment(item)}>Remover</button>}
-                  </div>
+                  (item.canEdit || item.canDelete) && <div className="comment-actions"><ActionMenu label={`Opções do comentário de ${item.actorName}`} disabled={busy} items={[
+                    ...(item.canEdit ? [{ label: "Editar comentário", onSelect: () => setEditing(item) }] : []),
+                    ...(item.canDelete ? [{ label: "Remover comentário", danger: true, onSelect: () => void removeComment(item) }] : []),
+                  ]}>Opções</ActionMenu></div>
                 )}
               </div>
             </article>

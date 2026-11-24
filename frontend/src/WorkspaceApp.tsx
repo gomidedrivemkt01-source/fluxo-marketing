@@ -26,6 +26,8 @@ import { ActionIcon } from "./components/ActionIcon";
 import { focusCounts, matchesFocus, type FocusView } from "./features/focus/focus";
 import { buildSavedView, type SavedView, type SavedViewFilters } from "./features/focus/savedViews";
 import { ValidatedForm } from "./components/ValidatedForm";
+import { ActionMenu } from "./components/ActionMenu";
+import { useViewState } from "./features/focus/viewState";
 import { WarningReview } from "./components/WarningReview";
 import { GlobalTimer } from "./features/time/GlobalTimer";
 
@@ -514,12 +516,15 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     { id: "review", name: "Revisar", color: "#D97706" },
     { id: "done", name: "Concluído", color: "#15803D" },
   ];
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("ALL");
-  const [company, setCompany] = useState("ALL");
-  const [assignees, setAssignees] = useState<string[]>([]);
-  const [priority, setPriority] = useState("ALL");
-  const [stage, setStage] = useState("ALL");
+  const [filters, setFilters] = useViewState(profile?.profileId ?? "", mine ? "my-work" : "demands", {
+    query: "", status: "ALL", company: "ALL", assignees: [] as string[], priority: "ALL", stage: "ALL",
+  });
+  const { query, status, company, assignees, priority, stage } = filters;
+  const setQuery = (query: string) => setFilters((current) => ({ ...current, query }));
+  const setStatus = (status: string) => setFilters((current) => ({ ...current, status }));
+  const setCompany = (company: string) => setFilters((current) => ({ ...current, company }));
+  const setPriority = (priority: string) => setFilters((current) => ({ ...current, priority }));
+  const setStage = (stage: string) => setFilters((current) => ({ ...current, stage }));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showSaveView, setShowSaveView] = useState(false);
   const [showColumns, setShowColumns] = useState(false);
@@ -546,7 +551,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     const matchesAssignee = !assignees.length
       || (assignees.includes("UNASSIGNED") && !demand.assigneeId)
       || Boolean(demand.assigneeId && assignees.includes(demand.assigneeId));
-    return (!mine || Boolean(profile && matchesFocus(demand, preferences.focusView, profile.profileId, profile.timezone)))
+    return demand.status !== "COMPLETED" && (!mine || Boolean(profile && matchesFocus(demand, preferences.focusView, profile.profileId, profile.timezone)))
       && (status === "ALL" || demand.status === status)
       && (company === "ALL" || demand.primaryCompanyId === company)
       && matchesAssignee
@@ -599,6 +604,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     setStatus(view.status);
     setPriority(view.priority);
     setStage("ALL");
+    setFilters((current) => ({ ...current, assignees: [] }));
     onPreferenceChange({ ...preferences, focusView: view.focusView });
   }
   function clearFilters() {
@@ -607,7 +613,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     setStatus("ALL");
     setPriority("ALL");
     setStage("ALL");
-    setAssignees([]);
+    setFilters((current) => ({ ...current, assignees: [] }));
     if (mine) onPreferenceChange({ ...preferences, focusView: "all" });
   }
   function saveCurrentView(name: string) {
@@ -620,7 +626,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
     onPreferenceChange({ ...preferences, savedViews: preferences.savedViews.filter((view) => view.id !== id) });
   }
   function toggleAssignee(id: string) {
-    setAssignees((items) => items.includes(id) ? items.filter((value) => value !== id) : [...items, id]);
+    setFilters((current) => ({ ...current, assignees: current.assignees.includes(id) ? current.assignees.filter((value) => value !== id) : [...current.assignees, id] }));
   }
   function startTimer(demandId: string) {
     window.dispatchEvent(new CustomEvent("fluxo:timer-start-request", { detail: { demandId } }));
@@ -653,11 +659,11 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
       </div>
     </div>
     {filtersOpen && <div className="work-filter-panel">
-      <label><span>Empresa</span><select value={company} onChange={(event) => setCompany(event.target.value)}><option value="ALL">Todas</option>{companies.map((item) => <option value={item.id} key={item.id}>{item.shortName}</option>)}</select></label>
+      <label><span>Empresa</span><select aria-label="Empresa" value={company} onChange={(event) => setCompany(event.target.value)}><option value="ALL">Todas</option>{companies.map((item) => <option value={item.id} key={item.id}>{item.shortName}</option>)}</select></label>
       {!mine && <div className="assignee-options"><span>Responsáveis</span><div><label><input type="checkbox" checked={assignees.includes("UNASSIGNED")} onChange={() => toggleAssignee("UNASSIGNED")} /> Sem responsável</label>{people.map((person) => <label key={person.id}><input type="checkbox" checked={assignees.includes(person.id)} onChange={() => toggleAssignee(person.id)} /> {person.name}</label>)}</div></div>}
-      <label><span>Situação</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">Todas</option>{Object.entries(statusNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-      <label><span>Prioridade</span><select value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">Todas</option>{Object.entries(priorityNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-      <label><span>Etapa</span><select value={stage} onChange={(event) => setStage(event.target.value)}><option value="ALL">Todas</option>{stageNames.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
+      <label><span>Situação</span><select aria-label="Situação" value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">Todas</option>{Object.entries(statusNames).filter(([value]) => value !== "COMPLETED").map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      <label><span>Prioridade</span><select aria-label="Prioridade" value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">Todas</option>{Object.entries(priorityNames).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      <label><span>Etapa</span><select aria-label="Etapa" value={stage} onChange={(event) => setStage(event.target.value)}><option value="ALL">Todas</option>{stageNames.map((name) => <option value={name} key={name}>{name}</option>)}</select></label>
       {mine && <div className="saved-views compact-saved-views"><div><strong>Visões salvas</strong><small>Filtros pessoais sincronizados</small></div><div className="saved-view-list">{preferences.savedViews.map((view) => <span className={`saved-view-chip ${activeSavedId === view.id ? "active" : ""}`} key={view.id}><button onClick={() => applySavedView(view)}>{view.name}</button><button onClick={() => removeSavedView(view.id)} aria-label={`Excluir visão ${view.name}`}>×</button></span>)}</div><button onClick={() => setShowSaveView(true)}>+ Salvar visão</button></div>}
       <div className="filter-panel-actions"><button type="button" onClick={clearFilters}>Limpar filtros</button><button type="button" onClick={() => setFiltersOpen(false)}>Aplicar</button></div>
     </div>}
@@ -735,13 +741,14 @@ function TaskDrawer({ demand, companies, categories, people, stages, canEdit, ca
   onSaved: (demand: Demand) => void;
   onRemoved: () => Promise<void>;
 }) {
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [success, setSuccess] = useState("");
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(""); setSuccess("");
     const data = new FormData(event.currentTarget); const deadline = String(data.get("deadlineAt") || "");
     try {
       const updated = await api<Demand>(`/demands/${demand.id}`, { method: "PUT", body: JSON.stringify({ title: data.get("title"), description: data.get("description") || null, companyId: data.get("companyId") || null, categoryId: data.get("categoryId") || null, assigneeId: data.get("assigneeId") || null, stageId: data.get("stageId") || demand.stageId, workflowId: demand.workflowId, priority: data.get("priority"), status: data.get("status"), deadlineAt: deadline ? new Date(deadline).toISOString() : null, expectedRevision: demand.revision }) });
-      onSaved(updated); setSuccess("Alterações salvas.");
+      onSaved(updated); setEditing(false); setSuccess(updated.status === "COMPLETED" ? "Demanda concluída e arquivada." : "Alterações salvas.");
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
   async function removeDrawerDemand(mode: "archive" | "delete") {
@@ -755,20 +762,27 @@ function TaskDrawer({ demand, companies, categories, people, stages, canEdit, ca
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
   return <div className="drawer-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className="task-drawer" role="dialog" aria-modal="true" aria-labelledby="task-drawer-title">
-    <header><div><span className="demand-id">{demand.publicId}</span><h2 id="task-drawer-title">Consulta rápida</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header>
+    <header><div><span className="demand-id">{demand.publicId}</span><h2 id="task-drawer-title">{demand.title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header>
     <div className="drawer-context"><span className="stage-badge" style={{ borderColor: demand.stageColor ?? undefined }}><i style={{ background: demand.stageColor ?? "#94a3b8" }} />{demand.stageName ?? "Sem etapa"}</span><small>Criada por {demand.createdByName}</small></div>
-    <nav className="drawer-shortcuts" aria-label="Atalhos do card"><span>Continuar no card</span><button type="button" onClick={() => onOpenFull("activity")}>Atividade</button><button type="button" onClick={() => onOpenFull("checklist")}>Checklist</button><button type="button" onClick={() => onOpenFull("time")}>Tempo</button></nav>
+    <div className="drawer-shortcuts"><ActionMenu label="Opções do card" disabled={busy} items={[
+      ...(canEdit ? [{ label: "Editar dados", onSelect: () => setEditing(true) }] : []),
+      { label: "Comentários e histórico", onSelect: () => onOpenFull("activity") },
+      { label: "Checklist", onSelect: () => onOpenFull("checklist") },
+      { label: "Tempo registrado", onSelect: () => onOpenFull("time") },
+      ...(canEdit ? [{ label: "Arquivar demanda", onSelect: () => void removeDrawerDemand("archive") }] : []),
+      ...(canDelete ? [{ label: "Excluir demanda", danger: true, onSelect: () => void removeDrawerDemand("delete") }] : []),
+    ]} /></div>
     <ValidatedForm className="drawer-form" onSubmit={save}>
       <div className="drawer-form-body">
         {error && <Notice>{error}</Notice>}{success && <Notice kind="success">{success}</Notice>}
-        <Field label="Título" name="title" defaultValue={demand.title} required disabled={!canEdit} />
+        {editing ? <>        <Field label="Título" name="title" defaultValue={demand.title} required disabled={!canEdit} />
         <label className="field"><span>Situação</span><select name="status" defaultValue={demand.status} disabled={!canEdit}>{Object.entries(statusNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label className="field"><span>Descrição</span><textarea name="description" rows={5} defaultValue={demand.description ?? ""} disabled={!canEdit} /></label>
         <div className="form-grid"><label className="field"><span>Empresa</span><select name="companyId" defaultValue={demand.primaryCompanyId ?? ""} disabled={!canEdit}><option value="">Sem empresa</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label><label className="field"><span>Categoria</span><select name="categoryId" defaultValue={demand.categoryId ?? ""} disabled={!canEdit}><option value="">Sem categoria</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label></div>
         <div className="form-grid"><label className="field"><span>Responsável</span><select name="assigneeId" defaultValue={demand.assigneeId ?? ""} disabled={!canEdit}><option value="">Sem responsável</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label className="field"><span>Etapa</span><select name="stageId" defaultValue={demand.stageId ?? ""} disabled={!canEdit}>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select></label></div>
-        <div className="form-grid"><label className="field"><span>Prioridade</span><select name="priority" defaultValue={demand.priority} disabled={!canEdit}>{Object.entries(priorityNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><Field label="Prazo" name="deadlineAt" type="datetime-local" defaultValue={demand.deadlineAt ? demand.deadlineAt.slice(0, 16) : ""} disabled={!canEdit} /></div>
+        <div className="form-grid"><label className="field"><span>Prioridade</span><select name="priority" defaultValue={demand.priority} disabled={!canEdit}>{Object.entries(priorityNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><Field label="Prazo" name="deadlineAt" type="datetime-local" defaultValue={demand.deadlineAt ? demand.deadlineAt.slice(0, 16) : ""} disabled={!canEdit} /></div></> : <section className="drawer-summary"><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status]}</span><p className="demand-description">{demand.description || "Nenhuma descrição adicionada."}</p><dl><div><dt>Empresa</dt><dd>{demand.companyName ?? "Sem empresa"}</dd></div><div><dt>Categoria</dt><dd>{demand.categoryName ?? "Sem categoria"}</dd></div><div><dt>Responsável</dt><dd>{demand.assigneeName ?? "Sem responsável"}</dd></div><div><dt>Prioridade</dt><dd>{priorityNames[demand.priority]}</dd></div><div><dt>Prazo final</dt><dd>{timelineDate(demand.deadlineAt)}</dd></div></dl></section>}
       </div>
-      <footer><button className="secondary compact" type="button" onClick={() => onOpenFull("overview")}>Abrir card completo</button><span className="drawer-remove-actions">{canEdit && <button className="secondary compact" type="button" disabled={busy} onClick={() => void removeDrawerDemand("archive")}>Arquivar</button>}{canDelete && <button className="secondary compact danger-text" type="button" disabled={busy} onClick={() => void removeDrawerDemand("delete")}>Excluir</button>}</span>{canEdit && <button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar"}</button>}</footer>
+      <footer><button className="secondary compact" type="button" onClick={() => onOpenFull("overview")}>Abrir card completo</button>{editing && <button type="button" className="secondary compact" onClick={() => setEditing(false)}>Cancelar</button>}{canEdit && editing && <button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar"}</button>}</footer>
     </ValidatedForm>
   </aside></div>;
 }
@@ -1017,6 +1031,7 @@ function DemandStageDock({ demand, timeline, people, canEdit, busy, onAction, on
 
 function DemandDetail({ demand, companies, categories, workflows, people, stages, canEdit, canEditEstimate, canDelete, initialTab, onBack, onSaved, onRemoved }: { demand: Demand; companies: Company[]; categories: Category[]; workflows: Workflow[]; people: Person[]; stages: WorkflowStage[]; canEdit: boolean; canEditEstimate: boolean; canDelete: boolean; initialTab: DemandDetailTab; onBack: () => void; onSaved: (demand: Demand) => void; onRemoved: () => Promise<void> }) {
   const [tab, setTab] = useState<DemandDetailTab>(initialTab);
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -1031,13 +1046,13 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
     const stageId = selectedWorkflowId === demand.workflowId ? demand.stageId : selectedStages[0]?.id ?? null;
     try {
       const updated = await api<Demand>(`/demands/${demand.id}`, { method: "PUT", body: JSON.stringify({ title: data.get("title"), description: data.get("description") || null, companyId: data.get("companyId") || null, categoryId: data.get("categoryId") || null, workflowId: data.get("workflowId") || null, assigneeId: demand.assigneeId, stageId, priority: data.get("priority"), status: data.get("status"), deadlineAt: deadline ? new Date(deadline).toISOString() : null, expectedRevision: demand.revision }) });
-      onSaved(updated); setSuccess("Demanda atualizada.");
+      onSaved(updated); setEditing(false); setSuccess(updated.status === "COMPLETED" ? "Demanda concluída e arquivada." : "Demanda atualizada.");
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
   async function runWorkflowAction(action: "advance" | "return", targetStageId?: string, comment?: string): Promise<boolean> {
     if (!canEdit) return false;
     setBusy(true); setError(""); setSuccess("");
-    try { const updated = await api<Demand>(`/demands/${demand.id}/workflow-actions`, { method: "POST", body: JSON.stringify({ action, targetStageId: targetStageId || null, comment: comment || null, expectedRevision: demand.revision }) }); onSaved(updated); setSuccess(action === "advance" && updated.status === "COMPLETED" ? "Demanda concluída." : `Workflow atualizado: ${updated.stageName}.`); return true; }
+    try { const updated = await api<Demand>(`/demands/${demand.id}/workflow-actions`, { method: "POST", body: JSON.stringify({ action, targetStageId: targetStageId || null, comment: comment || null, expectedRevision: demand.revision }) }); onSaved(updated); setSuccess(action === "advance" && updated.status === "COMPLETED" ? "Demanda concluída e arquivada." : `Workflow atualizado: ${updated.stageName}.`); return true; }
     catch (caught) { const message = messageFrom(caught); setError(message); if (message.toLocaleLowerCase().includes("checklist") || (caught as {fieldErrors?: {field: string}[]}).fieldErrors?.some(item => item.field === "checklist")) setTab("checklist"); return false; } finally { setBusy(false); }
   }
   async function reassignCurrentStage(assigneeId: string | null): Promise<boolean> {
@@ -1070,16 +1085,6 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
       await onRemoved();
     } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
   }
-  async function remove(mode: "archive" | "delete") {
-    const message = mode === "archive" ? `Arquivar “${demand.title}”? Ela poderá ser restaurada nas Configurações.` : `Enviar “${demand.title}” para a lixeira recuperável?`;
-    if (!window.confirm(message)) return;
-    setBusy(true); setError("");
-    try {
-      if (mode === "archive") await api(`/demands/${demand.id}/archive`, { method: "POST", body: JSON.stringify({ expectedRevision: demand.revision }) });
-      else await api(`/demands/${demand.id}?expectedRevision=${demand.revision}`, { method: "DELETE" });
-      await onRemoved();
-    } catch (caught) { setError(messageFrom(caught)); } finally { setBusy(false); }
-  }
   const tabs: { id: DemandDetailTab; label: string }[] = [{ id: "overview", label: "Visão geral" }, { id: "briefing", label: "Briefing" }, { id: "checklist", label: "Checklist" }, { id: "workflow", label: "Workflow" }, { id: "activity", label: "Atividade" }, { id: "time", label: "Tempo" }];
   const editForm = <section className="panel detail-form overview-block">
     <div className="overview-section-title"><div><span className="eyebrow dark">Dados essenciais</span><h3>Resumo da demanda</h3></div><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status]}</span></div>
@@ -1090,21 +1095,25 @@ function DemandDetail({ demand, companies, categories, workflows, people, stages
       <div className="form-grid"><label className="field"><span>Empresa</span><select name="companyId" defaultValue={demand.primaryCompanyId ?? ""} disabled={!canEdit}><option value="">Sem empresa</option>{companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Categoria</span><select name="categoryId" defaultValue={demand.categoryId ?? ""} disabled={!canEdit}><option value="">Sem categoria</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
       <label className="field"><span>Workflow</span><select name="workflowId" value={selectedWorkflowId} disabled={!canEdit} onChange={(event) => setSelectedWorkflowId(event.target.value)}>{workflows.map((item) => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? " · padrão" : ""}</option>)}</select><small>A troca aplica a primeira etapa do novo fluxo. A etapa e o responsável atual são controlados pela barra inferior.</small></label>
       <div className="form-grid"><label className="field"><span>Prioridade</span><select name="priority" defaultValue={demand.priority} disabled={!canEdit}>{Object.entries(priorityNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><Field label="Prazo final da demanda" name="deadlineAt" type="datetime-local" defaultValue={toInputDate(demand.deadlineAt)} disabled={!canEdit} /></div>
-      <footer className="form-actions"><span className="revision-note">Revisão {demand.revision}</span><button className="primary action-primary" disabled={busy || !canEdit}>{busy ? "Salvando…" : "Salvar dados"}</button></footer>
+      <footer className="form-actions"><span className="revision-note">Revisão {demand.revision}</span><button type="button" className="secondary compact" onClick={() => setEditing(false)}>Cancelar</button><button className="primary action-primary" disabled={busy || !canEdit}>{busy ? "Salvando…" : "Salvar dados"}</button></footer>
     </ValidatedForm>
   </section>;
   return <>
     <button className="back-button" onClick={onBack}>← Voltar</button>
-    <section className="demand-detail-head"><div><span className="demand-id">{demand.publicId}</span><h2>{demand.title}</h2><p>{demand.companyName ?? "Sem empresa"} · {demand.categoryName ?? "Sem categoria"}</p></div><div className="detail-head-actions"><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status]}</span>{canEdit && <button className="secondary compact" disabled={busy} onClick={() => void removeDemand("archive")}>Arquivar</button>}{canDelete && <button className="secondary compact danger-text" disabled={busy} onClick={() => void removeDemand("delete")}>Excluir</button>}</div></section>
-    <nav className="detail-tabs" aria-label="Seções da demanda">{tabs.map((item) => <button className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)} key={item.id}>{item.label}</button>)}</nav>
-    {tab !== "overview" && error && <Notice>{error}</Notice>}{tab !== "overview" && success && <Notice kind="success">{success}</Notice>}
-    {tab === "overview" ? <div className="demand-overview-layout"><div className="demand-overview-main">{editForm}<FilesPanel demandId={demand.id} canManage={canEdit} compact onFilesChanged={refreshDemandFiles} /><section className="overview-block overview-shortcuts"><header><div><span className="overview-icon">⌘</span><span><strong>Funções do card</strong><small>Acesso às áreas avançadas</small></span></div></header><div><button onClick={() => setTab("briefing")}><b>▤</b><span><strong>Briefing</strong><small>{demand.categoryName ?? "Defina uma categoria"}</small></span></button><button onClick={() => setTab("checklist")}><b>✓</b><span><strong>Checklist</strong><small>Entregas obrigatórias da etapa</small></span></button><button onClick={() => setTab("time")}><b>◷</b><span><strong>Tempo</strong><small>Histórico e lançamentos manuais</small></span></button></div></section></div><aside className="demand-conversation"><ActivityPanel demandId={demand.id} canComment={canEdit} compact /></aside></div>
+    <section className="demand-detail-head"><div><span className="demand-id">{demand.publicId}</span><h2>{demand.title}</h2><p>{demand.companyName ?? "Sem empresa"} · {demand.categoryName ?? "Sem categoria"}</p></div><div className="detail-head-actions"><span className={`demand-status ${demand.status.toLowerCase()}`}>{statusNames[demand.status]}</span>{canEdit && <ActionMenu label="Ações do card" disabled={busy} items={[
+      { label: "Editar dados", onSelect: () => { setTab("overview"); setEditing(true); } },
+      { label: "Arquivar demanda", onSelect: () => void removeDemand("archive") },
+      ...(canDelete ? [{ label: "Excluir demanda", danger: true, onSelect: () => void removeDemand("delete") }] : []),
+    ]} />}</div></section>
+    <div className="detail-navigation"><ActionMenu label="Seções do card" items={tabs.map((item) => ({ label: item.label, selected: tab === item.id, onSelect: () => { setTab(item.id); setEditing(false); } }))}>{tabs.find((item) => item.id === tab)?.label}</ActionMenu><span>{tab === "overview" ? "Descrição, anexos e conversa" : demand.title}</span></div>
+    {error && !editing && <Notice>{error}</Notice>}{success && !editing && <Notice kind="success">{success}</Notice>}
+    {tab === "overview" ? <div className="demand-overview-layout"><div className="demand-overview-main">{editing ? editForm : <section className="overview-block demand-summary"><h3>Descrição</h3><p className="demand-description">{demand.description || "Nenhuma descrição adicionada."}</p><dl><div><dt>Prioridade</dt><dd>{priorityNames[demand.priority]}</dd></div><div><dt>Prazo final</dt><dd>{timelineDate(demand.deadlineAt)}</dd></div><div><dt>Workflow</dt><dd>{demand.workflowName ?? "Sem workflow"}</dd></div></dl></section>}<FilesPanel demandId={demand.id} canManage={canEdit} compact onFilesChanged={refreshDemandFiles} /></div><aside className="demand-conversation"><ActivityPanel demandId={demand.id} canComment={canEdit} compact /></aside></div>
       : tab === "briefing" ? <BriefingPanel demand={demand} canEdit={canEdit} onSaved={onSaved} />
       : tab === "checklist" ? <ChecklistPanel demand={demand} canEdit={canEdit} onSaved={onSaved} />
       : tab === "workflow" ? timeline ? <WorkflowTimelineView timeline={timeline} canEdit={canEdit} busy={busy} onSchedule={saveStageSchedule} /> : timelineError ? <section className="panel work-content-panel"><Notice>{timelineError}</Notice></section> : <section className="panel feature-loading"><span className="loader" /></section>
       : tab === "activity" ? <ActivityPanel demandId={demand.id} canComment={canEdit} />
       : <TimePanel demandId={demand.id} canTrack={canEdit} canEditEstimate={canEditEstimate} onEstimateSaved={(expectedEffortMinutes, revision) => onSaved({ ...demand, expectedEffortMinutes, revision })} />}
-    {timeline && <DemandStageDock demand={demand} timeline={timeline} people={people} canEdit={canEdit} busy={busy} onAction={runWorkflowAction} onReassign={reassignCurrentStage} />}
+    {timeline && demand.status !== "COMPLETED" && <DemandStageDock demand={demand} timeline={timeline} people={people} canEdit={canEdit} busy={busy} onAction={runWorkflowAction} onReassign={reassignCurrentStage} />}
   </>;
 }
 function ComingSection({ icon, title, text, items }: { icon: string; title: string; text: string; items: string[] }) {
@@ -1135,6 +1144,13 @@ function PersonalAgenda({ demands, profile, canCreate, onOpen }: { demands: Dema
   return <div className="personal-agenda"><section className="agenda-hero"><div><span className="eyebrow">Minha agenda</span><h2>Olá, {profile.name.split(" ")[0]}.</h2><p>Veja o que precisa da sua atenção em ordem de entrega.</p></div><div><strong>{mine.length}</strong><span>{mine.length === 1 ? "demanda aberta" : "demandas abertas"}</span></div></section>
     {ordered.length ? <div className="agenda-groups">{ordered.map((group) => <section className={`agenda-group ${group.tone}`} key={`${group.label}:${group.date}`}><header><div><span /><h3>{group.label}</h3></div><b>{group.items.length}</b></header><div>{group.items.map((demand) => <article className="agenda-row" key={demand.id}>{canCreate && <button className="agenda-timer" type="button" onClick={() => startTimer(demand.id)} aria-label={`Iniciar timer de ${demand.title}`} title="Iniciar timer"><ActionIcon src={playActionIcon} /></button>}<button className="agenda-row-open" type="button" onClick={() => onOpen(demand)}><span className={`agenda-check ${demand.status === "IN_PROGRESS" ? "active" : ""}`} /><span className="agenda-copy"><strong>{demand.title}</strong><small>{demand.publicId} · {demand.companyName ?? "Sem empresa"} · {demand.stageName ?? "Sem etapa"}</small></span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span><time>{demand.deadlineAt ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(demand.deadlineAt)) : "—"}</time><span className="agenda-arrow">›</span></button></article>)}</div></section>)}</div> : <section className="panel agenda-empty"><span>✓</span><h3>Sua agenda está livre</h3><p>As demandas atribuídas a você aparecerão aqui, organizadas por data.</p></section>}
   </div>;
+}
+
+function updateOperationalDemand(items: Demand[], updated: Demand): Demand[] {
+  if (updated.status === "COMPLETED") return items.filter((item) => item.id !== updated.id);
+  return items.some((item) => item.id === updated.id)
+    ? items.map((item) => item.id === updated.id ? updated : item)
+    : [updated, ...items];
 }
 
 function Dashboard({ session, logout, onSession }: { session: Session; logout: () => void; onSession: (session: Session) => void }) {
@@ -1279,7 +1295,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   }
   async function moveDemand(demand: Demand, stageId: string) {
     setError("");
-    try { const updated = await api<Demand>(`/demands/${demand.id}/stage`, { method: "PATCH", body: JSON.stringify({ stageId, expectedRevision: demand.revision }) }); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); if (selectedDemand?.id === updated.id) setSelectedDemand(updated); }
+    try { const updated = await api<Demand>(`/demands/${demand.id}/stage`, { method: "PATCH", body: JSON.stringify({ stageId, expectedRevision: demand.revision }) }); setDemands((items) => updateOperationalDemand(items, updated)); if (selectedDemand?.id === updated.id) setSelectedDemand(updated); }
     catch (caught) { setError(messageFrom(caught)); }
   }
   const pending = useMemo(() => users.filter((user) => user.state === "pending_approval"), [users]);
@@ -1290,12 +1306,12 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     ...(canManage ? [{ label: "Administração", links: [{ id: "workflows" as WorkspacePage, icon: workflowIcon, label: "Workflows" }, { id: "categories" as WorkspacePage, icon: categoriesIcon, label: "Categorias" }, { id: "users" as WorkspacePage, icon: accessIcon, label: "Acessos", badge: pending.length }, ...(session.role === "admin" ? [{ id: "settings" as WorkspacePage, icon: settingsIcon, label: "Configurações" }] : [])] }] : []),
   ];
   let content: React.ReactNode;
-  if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} workflows={publishedWorkflows} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} canDelete={canManage} initialTab={selectedDemandTab} onBack={() => { setSelectedDemand(null); go(page === "overview" || page === "calendar" || page === "my-work" || page === "reports" ? page : "demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} onRemoved={async () => { setSelectedDemand(null); await loadData(); }} />;
+  if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} workflows={publishedWorkflows} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} canDelete={canManage} initialTab={selectedDemandTab} onBack={() => { setSelectedDemand(null); go(page === "overview" || page === "calendar" || page === "my-work" || page === "reports" ? page : "demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => updateOperationalDemand(items, updated)); }} onRemoved={async () => { setSelectedDemand(null); await loadData(); }} />;
   else if (pageLoading) content = <section className="panel feature-loading route-loading"><span className="loader" /><p>Carregando {pageTitles[page].toLocaleLowerCase("pt-BR")}…</p></section>;
   else if (pageLoadError) content = <section className="panel route-load-error"><h3>Não foi possível carregar esta página</h3><p>{pageLoadError}</p><button className="primary compact" type="button" onClick={() => void loadRouteData(page, true).catch(() => undefined)}>Tentar novamente</button></section>;
   else if (page === "overview") content = <PersonalAgenda demands={demands} profile={profile} canCreate={canCreate} onOpen={(demand) => openDemand(demand)} />;
-  else if (page === "demands" || page === "my-work") content = <WorkBoard demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onPreferenceChange={(preferences) => void savePreferences(preferences)} onCalendar={() => go("calendar")} />;
-  else if (page === "calendar") content = <CalendarRoute demands={demands} companies={companies} categories={categories} people={people} onOpen={(demand) => openDemand(demand)} />;
+  else if (page === "demands" || page === "my-work") content = <WorkBoard key={`${profile?.profileId}:${page}`} demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onPreferenceChange={(preferences) => void savePreferences(preferences)} onCalendar={() => go("calendar")} />;
+  else if (page === "calendar") content = <CalendarRoute key={profile?.profileId} profileId={profile?.profileId ?? ""} demands={demands} companies={companies} categories={categories} people={people} onOpen={(demand) => openDemand(demand)} />;
   else if (page === "bulk-demands") content = <BulkDemandsRoute canCreate={canCreate} onCreated={() => { for (const target of ["demands", "my-work", "overview", "calendar"] as WorkspacePage[]) loadedPages.current.delete(target); }} onShowDemands={() => go("demands")} />;
   else if (page === "companies") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Cadastros ativos</span><h3>Empresas atendidas</h3></div>{canManage && <button className="small-button" onClick={() => setCatalogModal({ kind: "company" })}>+ Nova empresa</button>}</div>{companies.length ? <div className="entity-cards">{companies.map((company) => <article key={company.id}><i style={{ background: company.color }} /><div><strong>{company.name}</strong><span>{company.shortName} · {company.code}</span><p>{company.description || "Sem descrição cadastrada."}</p></div>{canManage && <div className="entity-actions"><button className="table-action" onClick={() => setCatalogModal({ kind: "company", item: company })}>Editar</button><button className="table-action danger-text" disabled={removingCompany === company.id} onClick={() => void removeCompany(company)}>{removingCompany === company.id ? "Excluindo…" : "Excluir"}</button></div>}</article>)}</div> : <div className="empty-state"><span>▦</span><h3>Nenhuma empresa cadastrada</h3></div>}</section>;
   else if (page === "team") content = canManage ? <TeamRoute users={users} isAdmin={session.role === "admin"} ownProfileId={profile?.profileId} onReload={loadData} /> : <Notice>A gestão da equipe está disponível para administradores e coordenadores.</Notice>;
@@ -1311,9 +1327,9 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     <aside className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}><div className="sidebar-head"><Brand /><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}><span aria-hidden="true" /></button></div><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <a key={link.id} href={pageUrl(link.id)} className={!selectedDemand && page === link.id ? "active" : ""} onPointerEnter={() => preloadPageModule(link.id)} onFocus={() => preloadPageModule(link.id)} onClick={(event) => { event.preventDefault(); go(link.id); }} aria-label={sidebarCollapsed ? link.label : undefined} title={sidebarCollapsed ? link.label : undefined}><NavIcon src={link.icon} /><span className="nav-label">{link.label}</span>{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</a>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")} aria-label={sidebarCollapsed ? "Abrir meu perfil" : undefined} title={sidebarCollapsed ? "Meu perfil" : undefined}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair" title="Sair">↗</button></div></aside>
     <main className={`workspace${selectedDemand ? " demand-open" : ""}`}><h1 className="visually-hidden">{pageTitles[page]}</h1>{error && <Notice>{error}</Notice>}<Suspense fallback={<section className="panel feature-loading route-loading"><span className="loader" /></section>}>{content}</Suspense></main>
     <WarningReview />
-    <GlobalTimer currentDemand={selectedDemand ?? drawerDemand} canTrack={canCreate} hasStageDock={Boolean(selectedDemand)} hasDrawerFooter={Boolean(drawerDemand)} onOpenDemand={(demandId) => { const target = demands.find((item) => item.id === demandId); if (target) { openDemand(target); setDrawerDemand(null); } }} />
+    <GlobalTimer currentDemand={(selectedDemand ?? drawerDemand)?.status === "COMPLETED" ? null : selectedDemand ?? drawerDemand} canTrack={canCreate} hasStageDock={Boolean(selectedDemand && selectedDemand.status !== "COMPLETED")} hasDrawerFooter={Boolean(drawerDemand)} onOpenDemand={(demandId) => { const target = demands.find((item) => item.id === demandId); if (target) { openDemand(target); setDrawerDemand(null); } }} />
     {canCreate && workAreaPages.has(page) && !selectedDemand && !drawerDemand && <button className="floating-new-demand" type="button" onClick={() => void openCreateDemand()} aria-label="Nova demanda" title="Nova demanda"><span aria-hidden="true">+</span></button>}
-    {drawerDemand && <TaskDrawer key={drawerDemand.id} demand={drawerDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} canDelete={canManage} onClose={() => setDrawerDemand(null)} onOpenFull={(tab) => { openDemand(drawerDemand, tab); setDrawerDemand(null); }} onSaved={(updated) => { setDrawerDemand(updated); setDemands((items) => items.map((item) => item.id === updated.id ? updated : item)); }} onRemoved={async () => { setDrawerDemand(null); await loadData(); }} />}
+    {drawerDemand && <TaskDrawer key={drawerDemand.id} demand={drawerDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} canDelete={canManage} onClose={() => setDrawerDemand(null)} onOpenFull={(tab) => { openDemand(drawerDemand, tab); setDrawerDemand(null); }} onSaved={(updated) => { setDrawerDemand(updated); setDemands((items) => updateOperationalDemand(items, updated)); }} onRemoved={async () => { setDrawerDemand(null); await loadData(); }} />}
     {showQuickCapture && <QuickCaptureModal onClose={() => setShowQuickCapture(false)} onCreate={quickCreate} />}
     {showCreate && <ManualDemandModal companies={companies} categories={categories} workflows={publishedWorkflows} people={people} stages={stages} onClose={() => setShowCreate(false)} onCreated={(created) => { setDemands((items) => [created, ...items]); setShowCreate(false); go("demands"); openDemand(created); }} />}
     {catalogModal && <CatalogModal kind={catalogModal.kind} item={catalogModal.item} workflows={publishedWorkflows} onClose={() => setCatalogModal(null)} onSaved={loadData} />}

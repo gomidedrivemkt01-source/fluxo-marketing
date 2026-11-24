@@ -5,7 +5,6 @@ import logging
 import mimetypes
 import uuid
 from collections import Counter, defaultdict
-from datetime import timedelta
 from typing import Any
 from urllib.parse import urlparse
 
@@ -25,6 +24,7 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
+from app.demand_lifecycle import set_demand_status
 from app.governance import (
     best_named_match,
     best_profile_match,
@@ -1395,10 +1395,7 @@ async def apply_trello(
                 due = trello_deadline_from_title(str(card.get("name") or ""), source_updated_at)
                 if due:
                     inferred_deadlines += 1
-            source_completed_old = status == "COMPLETED" and bool(
-                source_updated_at and source_updated_at <= now - timedelta(days=60)
-            )
-            archived_at = now if card.get("closed") or source_completed_old else None
+            archived_at = now if card.get("closed") or status == "COMPLETED" else None
             if link:
                 demand = db.get(Demand, link.demand_id)
                 if not demand or demand.organization_id != organization_id:
@@ -1830,9 +1827,15 @@ def governance_overview(
             select(Demand)
             .where(
                 Demand.organization_id == organization_id,
-                ((Demand.archived_at.is_not(None)) | (Demand.deleted_at.is_not(None))),
+                (
+                    (Demand.archived_at.is_not(None))
+                    | (Demand.deleted_at.is_not(None))
+                    | (Demand.status == "COMPLETED")
+                ),
             )
-            .order_by(func.coalesce(Demand.deleted_at, Demand.archived_at).desc())
+            .order_by(
+                func.coalesce(Demand.deleted_at, Demand.archived_at, Demand.updated_at).desc()
+            )
             .limit(100)
         )
     )
@@ -1864,7 +1867,8 @@ def governance_overview(
                 "publicId": item.public_id,
                 "title": item.title,
                 "status": item.status,
-                "archivedAt": item.archived_at,
+                "archivedAt": item.archived_at
+                or (item.updated_at if item.status == "COMPLETED" else None),
                 "deletedAt": item.deleted_at,
             }
             for item in archived
@@ -1899,6 +1903,10 @@ def restore_demand(
     )
     if not demand:
         raise ApiError(404, "demand_not_found", "Demanda não encontrada.")
+    if demand.status == "COMPLETED":
+        set_demand_status(
+            db, demand, "WAITING_EXECUTION", actor_id=principal.profile.id, source="restore"
+        )
     demand.archived_at = None
     demand.deleted_at = None
     demand.revision += 1
@@ -1938,6 +1946,10 @@ def restore_revision(
         demand = Demand()
         db.add(demand)
     restore_demand_state(demand, revision.snapshot)
+    if demand.status == "COMPLETED":
+        set_demand_status(
+            db, demand, "COMPLETED", actor_id=principal.profile.id, source="revision_restore"
+        )
     demand.revision = max(demand.revision, revision.revision) + 1
     demand.updated_at = utc_now()
     db.add(

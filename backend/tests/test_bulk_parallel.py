@@ -227,6 +227,8 @@ def test_model_is_compatible_and_collaborator_can_import(setup):
 @requires_postgres
 def test_two_timers_pause_resume_and_stop_are_independent(setup):
     s = setup
+    s.cards[2].status = "IN_PROGRESS"
+    s.db.flush()
     first = start_timer(s.cards[0].id, TimerStart(), s.principal, s.db)
     second = start_timer(s.cards[1].id, TimerStart(), s.principal, s.db)
     assert len(get_active_timers(s.principal, s.db)) == 2

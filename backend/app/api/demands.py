@@ -13,6 +13,7 @@ from app.api.errors import ApiError
 from app.auth.dependencies import get_principal, require_csrf
 from app.auth.service import Principal
 from app.database import get_db
+from app.demand_lifecycle import set_demand_status
 from app.models import (
     AuditEvent,
     ChecklistTemplateItem,
@@ -1129,6 +1130,7 @@ def list_demands(
             Demand.organization_id == principal.membership.organization_id,
             Demand.deleted_at.is_(None),
             Demand.archived_at.is_(None),
+            Demand.status != "COMPLETED",
         )
     )
     if q and q.strip():
@@ -1495,7 +1497,7 @@ def update_demand(
     demand.primary_company_id = payload.company_id
     demand.category_id = payload.category_id
     demand.priority = payload.priority
-    demand.status = payload.status
+    set_demand_status(db, demand, payload.status, actor_id=principal.profile.id, source="interface")
     demand.deadline_at = payload.deadline_at
     previous_stage_id = demand.current_stage_id
     target_stage = db.get(WorkflowStage, stage_id) if stage_id else None
@@ -1984,7 +1986,7 @@ def apply_workflow_action(
         current.left_at = now
         current.revision += 1
         current.updated_at = now
-        demand.status = "COMPLETED"
+        set_demand_status(db, demand, "COMPLETED", actor_id=principal.profile.id, source="workflow")
         event_kind = "DEMAND_COMPLETED"
         summary = "Demanda concluída após a última etapa do workflow."
         target: DemandStageInstance | None = None
@@ -2001,7 +2003,9 @@ def apply_workflow_action(
         demand.current_assignee_id = target.assignee_id
         demand.forecast_at = target.forecast_at
         if demand.status in {"WAITING_EXECUTION", "COMPLETED"}:
-            demand.status = "IN_PROGRESS"
+            set_demand_status(
+                db, demand, "IN_PROGRESS", actor_id=principal.profile.id, source="workflow"
+            )
         target_snapshot = version_stage(version, target.workflow_stage_id)
         target_name = (
             str(target_snapshot.get("name", "nova etapa")) if target_snapshot else "nova etapa"

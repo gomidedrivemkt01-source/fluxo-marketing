@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useViewState } from "../features/focus/viewState";
 import calendarIcon from "../assets/navigation/calendar.svg";
 import listViewIcon from "../assets/views/list.svg";
 import type { Category, Company, Demand, Person } from "../WorkspaceApp";
@@ -56,12 +57,14 @@ function calendarDateKey(value: Date | string): string {
 }
 
 export default function CalendarPage({
+  profileId,
   demands,
   companies,
   categories,
   people,
   onOpen,
 }: {
+  profileId: string;
   demands: Demand[];
   companies: Company[];
   categories: Category[];
@@ -73,16 +76,19 @@ export default function CalendarPage({
       ? "agenda"
       : "month",
   );
-  const [cursor, setCursor] = useState(() => {
-    const value = new Date();
-    return new Date(value.getFullYear(), value.getMonth(), 1);
+  const now = new Date();
+  const [filters, setFilters] = useViewState(profileId, "calendar", {
+    month: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), query: "", company: "ALL", category: "ALL", assignee: "ALL", status: "ALL", priority: "ALL",
   });
-  const [query, setQuery] = useState("");
-  const [company, setCompany] = useState("ALL");
-  const [category, setCategory] = useState("ALL");
-  const [assignee, setAssignee] = useState("ALL");
-  const [status, setStatus] = useState("ALL");
-  const [priority, setPriority] = useState("ALL");
+  const cursor = new Date(filters.month);
+  const { query, company, category, assignee, status, priority } = filters;
+  const setCursor = (value: Date | ((date: Date) => Date)) => setFilters((current) => ({ ...current, month: (typeof value === "function" ? value(new Date(current.month)) : value).getTime() }));
+  const setQuery = (query: string) => setFilters((current) => ({ ...current, query }));
+  const setCompany = (company: string) => setFilters((current) => ({ ...current, company }));
+  const setCategory = (category: string) => setFilters((current) => ({ ...current, category }));
+  const setAssignee = (assignee: string) => setFilters((current) => ({ ...current, assignee }));
+  const setStatus = (status: string) => setFilters((current) => ({ ...current, status }));
+  const setPriority = (priority: string) => setFilters((current) => ({ ...current, priority }));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersId = useId();
   const filtersRef = useRef<HTMLDivElement>(null);
@@ -125,6 +131,7 @@ export default function CalendarPage({
             .toLocaleLowerCase("pt-BR")
             .includes(needle);
         return (
+          demand.status !== "COMPLETED" &&
           matchesCompany &&
           matchesCategory &&
           matchesAssignee &&
@@ -350,6 +357,7 @@ export default function CalendarPage({
                   <label className="calendar-category">
                     <span>Categoria</span>
                     <select
+                      aria-label="Categoria"
                       value={category}
                       onChange={(event) => setCategory(event.target.value)}
                     >
@@ -365,6 +373,7 @@ export default function CalendarPage({
                   <label>
                     <span>Responsável</span>
                     <select
+                      aria-label="Responsável"
                       value={assignee}
                       onChange={(event) => setAssignee(event.target.value)}
                     >
@@ -380,6 +389,7 @@ export default function CalendarPage({
                   <label>
                     <span>Empresa</span>
                     <select
+                      aria-label="Empresa"
                       value={company}
                       onChange={(event) => setCompany(event.target.value)}
                     >
@@ -395,11 +405,12 @@ export default function CalendarPage({
                   <label>
                     <span>Situação</span>
                     <select
+                      aria-label="Situação"
                       value={status}
                       onChange={(event) => setStatus(event.target.value)}
                     >
                       <option value="ALL">Todas</option>
-                      {Object.entries(statusNames).map(([value, label]) => (
+                      {Object.entries(statusNames).filter(([value]) => value !== "COMPLETED").map(([value, label]) => (
                         <option value={value} key={value}>
                           {label}
                         </option>
@@ -409,6 +420,7 @@ export default function CalendarPage({
                   <label>
                     <span>Prioridade</span>
                     <select
+                      aria-label="Prioridade"
                       value={priority}
                       onChange={(event) => setPriority(event.target.value)}
                     >
