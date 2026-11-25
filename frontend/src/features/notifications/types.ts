@@ -1,0 +1,2 @@
+export type NotificationPolicy = { enabled: boolean; warningDays: number; dueSoon: boolean; overdue: boolean; approvals: boolean; includeParticipating: boolean; revision: number };
+export type NotificationInbox = { policy: NotificationPolicy; total: number; items: { id: string; publicId: string; title: string; reason: string; deadlineAt: string | null; severity: "overdue" | "upcoming"; participating: boolean }[] };

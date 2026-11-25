@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { byDelivery, dayKey, deliveryRange, isAwaitingApproval, isOverdue, overviewSummary, type OverviewDemand } from "./overview";
+import { byDelivery, dayKey, deliveryRange, isAwaitingApproval, isDueSoon, isOverdue, overviewSummary, type OverviewDemand } from "./overview";
 
 const now = new Date("2026-11-25T15:00:00Z");
 const zone = "America/Sao_Paulo";
 const card = (id: string, changes: Partial<OverviewDemand> = {}): OverviewDemand => ({ id, title: id, assigneeId: "person", status: "IN_PROGRESS", stageName: "Produção", deadlineAt: null, priority: "NORMAL", ...changes });
 
 describe("operational overview", () => {
+  it("flags strictly less than the configured days and respects disabled alerts", () => {
+    const near = card("near", { deadlineAt: "2026-12-02T14:59:59Z" });
+    expect(isDueSoon(near, now, 7)).toBe(true);
+    expect(isDueSoon(near, now, 0)).toBe(false);
+    expect(isDueSoon(card("boundary", { deadlineAt: "2026-12-02T15:00:00Z" }), now, 7)).toBe(false);
+    expect(isDueSoon(card("late", { deadlineAt: "2026-11-24T15:00:00Z" }), now, 7)).toBe(false);
+    expect(isDueSoon({ ...near, status: "COMPLETED" }, now, 7)).toBe(false);
+  });
   it("uses the profile timezone, including weeks spanning a year boundary", () => {
     expect(dayKey(new Date("2026-11-25T01:00:00Z"), zone)).toBe("2026-11-24");
     expect(deliveryRange("week", zone, now)).toEqual({ start: "2026-11-23", end: "2026-11-29" });

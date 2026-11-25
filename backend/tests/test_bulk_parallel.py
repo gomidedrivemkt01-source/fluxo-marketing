@@ -144,7 +144,9 @@ def test_bulk_review_apply_replay_and_cross_batch_deduplication(setup):
     result = apply(payload, s.principal, s.db)
     assert result["created"] == 2
     cards = s.db.scalars(
-        select(Demand).where(Demand.source == "bulk_json", Demand.organization_id == s.org.id)
+        select(Demand)
+        .where(Demand.source == "bulk_json", Demand.organization_id == s.org.id)
+        .order_by(Demand.title)
     ).all()
     assert cards[0].priority == "HIGH" and cards[0].current_assignee_id is None
     assert cards[1].current_assignee_id == s.people[1][0].id

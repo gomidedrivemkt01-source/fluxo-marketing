@@ -43,6 +43,30 @@ class Organization(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class NotificationPolicy(Base):
+    __tablename__ = "notification_policies"
+    __table_args__ = {"schema": "app"}
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.organizations.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    warning_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
+    due_soon: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    overdue: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    approvals: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    include_participating: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app.user_profiles.id", ondelete="RESTRICT")
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class PermissionRole(Base):
     __tablename__ = "permission_roles"
     __table_args__ = (

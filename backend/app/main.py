@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from app.api.analytics import router as analytics_router
 from app.api.bulk_demands import router as bulk_demands_router
 from app.api.catalogs import router as catalogs_router
 from app.api.collaboration import router as collaboration_router
@@ -26,6 +27,7 @@ from app.api.files import router as files_router
 from app.api.files import signed_router as signed_files_router
 from app.api.governance import router as governance_router
 from app.api.management import router as management_router
+from app.api.notifications import router as notifications_router
 from app.api.reports import router as reports_router
 from app.api.time_tracking import active_router as active_time_tracking_router
 from app.api.time_tracking import router as time_tracking_router
@@ -185,6 +187,8 @@ app.include_router(signed_files_router, prefix="/api/v1")
 app.include_router(time_tracking_router, prefix="/api/v1")
 app.include_router(active_time_tracking_router, prefix="/api/v1")
 app.include_router(reports_router, prefix="/api/v1")
+app.include_router(analytics_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(governance_router, prefix="/api/v1")
 app.include_router(workspace_router, prefix="/api/v1")
 

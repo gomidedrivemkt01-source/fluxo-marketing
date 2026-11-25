@@ -29,6 +29,12 @@ export function isOverdue(demand: OverviewDemand, now: Date): boolean {
   return demand.status !== "COMPLETED" && Boolean(demand.deadlineAt && new Date(demand.deadlineAt).getTime() < now.getTime());
 }
 
+export function isDueSoon(demand: OverviewDemand, now: Date, warningDays = 7): boolean {
+  if (demand.status === "COMPLETED" || !demand.deadlineAt || warningDays <= 0) return false;
+  const remaining = new Date(demand.deadlineAt).getTime() - now.getTime();
+  return remaining >= 0 && remaining < warningDays * 86400000;
+}
+
 export function deliveryRange(period: DeliveryPeriod, timeZone: string, now: Date): { start: string; end: string } {
   const start = dayKey(now, timeZone);
   const anchor = new Date(`${start}T12:00:00Z`);

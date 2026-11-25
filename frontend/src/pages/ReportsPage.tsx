@@ -1,113 +1,51 @@
 import { useEffect, useState } from "react";
 import { api, messageFrom } from "../api";
-import type { OperationalReport, Person, ReportBreakdown, ReportCapacity, ReportStagePerformance, ReportTrendPoint } from "../WorkspaceApp";
+import type { Person } from "../WorkspaceApp";
+import { useViewState } from "../features/focus/viewState";
+import { type AnalyticsReport, duration, hoursLabel } from "../features/reports/analytics";
+import { DeadlineRisk, DeliveryTrend, StageBottlenecks, TimeAllocation } from "../features/reports/ReportCharts";
+import { InterfaceIcon } from "../components/InterfaceIcon";
+import "../features/reports/reports.css";
 
-function Notice({ children }: { children: React.ReactNode }) {
-  return <div className="notice error" role="alert">{children}</div>;
+function defaultRange() {
+  const end = new Date(), start = new Date(); start.setDate(end.getDate() - 29);
+  const key = (date: Date) => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+  return { start: key(start), end: key(end) };
 }
 
-function calendarDateKey(value: Date | string): string {
-  const date = typeof value === "string" ? new Date(value) : value;
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function dateLabel(value: string | null): string {
-  if (!value) return "Sem prazo";
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
-}
-
-function reportDuration(minutes: number): string {
-  if (minutes < 60) return `${minutes}min`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest ? `${hours}h ${rest}min` : `${hours}h`;
-}
-
-type ReportPeriodMode = "30" | "90" | "180" | "365" | "custom";
-
-function defaultCustomReportRange(): { start: string; end: string } {
-  const end = new Date();
-  const start = new Date(end); start.setDate(start.getDate() - 29);
-  return { start: calendarDateKey(start), end: calendarDateKey(end) };
-}
-
-function reportInputDateLabel(value: string): string {
-  const [year, month, day] = value.split("-");
-  return `${day}/${month}/${year}`;
-}
-
-function ReportBreakdownList({ title, eyebrow, items, showTime = false }: { title: string; eyebrow: string; items: ReportBreakdown[]; showTime?: boolean }) {
-  const visible = items.slice(0, 7);
-  const largest = Math.max(1, ...visible.map((item) => item.count));
-  return <section className="panel report-breakdown"><header><div><span className="eyebrow dark">{eyebrow}</span><h3>{title}</h3></div><span>{items.reduce((total, item) => total + item.count, 0)} cards</span></header>{visible.length ? <div className="report-bars">{visible.map((item) => <article key={item.id}><div className="report-bar-copy"><span><i style={{ background: item.color ?? "var(--teal-dark)" }} /><strong>{item.label}</strong></span><span><b>{item.count}</b>{showTime && <small>{reportDuration(item.totalMinutes)}</small>}{item.overdue > 0 && <em>{item.overdue} atrasada{item.overdue === 1 ? "" : "s"}</em>}</span></div><div className="report-bar-track"><i style={{ width: `${Math.max(4, Math.round((item.count / largest) * 100))}%`, background: item.color ?? "var(--teal-dark)" }} /></div></article>)}</div> : <div className="report-empty">Ainda não há dados para esta distribuição.</div>}</section>;
-}
-
-function reportTrendLabel(value: string, granularity: OperationalReport["trendGranularity"]): string {
-  const date = new Date(`${value}T00:00:00`);
-  if (granularity === "month") return new Intl.DateTimeFormat("pt-BR", { month: "short" }).format(date).replace(".", "");
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(date);
-}
-
-function ReportTrend({ points, granularity }: { points: ReportTrendPoint[]; granularity: OperationalReport["trendGranularity"] }) {
-  const largest = Math.max(1, ...points.flatMap((point) => [point.created, point.completed]));
-  const intervalName = granularity === "month" ? "mês" : granularity === "week" ? "semana" : "dia";
-  return <section className="panel report-trend"><header><div><span className="eyebrow dark">Histórico operacional</span><h3>Entradas e conclusões por {intervalName}</h3><p>O tempo exibido em cada coluna corresponde aos apontamentos do mesmo intervalo.</p></div><div className="report-legend"><span><i className="created" />Criadas</span><span><i className="completed" />Concluídas</span></div></header>{points.length ? <div className={`report-trend-scroll ${granularity}`}><div className="report-trend-chart">{points.map((point) => <article key={point.date} title={`${point.created} criadas · ${point.completed} concluídas · ${reportDuration(point.trackedMinutes)} apontadas`}><div className="report-trend-time">{point.trackedMinutes > 0 ? reportDuration(point.trackedMinutes) : "—"}</div><div className="report-trend-bars"><i className="created" style={{ height: point.created ? `${Math.max(8, Math.round((point.created / largest) * 100))}%` : "0" }}><span>{point.created || ""}</span></i><i className="completed" style={{ height: point.completed ? `${Math.max(8, Math.round((point.completed / largest) * 100))}%` : "0" }}><span>{point.completed || ""}</span></i></div><time dateTime={point.date}>{reportTrendLabel(point.date, granularity)}</time></article>)}</div></div> : <div className="report-empty">Ainda não há histórico para o período selecionado.</div>}</section>;
-}
-
-function ReportCapacityPanel({ items, periodLabel }: { items: ReportCapacity[]; periodLabel: string }) {
-  const largest = Math.max(1, ...items.flatMap((item) => [item.expectedMinutes, item.trackedMinutes]));
-  return <section className="panel report-capacity"><header><div><span className="eyebrow dark">Distribuição de capacidade</span><h3>Carteira prevista e tempo realizado</h3><p>Estimativa dos cards atualmente abertos comparada ao tempo apontado em {periodLabel.toLocaleLowerCase("pt-BR")}.</p></div></header>{items.length ? <div className="report-capacity-list">{items.map((item) => <article key={item.profileId}><div className="report-capacity-name"><strong>{item.profileName}</strong><small>{item.activeDemands} {item.activeDemands === 1 ? "demanda aberta" : "demandas abertas"}</small></div><div className="report-capacity-metric"><span><b>Previsto em aberto</b><strong>{reportDuration(item.expectedMinutes)}</strong></span><i><b style={{ width: `${Math.max(item.expectedMinutes ? 4 : 0, Math.round((item.expectedMinutes / largest) * 100))}%` }} /></i></div><div className="report-capacity-metric tracked"><span><b>Apontado no período</b><strong>{reportDuration(item.trackedMinutes)}</strong></span><i><b style={{ width: `${Math.max(item.trackedMinutes ? 4 : 0, Math.round((item.trackedMinutes / largest) * 100))}%` }} /></i></div></article>)}</div> : <div className="report-empty">Ainda não há estimativas ou apontamentos para distribuir.</div>}</section>;
-}
-
-function ReportStagePerformancePanel({ items }: { items: ReportStagePerformance[] }) {
-  return <section className="panel report-stage-performance"><header><div><span className="eyebrow dark">SLA real por etapa</span><h3>Tempo observado no fluxo</h3><p>Horas corridas, sem ocultar noites ou fins de semana. O SLA usa o ciclo integral de cada passagem.</p></div></header>{items.length ? <div className="report-stage-table"><div className="report-stage-table-head"><span>Etapa</span><span>Passagens</span><span>Média observada</span><span>SLA configurado</span><span>Aderência</span><span>Retornos</span></div>{items.map((item) => <article key={item.stageId}><span className="report-stage-name"><i style={{ background: item.color }} /><span><strong>{item.stageName}</strong><small>{item.totalHours.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}h observadas</small></span></span><strong>{item.visits}</strong><span>{item.averageHours.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}h</span><span>{item.slaHours ? `${item.slaHours}h` : "Não definido"}</span><span>{item.slaRate === null ? <em className="neutral">Sem SLA</em> : <em className={item.slaRate >= 80 ? "good" : item.slaRate >= 60 ? "warning" : "danger"}>{item.slaRate}% <small>({item.withinSla}/{item.withinSla + item.breachedSla})</small></em>}</span><span>{item.returns}</span></article>)}</div> : <div className="report-empty">As passagens pelas etapas aparecerão aqui conforme o workflow for utilizado.</div>}</section>;
-}
-
-export default function ReportsPage({ onOpen, canViewTeam, people }: { onOpen: (demandId: string) => void; canViewTeam: boolean; people: Person[] }) {
-  const [periodMode, setPeriodMode] = useState<ReportPeriodMode>("30");
-  const [draftRange, setDraftRange] = useState(defaultCustomReportRange);
-  const [appliedRange, setAppliedRange] = useState(defaultCustomReportRange);
-  const [selectedPersonId, setSelectedPersonId] = useState("team");
-  const [attempt, setAttempt] = useState(0);
-  const [report, setReport] = useState<OperationalReport | null>(null);
-  const [loading, setLoading] = useState(true);
+export default function ReportsPage({ onOpen, canViewTeam, people, profileId }: { onOpen: (id: string) => void; canViewTeam: boolean; people: Person[]; profileId: string }) {
+  const range = defaultRange();
+  const [view, setView] = useViewState(profileId, "analytical-reports", { period: "30", person: "team", start: range.start, end: range.end });
+  const [draftRange, setDraftRange] = useState({ start: view.start, end: view.end });
+  const [report, setReport] = useState<AnalyticsReport | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [attempt, setAttempt] = useState(0);
+  const update = (values: Partial<typeof view>) => setView(current => ({ ...current, ...values }));
   useEffect(() => {
-    let active = true;
-    setLoading(true); setError("");
+    const controller = new AbortController(); let active = true;
+    setLoading(true); setError(""); setReport(null);
     const query = new URLSearchParams();
-    if (periodMode === "custom") { query.set("startDate", appliedRange.start); query.set("endDate", appliedRange.end); }
-    else query.set("days", periodMode);
-    if (canViewTeam && selectedPersonId !== "team") query.set("assigneeId", selectedPersonId);
-    api<OperationalReport>(`/reports/operational?${query.toString()}`).then((value) => { if (active) setReport(value); }).catch((caught) => { if (active) setError(messageFrom(caught)); }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [periodMode, appliedRange.start, appliedRange.end, selectedPersonId, canViewTeam, attempt]);
-  if (loading && !report) return <section className="panel feature-loading"><span className="loader" /><p>Consolidando a operação…</p></section>;
-  if (error && !report) return <section className="panel report-error"><Notice>{error}</Notice><button className="secondary compact" onClick={() => setAttempt((value) => value + 1)}>Tentar novamente</button></section>;
-  if (!report) return null;
-  const summary = report.summary;
-  const completionRate = summary.totalDemands ? Math.round((summary.completedDemands / summary.totalDemands) * 100) : 0;
-  const periodLabel = periodMode === "custom" ? `${reportInputDateLabel(appliedRange.start)} a ${reportInputDateLabel(appliedRange.end)}` : `${report.periodDays} dias`;
-  const teamReport = report.scope === "team";
-  const reportTitle = teamReport ? "Visão executiva da equipe" : canViewTeam ? `Relatório de ${report.scopeProfileName ?? "colaborador"}` : "Meu relatório operacional";
-  const reportDescription = teamReport ? "Carteira atual, prazos e gargalos de toda a equipe. O período controla novas entradas e horas apontadas." : canViewTeam ? "Demandas atualmente atribuídas e horas apontadas pela pessoa selecionada." : "Somente suas demandas e seus apontamentos aparecem nesta visão. Coordenadores e administradores também podem acompanhar este relatório.";
-  return <div className="reports-workspace">
-    <section className={`report-hero${periodMode === "custom" ? " custom" : ""}`}><div className="report-hero-copy"><span className="eyebrow">{teamReport ? "Saúde da operação" : "Desempenho individual"}</span><h2>{reportTitle}</h2><p>{reportDescription}</p></div><div className={`report-controls${periodMode === "custom" ? " custom" : ""}`}>{canViewTeam ? <label className="report-scope-picker"><span>Visualização</span><select value={selectedPersonId} onChange={(event) => setSelectedPersonId(event.target.value)} disabled={loading}><option value="team">Toda a equipe</option>{people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select><small>{selectedPersonId === "team" ? "Overview consolidado da operação." : "Visão individual e privativa."}</small></label> : <div className="report-private-scope"><span>Relatório privativo</span><strong>Somente meus dados</strong><small>Seus colegas não acessam este relatório.</small></div>}<div className={`report-period-picker${periodMode === "custom" ? " custom" : ""}`}><label className="report-period-mode"><span>Período analisado</span><select value={periodMode} onChange={(event) => setPeriodMode(event.target.value as ReportPeriodMode)} disabled={loading}><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="180">Últimos 180 dias</option><option value="365">Últimos 12 meses</option><option value="custom">Período personalizado</option></select></label>{periodMode === "custom" && <div className="report-custom-range"><label><span>Data inicial</span><input type="date" value={draftRange.start} max={draftRange.end} onChange={(event) => setDraftRange((current) => ({ start: event.target.value, end: event.target.value > current.end ? event.target.value : current.end }))} /></label><label><span>Data final</span><input type="date" value={draftRange.end} min={draftRange.start} onChange={(event) => setDraftRange((current) => ({ start: event.target.value < current.start ? event.target.value : current.start, end: event.target.value }))} /></label><button type="button" onClick={() => { setAppliedRange(draftRange); setAttempt((value) => value + 1); }} disabled={loading || !draftRange.start || !draftRange.end}>{loading ? "Atualizando…" : "Aplicar"}</button></div>}<small>{periodMode === "custom" ? `Aplicado: ${periodLabel}` : "Use um intervalo pronto ou defina datas específicas."}</small></div></div></section>
-    {error && <Notice>{error}</Notice>}
-    <section className="report-kpis">
-      <article><span>Carteira atual</span><strong>{summary.totalDemands}</strong><small>{summary.createdInPeriod} criada{summary.createdInPeriod === 1 ? "" : "s"} no período</small><i className="teal" /></article>
-      <article className={summary.overdue ? "warning" : ""}><span>Prazos vencidos</span><strong>{summary.overdue}</strong><small>{summary.dueSoon} vence{summary.dueSoon === 1 ? "" : "m"} em até 7 dias</small><i className="danger" /></article>
-      <article><span>Concluídas na carteira</span><strong>{summary.completedDemands}</strong><small>{completionRate}% do total atual</small><i className="success" /></article>
-      <article><span>Tempo apontado</span><strong>{reportDuration(summary.trackedMinutes)}</strong><small>{periodMode === "custom" ? "no período selecionado" : `nos últimos ${report.periodDays} dias`}</small><i className="violet" /></article>
-      <article className={summary.blocked || summary.unassigned ? "warning" : ""}><span>Pontos de atenção</span><strong>{summary.blocked + summary.unassigned}</strong><small>{summary.blocked} bloqueada{summary.blocked === 1 ? "" : "s"} · {summary.unassigned} sem responsável</small><i className="orange" /></article>
-    </section>
-    <section className="report-signal-row"><div><span className="report-signal danger">{summary.overdue}</span><p><strong>Demandas atrasadas</strong><small>Precisam de replanejamento ou conclusão.</small></p></div><div><span className="report-signal orange">{summary.urgent}</span><p><strong>Prioridade urgente</strong><small>Cards abertos marcados como urgentes.</small></p></div><div><span className="report-signal teal">{reportDuration(summary.expectedMinutes)}</span><p><strong>Esforço previsto aberto</strong><small>Soma das estimativas ainda em carteira.</small></p></div></section>
-    <ReportTrend points={report.trend} granularity={report.trendGranularity} />
-    <ReportCapacityPanel items={report.capacity} periodLabel={periodLabel} />
-    <ReportStagePerformancePanel items={report.stagePerformance} />
-    <div className="report-grid"><ReportBreakdownList eyebrow="Fluxo" title="Onde estão as demandas" items={report.byStage} /><ReportBreakdownList eyebrow={`Capacidade · ${periodLabel}`} title={teamReport ? "Carga por responsável" : "Carteira e tempo individual"} items={report.byAssignee} showTime /><ReportBreakdownList eyebrow="Carteira" title="Distribuição por empresa" items={report.byCompany} /><ReportBreakdownList eyebrow="Tipos de entrega" title="Distribuição por categoria" items={report.byCategory} /></div>
-    <section className="panel report-status"><header><div><span className="eyebrow dark">Situação atual</span><h3>Distribuição por status</h3></div><small>Atualizado {new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(report.generatedAt))}</small></header><div>{report.byStatus.map((item) => <article key={item.id}><span><i style={{ background: item.color ?? "var(--teal-dark)" }} />{item.label}</span><strong>{item.count}</strong><small>{item.overdue ? `${item.overdue} atrasada${item.overdue === 1 ? "" : "s"}` : "Dentro do fluxo"}</small></article>)}</div></section>
-    <section className="panel report-attention"><header><div><span className="eyebrow dark">{teamReport ? "Prioridade de gestão" : "Prioridades da carteira"}</span><h3>Demandas que pedem atenção</h3><p>Ordenadas primeiro por atraso e bloqueio.</p></div><span className="count">{report.attention.length}</span></header>{report.attention.length ? <div className="report-attention-list">{report.attention.map((item) => <button key={item.id} onClick={() => onOpen(item.id)}><span className="report-attention-title"><strong>{item.title}</strong><small>{item.publicId} · {item.companyName ?? "Sem empresa"}</small></span><span>{item.assigneeName ?? "Sem responsável"}</span><span>{item.stageName ?? "Sem etapa"}</span><span className="attention-reasons">{item.reasons.map((reason) => <em key={reason}>{reason}</em>)}</span><time>{item.deadlineAt ? dateLabel(item.deadlineAt) : "Sem prazo"}</time><b>›</b></button>)}</div> : <div className="report-empty report-empty-good"><span>✓</span><strong>Nenhuma demanda crítica agora</strong><p>Não há cards atrasados, bloqueados, urgentes ou sem responsável.</p></div>}</section>
+    if (view.period === "custom") { query.set("startDate", view.start); query.set("endDate", view.end); }
+    else query.set("days", view.period);
+    if (canViewTeam && view.person !== "team") query.set("assigneeId", view.person);
+    api<AnalyticsReport>(`/reports/analytics?${query}`, { signal: controller.signal }).then(data => { if (active) setReport(data); }).catch(caught => { if (active) setError(messageFrom(caught)); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [view, canViewTeam, attempt]);
+  const title = report?.scope === "team" ? "Visão consolidada da equipe" : canViewTeam ? `Participação de ${report?.scopeProfileName ?? "colaborador"}` : "Minha participação nas entregas";
+  return <div className="analytics-dashboard" aria-busy={loading}>
+    <header className="analytics-toolbar"><div><h2>{title}</h2><p>Avanços de etapa, conclusão dos cards e tempo registrado são leituras distintas.</p></div><div className="analytics-toolbar-actions">{canViewTeam ? <label className="capsule-select"><span className="visually-hidden">Pessoa do relatório</span><select aria-label="Pessoa do relatório" value={view.person} onChange={event => update({ person: event.target.value })}><option value="team">Toda a equipe</option>{people.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select><InterfaceIcon name="chevron" /></label> : <span className="analytics-private">Somente meus dados</span>}<label className="capsule-select"><span className="visually-hidden">Período do relatório</span><select aria-label="Período do relatório" value={view.period} onChange={event => update({ period: event.target.value })}><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="180">Últimos 180 dias</option><option value="365">Últimos 12 meses</option><option value="custom">Período personalizado</option></select><InterfaceIcon name="chevron" /></label><button className="quiet-control" onClick={() => setAttempt(value => value+1)} disabled={loading}>Atualizar</button></div></header>
+    {view.period === "custom" && <form className="analytics-date-range" onSubmit={event => { event.preventDefault(); if (draftRange.start && draftRange.end && draftRange.start <= draftRange.end) update(draftRange); }}><label>Data inicial<input type="date" aria-label="Data inicial do relatório" required max={draftRange.end} value={draftRange.start} onChange={event => setDraftRange(current => ({ ...current, start: event.target.value }))} /></label><label>Data final<input type="date" aria-label="Data final do relatório" required min={draftRange.start} value={draftRange.end} onChange={event => setDraftRange(current => ({ ...current, end: event.target.value }))} /></label><button className="primary compact" disabled={loading}>Aplicar período</button></form>}
+    {error && <div className="notice error" role="alert">{error}<button className="text-control" onClick={() => setAttempt(value => value+1)}>Tentar novamente</button></div>}
+    {!report && !error ? <section className="panel feature-loading"><span className="loader" /><p>Consolidando o histórico de etapas e conclusões…</p></section> : report ? <>
+      <section className="analytics-rule"><InterfaceIcon name="check" /><p><strong>Uma entrega por pessoa e card.</strong> O avanço da sua etapa fica como participação entregue. A entrega efetiva só é confirmada quando o card chega à conclusão final do workflow; várias etapas no mesmo card contam uma única vez.</p></section>
+      <section className="analytics-kpis"><article><span>Entregas individuais confirmadas</span><strong>{report.summary.confirmedDeliveries}</strong><small>{report.scope === "team" ? "Participações únicas por pessoa e card" : "Cards concluídos com sua entrega de etapa"}</small></article><article><span>Aguardando conclusão do fluxo</span><strong>{report.summary.awaitingFinal}</strong><small>Participações entregues, ainda sem confirmação final</small></article><article><span>Cards concluídos</span><strong>{report.summary.completedCards}</strong><small>{report.scope === "team" ? "Cards distintos encerrados no período" : "Cards relacionados encerrados no período"}</small></article><article><span>Tempo registrado</span><strong>{duration(report.summary.trackedMinutes)}</strong><small>Apontamentos encerrados no período</small></article></section>
+      <div className="analytics-grid"><DeliveryTrend report={report} /><DeadlineRisk report={report} /><StageBottlenecks stages={report.stages} /><TimeAllocation report={report} />
+      <section className="analytics-panel analytics-people"><header><div><h2>{report.scope === "team" ? "Pessoas e participações" : "Sua participação no período"}</h2><p>Volume de entregas e carga atual, sem atribuir o card inteiro à pessoa da última etapa.</p></div><span className="analytics-cohort">Período + carteira atual</span></header>{report.people.length ? <div className="analytics-table-wrap"><table><thead><tr><th>Pessoa</th><th>Confirmadas</th><th>Aguardando fim</th><th>Avanços de etapa</th><th>Ativas agora</th><th>Em atraso</th><th>Tempo</th></tr></thead><tbody>{report.people.map(person => <tr key={person.profileId}><td>{canViewTeam && report.scope === "team" ? <button title={person.name} onClick={() => update({ person: person.profileId })}>{person.name}</button> : <strong title={person.name}>{person.name}</strong>}</td><td data-label="Confirmadas">{person.confirmedDeliveries}</td><td data-label="Aguardando fim">{person.awaitingFinal}</td><td data-label="Avanços de etapa">{person.stageAdvances}</td><td data-label="Ativas agora">{person.activeCards}</td><td data-label="Em atraso" className={person.overdueCards ? "analytics-late" : ""}>{person.overdueCards}</td><td data-label="Tempo">{duration(person.trackedMinutes)}</td></tr>)}</tbody></table></div> : <div className="analytics-empty">Nenhuma participação ou apontamento registrado para esta seleção.</div>}<footer>Avanços de etapa podem repetir cards; entregas confirmadas são únicas por pessoa e card. Horas são apontamentos, não uma taxa de produtividade.</footer></section>
+      <section className="analytics-panel analytics-cycle"><header><div><h2>Conclusão e previsibilidade</h2><p>Cards encerrados no período, em horas corridas</p></div></header><dl><div><dt>Ciclo mediano</dt><dd>{hoursLabel(report.summary.medianCycleHours)}</dd></div><div><dt>Ciclo P90</dt><dd>{hoursLabel(report.summary.p90CycleHours)}</dd></div><div><dt>Dentro do prazo final</dt><dd>{report.summary.onTimeRate === null ? "Sem base" : `${report.summary.onTimeRate}%`}</dd><small>{report.summary.measuredDeadlines} prazos históricos medidos</small></div><div><dt>Avanços registrados</dt><dd>{report.summary.stageAdvances}</dd><small>{report.summary.advancedCards} cards distintos</small></div></dl></section>
+      <section className="analytics-panel analytics-attention"><header><div><h2>O que precisa de atenção</h2><p>Prazos da carteira atual · alerta com menos de {report.warningDays} dias</p></div><span className="analytics-cohort">Agora</span></header>{report.attention.length ? <div className="analytics-attention-list">{report.attention.map(item => <button key={item.id} onClick={() => onOpen(item.id)}><span><strong title={item.title}>{item.title}</strong><small>{item.companyName ?? "Sem marca"} · {item.publicId}</small></span><b className={item.reason === "Prazo vencido" ? "analytics-late" : ""}>{item.reason}</b><time>{item.deadlineAt ? new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(new Date(item.deadlineAt)) : "Sem prazo"}</time><InterfaceIcon name="arrow" /></button>)}</div> : <div className="analytics-empty">Nenhum prazo em alerta nesta carteira.</div>}</section>
+      </div>
+      <details className="analytics-quality"><summary>Base e qualidade das informações</summary><div><p><strong>{report.quality.completedWithoutFinalEvidence}</strong> cards concluídos sem evidência final de workflow não geram entregas individuais confirmadas. <strong>{report.quality.inferredVisitsExcluded}</strong> passagens inferidas, como as de importações, foram excluídas das métricas de etapas.</p><p><strong>{report.quality.openTimersExcluded}</strong> timers abertos ficam fora do tempo encerrado. Indicadores de carteira usam a situação atual; entregas confirmadas usam a data da conclusão final. Reabrir um card suspende sua confirmação até uma nova conclusão.</p><p>SLA e prazo final só recebem taxa quando o parâmetro histórico foi registrado. Os relatórios individuais mostram apenas a própria participação e os próprios tempos.</p></div></details>
+    </> : null}
   </div>;
 }
-

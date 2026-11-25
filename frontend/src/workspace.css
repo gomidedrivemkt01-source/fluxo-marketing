@@ -103,15 +103,20 @@
 .delivery-date { display: grid; gap: 4px; color: var(--ink); font-size: .72rem; font-weight: 500; white-space: nowrap; }
 .delivery-date small { color: var(--muted); font-size: .65rem; font-weight: 400; }
 .delivery-date.late, .delivery-date.late small { color: var(--attention-ink); }
+.delivery-date.soon, .delivery-date.soon small { color: color-mix(in srgb, var(--orange) 65%, var(--ink)); }
 .delivery-date.undated { color: var(--muted); }
-.approval-list { padding: 0 24px; }
-.approval-list > button { display: grid; gap: 7px; width: 100%; padding: 15px 0; border: 0; border-top: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; }
-.approval-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.approval-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; font-weight: 500; }
+.approval-list { min-width: 0; padding: 0 24px; }
+.approval-list > button { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; width: 100%; min-width: 0; max-width: 100%; padding: 15px 0; border: 0; border-top: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; }
+.approval-title { display: flex; min-width: 0; max-width: 100%; justify-content: space-between; align-items: center; gap: 12px; }
+.approval-title strong { display: block; min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; font-weight: 500; }
 .approval-title .interface-icon { width: 14px; height: 14px; color: var(--subtle); }
 .approval-list > button:hover .approval-title strong { color: var(--teal-dark); }
-.approval-list > button > small { color: var(--muted); font-size: .68rem; }
-.approval-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.approval-list > button > small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .68rem; }
+.approval-meta { display: flex; min-width: 0; max-width: 100%; justify-content: space-between; align-items: center; gap: 12px; }
+.approval-meta > .overview-person { flex: 1 1 0; }
+.overview-panel > header > div, .overview-panel > footer { min-width: 0; }
+.overview-panel > header :is(h2, p), .metric-top { overflow-wrap: anywhere; }
+.production-stage, .production-piece, .production-brand { overflow-wrap: anywhere; }
 .approval-meta .delivery-date { display: inline-flex; align-items: baseline; gap: 5px; font-size: .66rem; }
 .approval-meta .delivery-date small { font-size: .62rem; }
 .approvals-panel > footer { padding: 7px 24px 17px; }
@@ -191,6 +196,15 @@
 .top-navigation .modal-backdrop { z-index: 90; }
 .top-navigation .form-actions { box-shadow: none; }
 .top-navigation .avatar { border-radius: 50%; }
+.top-navigation .governance-tabs { flex-wrap: wrap; gap: 6px; }
+.notification-policy-form { display: grid; gap: 24px; }
+.notification-policy-form fieldset { display: grid; gap: 19px; margin: 0; padding: 20px; border: 1px solid var(--line); border-radius: 12px; }
+.notification-policy-form legend { color: var(--muted); font-size: .8rem; padding: 0 7px; }
+.notification-policy-form .field { max-width: 420px; }
+.notification-check { display: flex; align-items: flex-start; gap: 10px; color: var(--ink); font-size: .85rem; line-height: 1.6; }
+.notification-check input { margin-top: 5px; flex-shrink: 0; accent-color: var(--teal-dark); }
+.notification-explanation { margin: 0; color: var(--muted); font-size: .77rem; line-height: 1.8; }
+.notification-policy-form > .primary { justify-self: start; }
 
 @media (min-width: 851px) {
   .top-navigation:has(.workspace > .work-control.gallery-active), .top-navigation:has(.workspace > .work-control.personal-kanban-active) { height: 100dvh; min-height: 0; overflow: hidden; }

@@ -19,6 +19,7 @@ export function WorkspaceHeader({ brand, groups, page, name, role, avatarUrl, al
   onOpenAlert: (id: string) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [visibleAlerts, setVisibleAlerts] = useState(30);
   const [loadingAlerts, setLoadingAlerts] = useState(false);
   const [alertError, setAlertError] = useState("");
   const root = useRef<HTMLElement>(null);
@@ -48,7 +49,7 @@ export function WorkspaceHeader({ brand, groups, page, name, role, avatarUrl, al
   function go(id: string) { setOpen(null); onGo(id); }
   async function toggleAlerts() {
     if (open === "alerts") { setOpen(null); return; }
-    setOpen("alerts"); setLoadingAlerts(true); setAlertError("");
+    setOpen("alerts"); setVisibleAlerts(30); setLoadingAlerts(true); setAlertError("");
     try { await onLoadAlerts(); }
     catch { setAlertError("Não foi possível atualizar seus avisos. Tente abrir novamente."); }
     finally { setLoadingAlerts(false); }
@@ -65,7 +66,7 @@ export function WorkspaceHeader({ brand, groups, page, name, role, avatarUrl, al
       </div>;
     })}</nav>
     <div className="workspace-user-controls">
-      <div className="header-disclosure"><button type="button" className="header-trigger header-alert-trigger" aria-label={`Avisos da sua carteira${alerts.length ? `, ${alerts.length} pendências` : ""}`} aria-expanded={open === "alerts"} aria-controls={`${prefix}-alerts`} onClick={() => void toggleAlerts()}><InterfaceIcon name="bell" />{alerts.length > 0 && <i aria-hidden="true" />}</button>{open === "alerts" && <section className="header-popover alerts-popover" id={`${prefix}-alerts`} aria-label="Avisos operacionais"><header><strong>Sua atenção, agora</strong><span>Pendências da sua carteira</span></header>{loadingAlerts ? <p className="header-empty" role="status">Atualizando avisos…</p> : alertError ? <p className="header-empty" role="alert">{alertError}</p> : alerts.length ? <div className="header-alert-list">{alerts.slice(0, 8).map((alert) => <button key={alert.id} onClick={() => { setOpen(null); onOpenAlert(alert.id); }}><span><strong>{alert.title}</strong><small>{alert.reason} · {alert.deadline}</small></span><InterfaceIcon name="arrow" /></button>)}</div> : <p className="header-empty">Nenhum atraso ou aprovação pendente na sua carteira.</p>}</section>}</div>
+      <div className="header-disclosure"><button type="button" className="header-trigger header-alert-trigger" aria-label={`Avisos da sua carteira${alerts.length ? `, ${alerts.length} pendências` : ""}`} aria-expanded={open === "alerts"} aria-controls={`${prefix}-alerts`} onClick={() => void toggleAlerts()}><InterfaceIcon name="bell" />{alerts.length > 0 && <i aria-hidden="true" />}</button>{open === "alerts" && <section className="header-popover alerts-popover" id={`${prefix}-alerts`} aria-label="Avisos operacionais"><header><strong>Sua atenção, agora</strong><span>Pendências da sua carteira</span></header>{loadingAlerts ? <p className="header-empty" role="status">Atualizando avisos…</p> : alertError ? <p className="header-empty" role="alert">{alertError}</p> : alerts.length ? <div className="header-alert-list">{alerts.slice(0, visibleAlerts).map((alert) => <button key={alert.id} onClick={() => { setOpen(null); onOpenAlert(alert.id); }}><span><strong>{alert.title}</strong><small>{alert.reason} · {alert.deadline}</small></span><InterfaceIcon name="arrow" /></button>)}{visibleAlerts < alerts.length && <button className="header-alert-more" onClick={() => setVisibleAlerts(value => value + 30)}>Mostrar mais avisos ({alerts.length})</button>}</div> : <p className="header-empty">Nenhum prazo em alerta ou aprovação pendente na sua carteira.</p>}</section>}</div>
       <div className="header-disclosure"><button type="button" className="header-trigger header-avatar-trigger" aria-label="Abrir menu do perfil" title={name} aria-expanded={open === "profile"} aria-controls={`${prefix}-profile`} onClick={() => setOpen(open === "profile" ? null : "profile")}>{avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{name.charAt(0).toUpperCase()}</span>}</button>{open === "profile" && <div className="header-popover profile-popover" id={`${prefix}-profile`}><header><strong>{name}</strong><small>{role}</small></header><a href="/profile" onClick={(event) => { event.preventDefault(); go("profile"); }}>Meu perfil</a><button onClick={onLogout}>Sair da conta</button></div>}</div>
     </div>
   </header>;

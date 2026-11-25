@@ -802,6 +802,38 @@ def record_stage_visit_transition(
     if current:
         current.left_at = moved_at
         current.left_by = actor_id
+        # Freeze the exit decision and its measured deadlines for future reports.
+        # Old visits remain intact; legacy evidence is resolved at read time.
+        stage = db.get(WorkflowStage, current.workflow_stage_id)
+        version = db.get(WorkflowVersion, current.workflow_version_id)
+        stage_snapshot = version_stage(version, current.workflow_stage_id) if version else None
+        instance = db.scalar(
+            select(DemandStageInstance).where(
+                DemandStageInstance.demand_id == demand.id,
+                DemandStageInstance.workflow_version_id == current.workflow_version_id,
+                DemandStageInstance.workflow_stage_id == current.workflow_stage_id,
+            )
+        )
+        current.acceptance_snapshot = {
+            **(current.acceptance_snapshot or {}),
+            "exitAction": action.upper(),
+            "exitRecordedAt": moved_at.isoformat(),
+            "exitStageId": str(to_stage_id) if to_stage_id else None,
+            "stageName": stage_snapshot.get("name")
+            if stage_snapshot
+            else stage.name
+            if stage
+            else None,
+            "slaHours": stage_snapshot.get("slaHours")
+            if stage_snapshot
+            else stage.sla_hours
+            if stage
+            else None,
+            "deadlineAt": instance.deadline_at.isoformat()
+            if instance and instance.deadline_at
+            else None,
+            "demandDeadlineAt": demand.deadline_at.isoformat() if demand.deadline_at else None,
+        }
         if reason and not current.reason:
             current.reason = reason
     if to_stage_id is None:

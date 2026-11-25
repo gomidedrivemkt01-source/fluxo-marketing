@@ -1,3 +1,4 @@
+import { NotificationSettings } from "../notifications/NotificationSettings";
 import { ValidatedForm } from "../../components/ValidatedForm";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, messageFrom } from "../../api";
@@ -70,7 +71,7 @@ function dateTime(value: string | null): string {
 }
 
 export function GovernanceSettings({ onReload }: { onReload: () => Promise<void> }) {
-  const [tab, setTab] = useState<"transfer" | "history" | "retention">("transfer");
+  const [tab, setTab] = useState<"transfer" | "history" | "retention" | "alerts">("transfer");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -93,7 +94,7 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
         setBatches(nextBatches); setEnrichment(nextEnrichment); setTrelloReset(nextTrelloReset);
       } else if (tab === "history") {
         setOverview(await api<Overview>("/governance/overview"));
-      } else {
+      } else if (tab === "retention") {
         setRetention(await api<Retention>("/governance/retention"));
       }
     } catch (error) {
@@ -208,7 +209,9 @@ export function GovernanceSettings({ onReload }: { onReload: () => Promise<void>
       <button className={tab === "transfer" ? "active" : ""} onClick={() => setTab("transfer")}>Importar e exportar</button>
       <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Histórico e restauração</button>
       <button className={tab === "retention" ? "active" : ""} onClick={() => setTab("retention")}>Retenção e limpeza</button>
+      <button className={tab === "alerts" ? "active" : ""} onClick={() => setTab("alerts")}>Alertas</button>
     </nav>
+    {tab === "alerts" && <div className="governance-content"><NotificationSettings /></div>}
     {notice && <div className={`notice ${notice.kind}`}>{notice.text}</div>}
 
     {tab === "transfer" && <div className="governance-content">
