@@ -1,5 +1,6 @@
 import { type CSSProperties, FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { api, AUTH_EXPIRED_EVENT, messageFrom, type Session } from "./api";
+import { createClientId } from "./clientId";
 import accessIcon from "./assets/navigation/access.svg";
 import calendarIcon from "./assets/navigation/calendar.svg";
 import categoriesIcon from "./assets/navigation/categories.svg";
@@ -73,6 +74,8 @@ type PersonalColumn = { id: string; name: string; color: string };
 type InterfaceColors = { sidebar: string; background: string; surface: string; text: string; primary: string; accent: string; highlight: string };
 type InterfaceTheme = { id: string; name: string; colors: InterfaceColors };
 type ViewPreferences = { demandView: "kanban" | "list"; showEmptyStages: boolean; stageOrder: string[]; focusView: FocusView; savedViews: SavedView[]; personalColumns: PersonalColumn[]; personalPlacements: Record<string, string>; activeThemeId: string; themeProfiles: InterfaceTheme[] };
+type PreferenceSaveResult = { ok: true } | { ok: false; message: string };
+
 type DemandDetailTab = "overview" | "briefing" | "checklist" | "workflow" | "activity" | "time";
 export type Demand = {
   id: string;
@@ -488,18 +491,66 @@ function WorkCard({ demand, canEdit, canTrack, onOpen, onTimerStart, dragging = 
   </article>;
 }
 
-function PersonalColumnsModal({ preferences, onClose, onSave }: { preferences: ViewPreferences; onClose: () => void; onSave: (preferences: ViewPreferences) => void }) {
+function PersonalColumnsModal({ preferences, onClose, onSave }: { preferences: ViewPreferences; onClose: () => void; onSave: (preferences: ViewPreferences) => Promise<PreferenceSaveResult> }) {
   const [columns, setColumns] = useState(preferences.personalColumns);
   const [error, setError] = useState("");
-  function move(index: number, direction: -1 | 1) { const target = index + direction; if (target < 0 || target >= columns.length) return; const next = [...columns]; [next[index], next[target]] = [next[target]!, next[index]!]; setColumns(next); }
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!columns.length) { setError("Mantenha ao menos uma coluna."); return; }
-    const validIds = new Set(columns.map((column) => column.id)); const fallback = columns[0]!.id;
-    onSave({ ...preferences, personalColumns: columns, personalPlacements: Object.fromEntries(Object.entries(preferences.personalPlacements).map(([demandId, columnId]) => [demandId, validIds.has(columnId) ? columnId : fallback])) });
-    onClose();
+  const [busy, setBusy] = useState(false);
+  const [newColumnId, setNewColumnId] = useState("");
+  const newColumnInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!newColumnId) return;
+    newColumnInput.current?.focus();
+    newColumnInput.current?.select();
+    newColumnInput.current?.scrollIntoView({ block: "nearest" });
+  }, [newColumnId]);
+  function move(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= columns.length) return;
+    const next = [...columns];
+    [next[index], next[target]] = [next[target]!, next[index]!];
+    setColumns(next);
   }
-  return <div className="modal-backdrop"><section className="form-modal compact-modal personal-columns-modal" role="dialog" aria-modal="true"><header className="modal-head"><div><span className="eyebrow dark">Área de trabalho pessoal</span><h2>Minhas colunas</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar">×</button></header><ValidatedForm className="modal-form" onSubmit={submit}>{error && <Notice>{error}</Notice>}<p className="form-intro">Estas colunas organizam apenas a sua visão. O workflow compartilhado de cada demanda continua igual.</p><div className="personal-column-editor">{columns.map((column, index) => <div key={column.id}><input type="color" value={column.color} onChange={(event) => setColumns((items) => items.map((item) => item.id === column.id ? { ...item, color: event.target.value } : item))} aria-label={`Cor de ${column.name}`} /><input value={column.name} minLength={2} maxLength={40} onChange={(event) => setColumns((items) => items.map((item) => item.id === column.id ? { ...item, name: event.target.value } : item))} required /><button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" disabled={index === columns.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" disabled={columns.length === 1} onClick={() => setColumns((items) => items.filter((item) => item.id !== column.id))}>×</button></div>)}</div><button className="secondary compact add-personal-column" type="button" disabled={columns.length >= 12} onClick={() => setColumns((items) => [...items, { id: crypto.randomUUID(), name: `Nova coluna ${items.length + 1}`, color: "#64748B" }])}>+ Adicionar coluna</button><footer className="form-actions"><button className="secondary compact" type="button" onClick={onClose}>Cancelar</button><button className="primary action-primary">Salvar colunas</button></footer></ValidatedForm></section></div>;
+  function addColumn() {
+    if (busy || columns.length >= 12) return;
+    setError("");
+    try {
+      const column = { id: createClientId(), name: `Nova coluna ${columns.length + 1}`, color: "#64748B" };
+      setColumns(items => [...items, column]);
+      setNewColumnId(column.id);
+    } catch (caught) { setError(messageFrom(caught)); }
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    if (!columns.length) { setError("Mantenha ao menos uma coluna."); return; }
+    setBusy(true); setError("");
+    const validIds = new Set(columns.map(column => column.id));
+    const fallback = columns[0]!.id;
+    try {
+      const result = await onSave({ ...preferences, personalColumns: columns, personalPlacements: Object.fromEntries(Object.entries(preferences.personalPlacements).map(([demandId, columnId]) => [demandId, validIds.has(columnId) ? columnId : fallback])) });
+      if (result.ok) onClose();
+      else setError(result.message);
+    } catch (caught) { setError(messageFrom(caught)); }
+    finally { setBusy(false); }
+  }
+  return <div className="modal-backdrop"><section className="form-modal compact-modal personal-columns-modal" role="dialog" aria-modal="true" aria-label="Minhas colunas">
+    <header className="modal-head"><div><span className="eyebrow dark">Área de trabalho pessoal</span><h2>Minhas colunas</h2></div><button className="icon-button" disabled={busy} onClick={onClose} aria-label="Fechar">×</button></header>
+    <ValidatedForm className="modal-form" onSubmit={submit}>
+      {error && <div role="alert"><Notice>{error}</Notice></div>}
+      <p className="form-intro">Estas colunas organizam apenas a sua visão. O workflow compartilhado de cada demanda continua igual.</p>
+      <p className="helper">{columns.length} de 12 colunas pessoais. As alterações são aplicadas ao salvar.</p>
+      <div className="personal-column-editor">{columns.map((column, index) => <div key={column.id}>
+        <input type="color" disabled={busy} name={`column-color-${column.id}`} value={column.color} onChange={event => setColumns(items => items.map(item => item.id === column.id ? { ...item, color: event.target.value } : item))} aria-label={`Cor da coluna ${index + 1}`} />
+        <label className="visually-hidden" htmlFor={`personal-column-${column.id}`}>Nome da coluna {index + 1}</label>
+        <input id={`personal-column-${column.id}`} ref={column.id === newColumnId ? newColumnInput : undefined} disabled={busy} name={`column-name-${column.id}`} aria-label={`Nome da coluna ${index + 1}`} value={column.name} minLength={2} maxLength={40} onChange={event => setColumns(items => items.map(item => item.id === column.id ? { ...item, name: event.target.value } : item))} required />
+        <button type="button" disabled={busy || index === 0} onClick={() => move(index, -1)} aria-label={`Mover coluna ${index + 1} para cima`}>↑</button>
+        <button type="button" disabled={busy || index === columns.length - 1} onClick={() => move(index, 1)} aria-label={`Mover coluna ${index + 1} para baixo`}>↓</button>
+        <button type="button" disabled={busy || columns.length === 1} onClick={() => setColumns(items => items.filter(item => item.id !== column.id))} aria-label={`Excluir coluna ${index + 1}`}>×</button>
+      </div>)}</div>
+      <button className="secondary compact add-personal-column" type="button" disabled={busy || columns.length >= 12} onClick={addColumn}>+ Adicionar coluna</button>
+      <footer className="form-actions"><button className="secondary compact" type="button" disabled={busy} onClick={onClose}>Cancelar</button><button className="primary action-primary" disabled={busy}>{busy ? "Salvando…" : "Salvar colunas"}</button></footer>
+    </ValidatedForm>
+  </section></div>;
 }
 
 function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit, onOpen, onPreferenceChange, onCalendar }: {
@@ -511,7 +562,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   mine: boolean;
   canEdit: boolean;
   onOpen: (demand: Demand) => void;
-  onPreferenceChange: (preferences: ViewPreferences) => void;
+  onPreferenceChange: (preferences: ViewPreferences) => Promise<PreferenceSaveResult>;
   onCalendar: () => void;
 }) {
   const defaultColumns: PersonalColumn[] = [
@@ -624,7 +675,7 @@ function WorkBoard({ demands, stages, people, companies, profile, mine, canEdit,
   function saveCurrentView(name: string) {
     if (preferences.savedViews.length >= 12) throw new Error("Você pode manter até 12 visões salvas.");
     if (preferences.savedViews.some((view) => view.name.toLocaleLowerCase("pt-BR") === name.trim().toLocaleLowerCase("pt-BR"))) throw new Error("Já existe uma visão com esse nome.");
-    onPreferenceChange({ ...preferences, savedViews: [...preferences.savedViews, buildSavedView(crypto.randomUUID(), name, currentFilters)] });
+    onPreferenceChange({ ...preferences, savedViews: [...preferences.savedViews, buildSavedView(createClientId(), name, currentFilters)] });
     setShowSaveView(false);
   }
   function removeSavedView(id: string) {
@@ -864,7 +915,7 @@ function InterfaceThemeModal({ preferences, onClose, onSave }: { preferences: Vi
     if (cleanName.length < 2) { setError("Informe um nome para o perfil."); return; }
     if (!editingId && preferences.themeProfiles.length >= 8) { setError("Você pode manter até 8 perfis de cores personalizados."); return; }
     if (themes.some((theme) => theme.id !== editingId && theme.name.toLocaleLowerCase("pt-BR") === cleanName.toLocaleLowerCase("pt-BR"))) { setError("Já existe um perfil com esse nome."); return; }
-    const theme: InterfaceTheme = { id: editingId ?? crypto.randomUUID(), name: cleanName, colors };
+    const theme: InterfaceTheme = { id: editingId ?? createClientId(), name: cleanName, colors };
     const themeProfiles = editingId
       ? preferences.themeProfiles.map((item) => item.id === editingId ? theme : item)
       : [...preferences.themeProfiles, theme];
@@ -1274,11 +1325,18 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     try { await api(`/catalogs/companies/${company.id}?expectedRevision=${company.revision}`, { method: "DELETE" }); await loadData(); }
     catch (caught) { setError(messageFrom(caught)); } finally { setRemovingCompany(""); }
   }
-  async function savePreferences(preferences: ViewPreferences) {
-    if (!profile) return;
+  async function savePreferences(preferences: ViewPreferences): Promise<PreferenceSaveResult> {
+    if (!profile) return { ok: false, message: "Seu perfil ainda está carregando. Tente novamente." };
     setProfile({ ...profile, preferences });
-    try { const updated = await api<Profile>("/users/me/preferences", { method: "PUT", body: JSON.stringify(preferences) }); setProfile(updated); }
-    catch (caught) { setError(messageFrom(caught)); setProfile(profile); }
+    try {
+      const updated = await api<Profile>("/users/me/preferences", { method: "PUT", body: JSON.stringify(preferences) });
+      setProfile(updated); setError("");
+      return { ok: true };
+    } catch (caught) {
+      const message = messageFrom(caught);
+      setError(message); setProfile(profile);
+      return { ok: false, message };
+    }
   }
   async function quickCreate(title: string, deadlineAt: string | null) {
     if (!profile) throw new Error("Seu perfil ainda está carregando.");
@@ -1304,7 +1362,7 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   else if (pageLoading) content = <section className="panel feature-loading route-loading"><span className="loader" /><p>Carregando {pageTitles[page].toLocaleLowerCase("pt-BR")}…</p></section>;
   else if (pageLoadError) content = <section className="panel route-load-error"><h3>Não foi possível carregar esta página</h3><p>{pageLoadError}</p><button className="primary compact" type="button" onClick={() => void loadRouteData(page, true).catch(() => undefined)}>Tentar novamente</button></section>;
   else if (page === "overview") content = <OverviewRoute warningDays={deadlineWarningDays} key={profile?.profileId} demands={demands} profileId={profile?.profileId ?? ""} timeZone={profile?.timezone ?? "America/Sao_Paulo"} canViewTeam={canManage} canCreate={canCreate} onOpen={openDemand} onCreate={() => void openCreateDemand()} />;
-  else if (page === "demands" || page === "my-work") content = <WorkBoard key={`${profile?.profileId}:${page}`} demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onPreferenceChange={(preferences) => void savePreferences(preferences)} onCalendar={() => go("calendar")} />;
+  else if (page === "demands" || page === "my-work") content = <WorkBoard key={`${profile?.profileId}:${page}`} demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onPreferenceChange={savePreferences} onCalendar={() => go("calendar")} />;
   else if (page === "calendar") content = <CalendarRoute key={profile?.profileId} profileId={profile?.profileId ?? ""} demands={demands} companies={companies} categories={categories} people={people} onOpen={(demand) => openDemand(demand)} />;
   else if (page === "bulk-demands") content = <BulkDemandsRoute canCreate={canCreate} onCreated={() => { for (const target of ["demands", "my-work", "overview", "calendar"] as WorkspacePage[]) loadedPages.current.delete(target); }} onShowDemands={() => go("demands")} />;
   else if (page === "companies") content = <section className="panel page-panel"><div className="panel-head"><div><span className="eyebrow dark">Cadastros ativos</span><h3>Empresas atendidas</h3></div>{canManage && <button className="small-button" onClick={() => setCatalogModal({ kind: "company" })}>+ Nova empresa</button>}</div>{companies.length ? <div className="entity-cards">{companies.map((company) => <article key={company.id}><i style={{ background: company.color }} /><div><strong>{company.name}</strong><span>{company.shortName} · {company.code}</span><p>{company.description || "Sem descrição cadastrada."}</p></div>{canManage && <div className="entity-actions"><button className="table-action" onClick={() => setCatalogModal({ kind: "company", item: company })}>Editar</button><button className="table-action danger-text" disabled={removingCompany === company.id} onClick={() => void removeCompany(company)}>{removingCompany === company.id ? "Excluindo…" : "Excluir"}</button></div>}</article>)}</div> : <div className="empty-state"><span>▦</span><h3>Nenhuma empresa cadastrada</h3></div>}</section>;
