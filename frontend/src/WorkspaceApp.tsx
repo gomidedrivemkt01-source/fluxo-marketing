@@ -30,6 +30,10 @@ import { ActionMenu } from "./components/ActionMenu";
 import { useViewState } from "./features/focus/viewState";
 import { WarningReview } from "./components/WarningReview";
 import { GlobalTimer } from "./features/time/GlobalTimer";
+import { WorkspaceHeader, type NavigationGroup } from "./components/WorkspaceHeader";
+import { InterfaceIcon } from "./components/InterfaceIcon";
+import { byDelivery, isAwaitingApproval, isOverdue } from "./features/overview/overview";
+import "./workspace.css";
 
 const loadActivityPanel = () => import("./features/collaboration/ActivityPanel").then((module) => ({ default: module.ActivityPanel }));
 const loadFilesPanel = () => import("./features/files/FilesPanel").then((module) => ({ default: module.FilesPanel }));
@@ -43,6 +47,7 @@ const FilesPanel = lazy(loadFilesPanel);
 const TimePanel = lazy(loadTimePanel);
 const BulkDemandsRoute = lazy(() => import("./pages/BulkDemandsPage"));
 const CalendarRoute = lazy(loadCalendarRoute);
+const OverviewRoute = lazy(() => import("./pages/OverviewPage"));
 const ReportsRoute = lazy(loadReportsRoute);
 const WorkflowRoute = lazy(loadWorkflowRoute);
 const TeamRoute = lazy(() => import("./pages/TeamPage"));
@@ -405,7 +410,7 @@ function DailyImportModal({ demands, initialImport, onClose, onApplied }: { dema
 const priorityNames: Record<string, string> = { LOW: "Baixa", NORMAL: "Normal", HIGH: "Alta", URGENT: "Urgente" };
 
 const pageTitles: Record<WorkspacePage, string> = {
-  overview: "Início",
+  overview: "Visão geral",
   "my-work": "Meu trabalho",
   demands: "Demandas",
   calendar: "Calendário",
@@ -822,7 +827,7 @@ function BriefingTemplateModal({ category, onClose }: { category: Category; onCl
 }
 
 const interfaceColorFields: { key: keyof InterfaceColors; label: string; description: string }[] = [
-  { key: "sidebar", label: "Menu lateral", description: "Fundo da navegação principal" },
+  { key: "sidebar", label: "Navegação", description: "Fundo da cápsula de navegação no topo" },
   { key: "background", label: "Fundo da interface", description: "Área externa dos painéis" },
   { key: "surface", label: "Cards e painéis", description: "Superfícies de conteúdo" },
   { key: "text", label: "Texto principal", description: "Títulos e informações relevantes" },
@@ -1120,32 +1125,6 @@ function ComingSection({ icon, title, text, items }: { icon: string; title: stri
   return <section className="panel coming-section"><span>{icon}</span><div><h3>{title}</h3><p>{text}</p><ul>{items.map((item) => <li key={item}>✓ {item}</li>)}</ul></div></section>;
 }
 
-function PersonalAgenda({ demands, profile, canCreate, onOpen }: { demands: Demand[]; profile: Profile | null; canCreate: boolean; onOpen: (demand: Demand) => void }) {
-  if (!profile) return <section className="panel agenda-loading"><span className="loader" /></section>;
-  const mine = demands.filter((demand) => demand.assigneeId === profile.profileId && demand.status !== "COMPLETED");
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
-  const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  const groups = new Map<string, { label: string; tone: string; date: number; items: Demand[] }>();
-  function add(key: string, label: string, tone: string, date: number, demand: Demand) {
-    const group = groups.get(key) ?? { label, tone, date, items: [] }; group.items.push(demand); groups.set(key, group);
-  }
-  mine.forEach((demand) => {
-    if (!demand.deadlineAt) { add("undated", "Sem prazo", "neutral", Number.MAX_SAFE_INTEGER, demand); return; }
-    const due = new Date(demand.deadlineAt); const dueDay = new Date(due); dueDay.setHours(0, 0, 0, 0);
-    if (dueDay < today) add("overdue", "Atrasadas!", "danger", -1, demand);
-    else if (dateKey(dueDay) === dateKey(today)) add("today", "Hoje", "today", today.getTime(), demand);
-    else if (dateKey(dueDay) === dateKey(tomorrow)) add("tomorrow", `Amanhã ${dateLabel(demand.deadlineAt)}`, "tomorrow", tomorrow.getTime(), demand);
-    else add(dateKey(dueDay), new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }).format(dueDay), "future", dueDay.getTime(), demand);
-  });
-  const ordered = [...groups.values()].sort((a, b) => a.date - b.date);
-  ordered.forEach((group) => group.items.sort((a, b) => String(a.deadlineAt).localeCompare(String(b.deadlineAt)) || a.title.localeCompare(b.title)));
-  function startTimer(demandId: string) { window.dispatchEvent(new CustomEvent("fluxo:timer-start-request", { detail: { demandId } })); }
-  return <div className="personal-agenda"><section className="agenda-hero"><div><span className="eyebrow">Minha agenda</span><h2>Olá, {profile.name.split(" ")[0]}.</h2><p>Veja o que precisa da sua atenção em ordem de entrega.</p></div><div><strong>{mine.length}</strong><span>{mine.length === 1 ? "demanda aberta" : "demandas abertas"}</span></div></section>
-    {ordered.length ? <div className="agenda-groups">{ordered.map((group) => <section className={`agenda-group ${group.tone}`} key={`${group.label}:${group.date}`}><header><div><span /><h3>{group.label}</h3></div><b>{group.items.length}</b></header><div>{group.items.map((demand) => <article className="agenda-row" key={demand.id}>{canCreate && <button className="agenda-timer" type="button" onClick={() => startTimer(demand.id)} aria-label={`Iniciar timer de ${demand.title}`} title="Iniciar timer"><ActionIcon src={playActionIcon} /></button>}<button className="agenda-row-open" type="button" onClick={() => onOpen(demand)}><span className={`agenda-check ${demand.status === "IN_PROGRESS" ? "active" : ""}`} /><span className="agenda-copy"><strong>{demand.title}</strong><small>{demand.publicId} · {demand.companyName ?? "Sem empresa"} · {demand.stageName ?? "Sem etapa"}</small></span><span className={`priority priority-${demand.priority.toLowerCase()}`}>{priorityNames[demand.priority]}</span><time>{demand.deadlineAt ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(demand.deadlineAt)) : "—"}</time><span className="agenda-arrow">›</span></button></article>)}</div></section>)}</div> : <section className="panel agenda-empty"><span>✓</span><h3>Sua agenda está livre</h3><p>As demandas atribuídas a você aparecerão aqui, organizadas por data.</p></section>}
-  </div>;
-}
-
 function updateOperationalDemand(items: Demand[], updated: Demand): Demand[] {
   if (updated.status === "COMPLETED") return items.filter((item) => item.id !== updated.id);
   return items.some((item) => item.id === updated.id)
@@ -1168,7 +1147,6 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   const loadedPages = useRef(new Set<WorkspacePage>());
   const routeRequest = useRef(0);
   const publishedWorkflows = workflows.filter((workflow) => workflow.lifecycleState === "PUBLISHED");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem("fluxo.sidebar-collapsed") === "true");
   function go(next: WorkspacePage, replace = false) {
     if (!canOpenPage(next)) next = "overview";
     setPage(next); setSelectedDemand(null); setSelectedDemandTab("overview"); setDrawerDemand(null);
@@ -1244,7 +1222,6 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   }
   useEffect(() => { setError(""); void loadRouteData(page).catch(() => undefined); }, [page]);
   useEffect(() => { void loadPageData(page).catch((caught) => setError(messageFrom(caught))); }, [page, session.role]);
-  useEffect(() => { window.localStorage.setItem("fluxo.sidebar-collapsed", String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => {
     const legacyRoute = window.location.hash && workspacePages.includes(window.location.hash.replace(/^#\/?/, "").split("/")[0] as WorkspacePage);
     if (legacyRoute || window.location.pathname === "/") go(page, true);
@@ -1299,17 +1276,18 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
     catch (caught) { setError(messageFrom(caught)); }
   }
   const pending = useMemo(() => users.filter((user) => user.state === "pending_approval"), [users]);
-  const navigation: { label: string; links: { id: WorkspacePage; icon: string; label: string; badge?: number; beta?: boolean }[] }[] = [
-    { label: "Trabalho", links: [{ id: "overview", icon: homeIcon, label: "Início" }, { id: "my-work", icon: myWorkIcon, label: "Meu trabalho" }, { id: "demands", icon: demandsIcon, label: "Demandas" }, { id: "calendar", icon: calendarIcon, label: "Calendário" }, { id: "bulk-demands", icon: demandsIcon, label: "Demandas em massa" }] },
-    { label: "Organização", links: [{ id: "companies", icon: companiesIcon, label: "Empresas" }, { id: "team", icon: teamIcon, label: "Equipe" }, { id: "reports", icon: reportsIcon, label: "Relatórios" }] },
-    { label: "Inteligência", links: [{ id: "intelligence", icon: dailyIcon, label: "Dailys", badge: imports.filter((item) => item.state === "reviewing").length, beta: true }] },
-    ...(canManage ? [{ label: "Administração", links: [{ id: "workflows" as WorkspacePage, icon: workflowIcon, label: "Workflows" }, { id: "categories" as WorkspacePage, icon: categoriesIcon, label: "Categorias" }, { id: "users" as WorkspacePage, icon: accessIcon, label: "Acessos", badge: pending.length }, ...(session.role === "admin" ? [{ id: "settings" as WorkspacePage, icon: settingsIcon, label: "Configurações" }] : [])] }] : []),
+  const navigation: NavigationGroup[] = [
+    { label: "Trabalho", links: [{ id: "overview", icon: homeIcon, label: "Visão geral" }, { id: "my-work", icon: myWorkIcon, label: "Meu trabalho" }, { id: "demands", icon: demandsIcon, label: "Demandas" }, { id: "calendar", icon: calendarIcon, label: "Calendário" }, { id: "bulk-demands", icon: demandsIcon, label: "Demandas em massa" }] },
+    { label: "Equipe", links: [{ id: "companies", icon: companiesIcon, label: "Empresas" }, { id: "team", icon: teamIcon, label: "Equipe" }] },
+    { label: "Análise", links: [{ id: "reports", icon: reportsIcon, label: "Relatórios" }, { id: "intelligence", icon: dailyIcon, label: "Dailys", badge: imports.filter((item) => item.state === "reviewing").length }] },
+    ...(canManage ? [{ label: "Gestão", links: [{ id: "workflows", icon: workflowIcon, label: "Workflows" }, { id: "categories", icon: categoriesIcon, label: "Categorias" }, { id: "users", icon: accessIcon, label: "Acessos", badge: pending.length }, ...(session.role === "admin" ? [{ id: "settings", icon: settingsIcon, label: "Configurações" }] : [])] }] : []),
   ];
+  const personalAlerts = demands.filter((item) => item.assigneeId === profile?.profileId && item.status !== "COMPLETED" && (isOverdue(item, new Date()) || isAwaitingApproval(item))).sort(byDelivery).map((item) => ({ id: item.id, title: item.title, reason: isOverdue(item, new Date()) ? "Prazo vencido" : "Aprovação pendente", deadline: dateLabel(item.deadlineAt) }));
   let content: React.ReactNode;
   if (selectedDemand) content = <DemandDetail demand={selectedDemand} companies={companies} categories={categories} workflows={publishedWorkflows} people={people} stages={stages} canEdit={canCreate} canEditEstimate={canManage} canDelete={canManage} initialTab={selectedDemandTab} onBack={() => { setSelectedDemand(null); go(page === "overview" || page === "calendar" || page === "my-work" || page === "reports" ? page : "demands"); }} onSaved={(updated) => { setSelectedDemand(updated); setDemands((items) => updateOperationalDemand(items, updated)); }} onRemoved={async () => { setSelectedDemand(null); await loadData(); }} />;
   else if (pageLoading) content = <section className="panel feature-loading route-loading"><span className="loader" /><p>Carregando {pageTitles[page].toLocaleLowerCase("pt-BR")}…</p></section>;
   else if (pageLoadError) content = <section className="panel route-load-error"><h3>Não foi possível carregar esta página</h3><p>{pageLoadError}</p><button className="primary compact" type="button" onClick={() => void loadRouteData(page, true).catch(() => undefined)}>Tentar novamente</button></section>;
-  else if (page === "overview") content = <PersonalAgenda demands={demands} profile={profile} canCreate={canCreate} onOpen={(demand) => openDemand(demand)} />;
+  else if (page === "overview") content = <OverviewRoute key={profile?.profileId} demands={demands} profileId={profile?.profileId ?? ""} timeZone={profile?.timezone ?? "America/Sao_Paulo"} canViewTeam={canManage} canCreate={canCreate} onOpen={openDemand} onCreate={() => void openCreateDemand()} />;
   else if (page === "demands" || page === "my-work") content = <WorkBoard key={`${profile?.profileId}:${page}`} demands={demands} stages={stages} people={people} companies={companies} profile={profile} mine={page === "my-work"} canEdit={canCreate} onOpen={page === "my-work" ? setDrawerDemand : openDemand} onPreferenceChange={(preferences) => void savePreferences(preferences)} onCalendar={() => go("calendar")} />;
   else if (page === "calendar") content = <CalendarRoute key={profile?.profileId} profileId={profile?.profileId ?? ""} demands={demands} companies={companies} categories={categories} people={people} onOpen={(demand) => openDemand(demand)} />;
   else if (page === "bulk-demands") content = <BulkDemandsRoute canCreate={canCreate} onCreated={() => { for (const target of ["demands", "my-work", "overview", "calendar"] as WorkspacePage[]) loadedPages.current.delete(target); }} onShowDemands={() => go("demands")} />;
@@ -1323,12 +1301,15 @@ function Dashboard({ session, logout, onSession }: { session: Session; logout: (
   else if (page === "workflows") content = <WorkflowRoute workflows={managedWorkflows.length ? managedWorkflows : workflows} stages={workflowStages} demands={demands} categories={categories} people={people} roles={jobRoles} roleAssignments={roleAssignments} canPrepare={session.role === "admin"} onReload={loadData} />;
   else content = <GovernanceSettingsRoute onReload={loadData} />;
   if (page === "users" && session.role === "admin" && !selectedDemand) content = <>{content}<RemovedAccessList users={users} ownProfileId={profile?.profileId} onReload={loadData} /></>;
-  return <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={themeStyle(profile?.preferences)}>
-    <aside className={`sidebar${sidebarCollapsed ? " collapsed" : ""}`}><div className="sidebar-head"><Brand /><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}><span aria-hidden="true" /></button></div><nav aria-label="Navegação principal">{navigation.map((group) => <div className="nav-group" key={group.label}><small>{group.label}</small>{group.links.map((link) => <a key={link.id} href={pageUrl(link.id)} className={!selectedDemand && page === link.id ? "active" : ""} onPointerEnter={() => preloadPageModule(link.id)} onFocus={() => preloadPageModule(link.id)} onClick={(event) => { event.preventDefault(); go(link.id); }} aria-label={sidebarCollapsed ? link.label : undefined} title={sidebarCollapsed ? link.label : undefined}><NavIcon src={link.icon} /><span className="nav-label">{link.label}</span>{link.beta && <em>Beta</em>}{Boolean(link.badge) && <b>{link.badge}</b>}</a>)}</div>)}</nav><div className="side-profile"><button className="profile-trigger" onClick={() => go("profile")} aria-label={sidebarCollapsed ? "Abrir meu perfil" : undefined} title={sidebarCollapsed ? "Meu perfil" : undefined}><AvatarView name={profile?.name ?? session.name} url={profile?.avatarUrl} /><span><strong>{profile?.name ?? session.name}</strong><small>{session.role ? roleNames[session.role] : "Sem perfil"}</small></span></button><button className="logout-button" onClick={logout} aria-label="Sair" title="Sair">↗</button></div></aside>
-    <main className={`workspace${selectedDemand ? " demand-open" : ""}`}><h1 className="visually-hidden">{pageTitles[page]}</h1>{error && <Notice>{error}</Notice>}<Suspense fallback={<section className="panel feature-loading route-loading"><span className="loader" /></section>}>{content}</Suspense></main>
+  return <div className="app-shell top-navigation" style={themeStyle(profile?.preferences)}>
+    <WorkspaceHeader brand={<Brand />} groups={navigation} page={page} name={profile?.name ?? session.name} role={session.role ? roleNames[session.role] ?? session.role : "Sem perfil"} avatarUrl={profile?.avatarUrl} alerts={personalAlerts} onGo={(target) => go(target as WorkspacePage)} onLogout={logout} onPreload={(target) => preloadPageModule(target as WorkspacePage)} onLoadAlerts={() => loadRouteData("overview", true, false)} onOpenAlert={(id) => { const target = demands.find((item) => item.id === id); if (target) openDemand(target); }} />
+    <main id="main-workspace" className={`workspace${selectedDemand ? " demand-open" : ""}`}>
+      {!selectedDemand && page !== "overview" && <header className="workspace-page-head"><div><h1>{pageTitles[page]}</h1></div>{canCreate && workAreaPages.has(page) && <button type="button" className="primary page-primary" onClick={() => void openCreateDemand()}><InterfaceIcon name="plus" />Nova demanda</button>}</header>}
+      {error && <Notice>{error}</Notice>}<Suspense fallback={<section className="panel feature-loading route-loading"><span className="loader" /></section>}>{content}</Suspense>
+    </main>
     <WarningReview />
     <GlobalTimer currentDemand={(selectedDemand ?? drawerDemand)?.status === "COMPLETED" ? null : selectedDemand ?? drawerDemand} canTrack={canCreate} hasStageDock={Boolean(selectedDemand && selectedDemand.status !== "COMPLETED")} hasDrawerFooter={Boolean(drawerDemand)} onOpenDemand={(demandId) => { const target = demands.find((item) => item.id === demandId); if (target) { openDemand(target); setDrawerDemand(null); } }} />
-    {canCreate && workAreaPages.has(page) && !selectedDemand && !drawerDemand && <button className="floating-new-demand" type="button" onClick={() => void openCreateDemand()} aria-label="Nova demanda" title="Nova demanda"><span aria-hidden="true">+</span></button>}
+
     {drawerDemand && <TaskDrawer key={drawerDemand.id} demand={drawerDemand} companies={companies} categories={categories} people={people} stages={stages} canEdit={canCreate} canDelete={canManage} onClose={() => setDrawerDemand(null)} onOpenFull={(tab) => { openDemand(drawerDemand, tab); setDrawerDemand(null); }} onSaved={(updated) => { setDrawerDemand(updated); setDemands((items) => updateOperationalDemand(items, updated)); }} onRemoved={async () => { setDrawerDemand(null); await loadData(); }} />}
     {showQuickCapture && <QuickCaptureModal onClose={() => setShowQuickCapture(false)} onCreate={quickCreate} />}
     {showCreate && <ManualDemandModal companies={companies} categories={categories} workflows={publishedWorkflows} people={people} stages={stages} onClose={() => setShowCreate(false)} onCreated={(created) => { setDemands((items) => [created, ...items]); setShowCreate(false); go("demands"); openDemand(created); }} />}
