@@ -126,7 +126,7 @@ def save_policy(
             source="interface",
             metadata_json={
                 "before": before,
-                "after": payload.model_dump(by_alias=True, exclude={"expected_revision"}),
+                "after": PolicyOut.model_validate(policy).model_dump(by_alias=True),
             },
         )
     )

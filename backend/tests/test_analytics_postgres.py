@@ -147,6 +147,15 @@ def test_policy_revision_admin_guard_and_audit(setup):
     payload = PolicyUpdate(warningDays=5, expectedRevision=0)
     saved = save_policy(payload, s.principal, s.db)
     assert saved.warning_days == 5 and saved.revision == 1
+    event = s.db.scalar(
+        select(AuditEvent).where(
+            AuditEvent.organization_id == s.org.id,
+            AuditEvent.event_type == "NOTIFICATION_POLICY_UPDATED",
+        )
+    )
+    assert event.metadata_json["before"]["revision"] == 0
+    assert event.metadata_json["after"]["revision"] == 1
+    assert event.metadata_json["after"]["warningDays"] == 5
     assert s.db.scalar(
         select(AuditEvent).where(
             AuditEvent.organization_id == s.org.id,
