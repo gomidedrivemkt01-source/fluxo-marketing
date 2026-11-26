@@ -1,6 +1,6 @@
 # Versão visível e publicação — 26/11/2026
 
-Esta entrega publica a correção das colunas pessoais em HTTP e passa a identificar a interface como **0.1.1**.
+Esta entrega publica a correção das colunas pessoais em HTTP e passa a identificar a interface como **6.1.2**.
 
 O número fica centralizado acima da cápsula de navegação, em 10 px, peso 400, sem fundo, borda ou preenchimento. O posicionamento absoluto mantém o número fora do fluxo de espaçamento; não desloca o menu ou a área de trabalho. A cor acompanha a paleta do usuário.
 
@@ -24,4 +24,4 @@ sh .deployments/atual/publicar.sh
 
 Executar no host Docker, dentro da pasta que contém `docker-compose.yml`. O comando utiliza o procedimento existente para preservar a imagem anterior, conferir backups do banco e dos anexos, recompilar e recriar somente `app`. Não reaplica configurações antigas de pessoas e workflows.
 
-Depois, o verificador confere a revisão do banco já existente, os arquivos efetivamente usados no container, os componentes compilados e a versão **0.1.1**. O recibo fica em `.deployments/atual/activation.json`. Recarregar a plataforma e conferir o número acima do menu. A cópia dos arquivos e a ativação da imagem são etapas distintas.
+Depois, o verificador confere a revisão do banco já existente, os arquivos efetivamente usados no container, os componentes compilados e a versão **6.1.2**. O recibo fica em `.deployments/atual/activation.json`. Recarregar a plataforma e conferir o número acima do menu. A cópia dos arquivos e a ativação da imagem são etapas distintas.
