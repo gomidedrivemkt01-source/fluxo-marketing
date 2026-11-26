@@ -30,7 +30,8 @@
 .workspace-brand .brand-mark b { right: 2px; bottom: 5px; width: 6px; height: 6px; }
 .workspace-brand .brand strong { font-size: 1.3rem; font-weight: 650; }
 .workspace-brand .brand small { color: var(--muted); font-size: .58rem; letter-spacing: .14em; }
-.navigation-capsule { display: inline-flex; align-items: center; gap: 2px; padding: 5px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 12%, var(--sidebar)); border-radius: 999px; background: var(--sidebar); }
+.navigation-capsule { position: relative; display: inline-flex; align-items: center; gap: 2px; padding: 5px; border: 1px solid color-mix(in srgb, var(--on-sidebar) 12%, var(--sidebar)); border-radius: 999px; background: var(--sidebar); }
+.workspace-version { position: absolute; top: -17px; left: 50%; transform: translateX(-50%); margin: 0; padding: 0; color: var(--muted); font-size: 10px; font-weight: 400; line-height: 12px; letter-spacing: .025em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .header-disclosure { position: relative; }
 .header-trigger { cursor: pointer; }
 .nav-group-trigger { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 0 19px; border: 0; border-radius: 999px; color: var(--sidebar-muted); background: transparent; font-size: .8rem; font-weight: 500; transition: background .16s ease, color .16s ease; }

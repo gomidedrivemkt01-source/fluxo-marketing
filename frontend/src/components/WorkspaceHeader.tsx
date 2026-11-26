@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { InterfaceIcon } from "./InterfaceIcon";
+import { version } from "../../package.json";
 
 export type NavigationGroup = { label: string; links: { id: string; label: string; icon: string; badge?: number }[] };
 type Alert = { id: string; title: string; reason: string; deadline: string };
@@ -56,7 +57,7 @@ export function WorkspaceHeader({ brand, groups, page, name, role, avatarUrl, al
   }
   return <header className="workspace-header" ref={root} onKeyDown={keyboard} onBlur={(event) => { if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) setOpen(null); }}>
     <a className="workspace-brand" href="/overview" onClick={(event) => { event.preventDefault(); go("overview"); }} aria-label="Fluxo Marketing — Visão geral">{brand}</a>
-    <nav className="navigation-capsule" aria-label="Navegação principal">{groups.map((group, index) => {
+    <nav className="navigation-capsule" aria-label="Navegação principal"><span className="workspace-version" data-version={version} title={`Versão da plataforma ${version}`} aria-label={`Versão da plataforma ${version}`}>{version}</span>{groups.map((group, index) => {
       const active = group.links.some((link) => link.id === page);
       const expanded = open === group.label;
       const id = `${prefix}-group-${index}`;
