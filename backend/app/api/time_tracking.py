@@ -594,7 +594,7 @@ def start_timer(
                 principal,
                 kind="TIMER_STARTED",
                 summary="Timer iniciado na demanda.",
-                payload={"timeEntryId": str(entry.id)},
+                payload={"timeEntryId": str(entry.id), "at": entry.started_at.isoformat()},
             )
         )
         db.add(
@@ -661,7 +661,11 @@ def stop_timer(
             principal,
             kind="TIMER_STOPPED",
             summary=f"Timer encerrado com {_format_duration(duration_minutes)}.",
-            payload={"timeEntryId": str(entry.id), "durationMinutes": duration_minutes},
+            payload={
+                "timeEntryId": str(entry.id),
+                "durationMinutes": duration_minutes,
+                "at": ended_at.isoformat(),
+            },
         )
     )
     db.add(
@@ -719,7 +723,11 @@ def pause_timer(
             principal,
             kind="TIMER_PAUSED",
             summary=f"Timer pausado em {_format_duration(entry.duration_minutes)}.",
-            payload={"timeEntryId": str(entry.id), "durationMinutes": entry.duration_minutes},
+            payload={
+                "timeEntryId": str(entry.id),
+                "durationMinutes": entry.duration_minutes,
+                "at": paused_at.isoformat(),
+            },
         )
     )
     db.add(
@@ -773,7 +781,7 @@ def resume_timer(
             principal,
             kind="TIMER_RESUMED",
             summary="Timer retomado na demanda.",
-            payload={"timeEntryId": str(entry.id)},
+            payload={"timeEntryId": str(entry.id), "at": resumed_at.isoformat()},
         )
     )
     db.add(

@@ -294,3 +294,8 @@
 @media (prefers-reduced-motion: reduce) {
   .top-navigation *, .top-navigation *::before, .top-navigation *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.overview-hub, .overview-hub > [role=tabpanel] { min-width: 0; }
+.overview-tabs { display: inline-flex; gap: 4px; margin: 0 0 22px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.overview-tabs button { padding: 9px 16px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font: inherit; font-size: .79rem; }
+.overview-tabs button[aria-selected=true] { color: var(--on-primary); background: var(--teal-dark); }

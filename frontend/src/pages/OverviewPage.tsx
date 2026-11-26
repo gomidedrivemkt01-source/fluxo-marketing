@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { Demand } from "../WorkspaceApp";
 import { InterfaceIcon } from "../components/InterfaceIcon";
 import { ActionIcon } from "../components/ActionIcon";
@@ -17,16 +17,27 @@ function Person({ demand }: { demand: Demand }) {
   return <span className="overview-person">{demand.assigneeId && <span className="person-dot">{demand.assigneeAvatarUrl ? <img src={demand.assigneeAvatarUrl} alt="" loading="lazy" /> : demand.assigneeName?.charAt(0)}</span>}<span>{demand.assigneeName ?? "Sem responsável"}</span></span>;
 }
 
-export default function OverviewPage({ demands, profileId, timeZone, canViewTeam, canCreate, onOpen, onCreate, warningDays }: {
-  warningDays: number;
-  demands: Demand[];
-  profileId: string;
-  timeZone: string;
-  canViewTeam: boolean;
-  canCreate: boolean;
-  onOpen: (demand: Demand) => void;
-  onCreate: () => void;
-}) {
+type OverviewProps = {
+  warningDays: number; demands: Demand[]; profileId: string; timeZone: string;
+  canViewTeam: boolean; canCreate: boolean; onOpen: (demand: Demand) => void;
+  onCreate: () => void; onOpenId: (id: string) => void;
+};
+const PersonalPerformance = lazy(() => import("../features/performance/PersonalPerformancePage"));
+
+export default function OverviewPage(props: OverviewProps) {
+  const [navigation,setNavigation] = useViewState(props.profileId,"overview-navigation",{ tab:"overview" });
+  const active = navigation.tab === "performance" ? "performance" : "overview";
+  const tabs = useRef<HTMLDivElement>(null);
+  return <div className="overview-hub"><div className="overview-tabs" ref={tabs} role="tablist" aria-label="Visões do início" onKeyDown={event => {
+    if (!["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) return;
+    event.preventDefault(); const target = event.key === "Home" ? "overview" : event.key === "End" ? "performance" : active === "overview" ? "performance" : "overview";
+    setNavigation({tab:target}); tabs.current?.querySelector<HTMLButtonElement>(`[id="overview-tab-${target}"]`)?.focus();
+  }}>{[["overview","Visão geral"],["performance","Performance"]].map(([key,label]) => <button key={key} type="button" role="tab" id={`overview-tab-${key}`} aria-controls={`overview-panel-${key}`} aria-selected={active===key} tabIndex={active===key ? 0 : -1} onClick={() => setNavigation({tab:key!})}>{label}</button>)}</div>
+    <div role="tabpanel" id={`overview-panel-${active}`} aria-labelledby={`overview-tab-${active}`}>{active === "performance" ? <Suspense fallback={<div className="performance-loading">Carregando sua performance…</div>}><PersonalPerformance profileId={props.profileId} timeZone={props.timeZone} onOpen={props.onOpenId} /></Suspense> : <OverviewDashboard {...props} />}</div>
+  </div>;
+}
+
+function OverviewDashboard({ demands, profileId, timeZone, canViewTeam, canCreate, onOpen, onCreate, warningDays }: OverviewProps) {
   const [view, setView] = useViewState(profileId, "overview", { scope: canViewTeam ? "team" : "mine", period: "week", company: "ALL", person: "ALL", priority: "ALL", status: "ALL", query: "", queue: "ALL" });
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [visibleLimit, setVisibleLimit] = useState(40);
